@@ -280,3 +280,12 @@ clock) but it is 48% past the 0.91 s hard budget, where the python-chess version
 one clock-check slice of tens of milliseconds. The node budget for a root move is set from the
 node rate measured so far in the move, so a rate that sags inside that one subtree runs past
 the deadline; see the logbook for the backstop this led to and the re-run on the final code.
+
+Regression suite, 17 positions, 20 s each, one process alone: **v3.0 solves 5 of 17** reaching
+depth 7 to 9 (r73 m34 at d4, r73 m37 at d5, r75 m23 at d8, r75 m25 at d7, r75 m27 at d1);
+**v2.4 solves 4 of 17** reaching depth 5 to 7 (r73 m34, m37, m40, r75 m27). Three in common;
+v3.0 finds the round 75 Ba4 idea twice where v2.4 never does, and drops r73 m40, which it
+chose at depth 5 and leaves at depth 9. Both still play the round 74 queen move that walks into
+mate, at depth 9 with a score of -815: the mate is beyond the horizon and the evaluation is
+v2.4's, so deeper search converges on the evaluation's preference, not Stockfish's. The suite
+measures sharpness; the games above decide.
