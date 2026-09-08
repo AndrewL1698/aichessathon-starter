@@ -30,7 +30,9 @@ FINE_CHECK_MASK = 127
 FINE_CHECK_BELOW_MS = 300
 
 # Budgets in milliseconds, all derived from the clock we were handed, never from a constant.
-SOFT_DIVISOR = 25
+# 16 rather than 25: at 25 the first rated game ended with 40 s of a 143 s clock unspent,
+# searching 4 to 6 plies. The hard budget and the abort path are unchanged.
+SOFT_DIVISOR = 16
 SOFT_BONUS_MS = 400
 HARD_DIVISOR = 8
 # The referee times us from when it sends the request, so process overhead is on our clock.
@@ -68,11 +70,11 @@ EXACT, LOWER, UPPER = 0, 1, 2
 type _Key = Hashable
 # depth, bound, score relative to the node's ply, and the move that was best there.
 type _Entry = tuple[int, int, int, chess.Move | None]
-# An entry costs about 500 bytes, so half a million of them is 250 MB of the container's two
+# An entry costs about 500 bytes, so a million of them is 500 MB of the container's two
 # gigabytes, which leaves room for an evaluation heavier than this one. The table is cleared
 # rather than evicted when it fills: a clear costs one search of refilling and happens a
 # handful of times in a long game, while any eviction policy costs something on every store.
-TABLE_MAX_ENTRIES = 500_000
+TABLE_MAX_ENTRIES = 1_000_000
 
 # A draw is not worth zero. Above this much advantage a draw is a loss of half a point we had
 # in hand, and below minus this much it is half a point rescued.
