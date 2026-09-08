@@ -73,6 +73,16 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 · **PR #4 merged** to `prod`: table keyed on the transposition tuple (500k cap,
+  ~270 MB), killers, history, repetition/fifty-move draws with contempt. Post-merge: 100% vs
+  old prod (32–0), 84.4% vs the #2 search, KQvK/KRRvK/KPvK convert, 120 s opening moves 2–7 s.
+  **Upload `submission-v2-memory.zip`** (supersedes v1) for the calibration read.
+  Worktree layout on Neil's machine: main clone on `prod`; `../memory-agent` = frozen prod
+  (previous version); `../prod-agent` = 29e6dc1; `../phase0-eval` = evaluation PR in progress.
+- 2026-09-08 · **In progress** `phase0/eval` (PR 5): tapered hand-authored PSTs, mop-up
+  (KRvK must convert), passed/isolated/doubled pawns, rook files, bishop pair, king shield,
+  endgame stalemate check in quiescence. Target ≥ 55% vs Sunfish, ≥ 60% vs previous version.
+
 - 2026-09-08 · **PR #2 merged** to `prod` (merge commit, since #4 is stacked on it) with the audit
   fixes: soft budget binds (120 s opening spend 15/13/11 s → 2.1/1.7/2.8 s, depth unchanged),
   sub-310 ms clocks no longer flag, queen-only quiescence promotions. 92.2% vs minimax, 89.1%
