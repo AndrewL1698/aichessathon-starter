@@ -69,13 +69,16 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 · **PR #1 updated** (`50daf57`): Sunfish wrapper no longer flags at fast controls
+  (budget bonus proportional to the clock, 1 s reserve, deadline handed to Sunfish early). Zero
+  flags on either side across 64 games; 96.9% vs minimax unchanged.
 - 2026-09-08 · **PR #2 open** `phase0/search`: iterative deepening, alpha-beta, quiescence,
   MVV-LVA, time management; eval unchanged. 95.3% vs minimax, 84.4% vs prod, 0 failed
-  terminations in 172 games. Roughly Sunfish-level on the board (+1 =12 −3 at 10s+0.1s);
-  12 repetition draws are the gap.
+  terminations in 172 games. **43.8% ± 13.0% vs Sunfish** (clean run, no flags): at the 1465
+  anchor, not past it. 13 of 14 draws were threefold repetitions.
 - 2026-09-08 · **PR #1 open** `tooling/local-opponents`: Sunfish wrapper, fetch script, frozen
-  prod. Sunfish 96.9% vs minimax confirms calibration. Follow-up in progress: the wrapper
-  flagged itself at 10s+0.1s in 16 of 32 games; fast-control budget being fixed.
+  prod. Sunfish 96.9% vs minimax confirms calibration.
+- 2026-09-08 · **PR #3 open** `docs/team-workflow`: this file and `docs/STRATEGY.md`.
 - 2026-09-08 · **In progress** `phase0/memory`: transposition table, killers, history,
   repetition with contempt. Interim: threefold draws vs prod 10 → 0.
 - 2026-09-08 · **Not started:** evaluation PR (tapered PST, pawn structure, mop-up), numba
