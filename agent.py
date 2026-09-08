@@ -51,6 +51,11 @@ PANIC_MS = 1_000
 GROWTH_MIN = 2.0
 GROWTH_MAX = 8.0
 GROWTH_UNKNOWN = 5.0
+# When a finished iteration changes the best move, or drops the score by this much, the
+# root is not settled and this move gets half as much soft budget again, once, within the
+# hard budget. A stable root keeps the ordinary budget.
+UNSTABLE_DROP = 50
+UNSTABLE_EXTENSION = 1.5
 # Under this many milliseconds the elapsed time is mostly measurement noise, and a rate
 # divided out of it says more about the clock than about the search, so we do not print one.
 NPS_FLOOR_MS = 5
@@ -1104,6 +1109,8 @@ def _think(fen: str, time_left_ms: int) -> str:
             best = stored_move
     best_score = 0
     reached = 0
+    extended = False
+    previous_best, previous_score = best, 0
     partial = False
     last_ms, previous_ms = 0.0, 0.0
 
@@ -1134,6 +1141,16 @@ def _think(fen: str, time_left_ms: int) -> str:
             break
         previous_ms = last_ms
         last_ms = (time.perf_counter() - iteration_started) * 1000.0
+        # Compared with the previous finished depth, not the pre-search guess, so depth 1
+        # never triggers it.
+        if (
+            reached
+            and not extended
+            and (best != previous_best or best_score <= previous_score - UNSTABLE_DROP)
+        ):
+            soft_ms = min(soft_ms * UNSTABLE_EXTENSION, hard_ms)
+            extended = True
+        previous_best, previous_score = best, best_score
         reached = depth
         if best_score >= MATE_FOUND:
             break  # A forced mate is in hand; searching deeper cannot shorten it.
