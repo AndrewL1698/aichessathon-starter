@@ -1,17 +1,26 @@
 """Prove `fastsearch` against the Python engine in `agent.py`.
 
-    uv run python -m tests.test_fastsearch [--positions 10000]
+    uv run python -m tests.test_fastsearch [--positions 10000] [--search-positions 300]
+                                           [--search-depth 3] [--deep-positions 40] [--speed]
 
-The compiled evaluation has to return exactly the integer `agent.evaluate` returns, on
-thousands of random positions generated the way `tests.test_fastboard` generates them, and on
-hand-built endings that random play rarely reaches: mop-up, the no-pawn draw rules, bare and
-covered kings. Any mismatch is a failure, because the whole point of the port is that v3.0 is
-v2.4's judgement at a higher node rate.
+Three gates and one measurement. The compiled evaluation has to return exactly the integer
+`agent.evaluate` returns, on thousands of random positions generated the way
+`tests.test_fastboard` generates them and on hand-built endings that random play rarely
+reaches. The compiled search, at a fixed depth with the table, killers and history switched
+off on both sides, has to return the same score as `agent._root`, and the same move unless
+the two moves tie, which is checked by scoring the compiled move with the Python search. With
+everything switched on the two are compared again and the agreement is reported, not gated:
+different tie-breaks fill the tables differently and the searches legitimately drift. Then
+`--speed` reports both engines' node rates on the harness openings.
 """
 
 import argparse
+import contextlib
+import io
 import random
+import statistics
 import time
+from collections.abc import Iterator
 
 import chess
 import numpy as np
@@ -19,6 +28,7 @@ import numpy as np
 import agent
 import fastboard as fb
 import fastsearch as fs
+from harness.rules import OPENINGS
 from tests.test_fastboard import positions
 
 # Positions chosen to reach the branches random playouts do not: bare kings being mopped up,
@@ -29,8 +39,8 @@ from tests.test_fastboard import positions
 HANDMADE: tuple[str, ...] = (
     "8/8/8/3k4/8/8/8/R3K3 w - - 0 1",
     "8/8/8/3k4/8/8/8/R3K3 b - - 0 1",
-    "7k/8/8/8/8/8/8/Q3K3 w - - 0 1",
-    "k7/8/8/8/8/8/8/4K2Q b - - 0 1",
+    "7k/8/8/8/8/8/8/3QK3 w - - 0 1",
+    "k7/8/8/8/8/8/8/3QK3 b - - 0 1",
     "8/8/8/8/8/2k5/8/K1q5 w - - 0 1",
     "8/8/3k4/8/8/8/8/2BNK3 w - - 0 1",
     "8/8/3k4/8/8/8/8/2B1K3 w - - 0 1",
@@ -65,9 +75,9 @@ HANDMADE: tuple[str, ...] = (
     "5rk1/5ppp/8/8/8/8/8/1Q4K1 w - - 0 1",
     "5rk1/5ppp/8/8/8/8/8/1Q4K1 b - - 0 1",
     "8/8/8/8/8/1k6/8/K6q w - - 0 1",
-    "8/8/8/8/8/8/1k6/K7 w - - 0 1",
-    "8/8/8/8/8/8/1kp5/K7 w - - 0 1",
-    "8/8/8/8/8/8/1kq5/K7 w - - 0 1",
+    "8/8/8/8/8/8/2k5/K7 w - - 0 1",
+    "8/8/8/8/8/8/2kp4/K7 w - - 0 1",
+    "8/8/8/8/8/8/2kq4/K7 w - - 0 1",
     "8/8/8/8/8/5k2/8/3K1B2 w - - 0 1",
     "8/8/8/8/8/5k2/8/3K1BB1 w - - 0 1",
     "8/8/8/8/8/5k2/8/3K1BN1 w - - 0 1",
@@ -126,9 +136,171 @@ def check_evaluation(fens: list[str], pst: np.ndarray, weights: np.ndarray) -> i
     return compared
 
 
+class _NoTable(dict[agent._Key, agent._Entry]):
+    """A transposition table that forgets everything it is told, to switch the Python one off."""
+
+    def __setitem__(self, key: agent._Key, value: agent._Entry) -> None:
+        return None
+
+
+@contextlib.contextmanager
+def python_engine(board: chess.Board, memory: bool) -> Iterator[None]:
+    """`agent.py` set up as `_think` would set it up for this root, with or without its memory.
+
+    Without: an empty table that stays empty, no killers and no history, so ordering is
+    MVV-LVA alone, exactly what the compiled side does with `C_USE_TABLE` and `C_USE_KILLERS`
+    off. Either way the root is in `seen`, as `_observe` puts it there in a game.
+    """
+    saved = (agent._MEMORY.table, agent._MEMORY.seen, agent._MEMORY.history, agent._remember_cutoff)
+    agent._MEMORY.table = {} if memory else _NoTable()
+    agent._MEMORY.seen = {agent._key(board)}
+    agent._MEMORY.history = [0] * len(agent._MEMORY.history)
+    if not memory:
+        agent._remember_cutoff = lambda board, move, depth, ply, search: None
+    try:
+        yield
+    finally:
+        agent._MEMORY.table, agent._MEMORY.seen, agent._MEMORY.history, agent._remember_cutoff = (
+            saved
+        )
+
+
+def check_constants() -> None:
+    for name in (
+        "MATE",
+        "INFINITY",
+        "MATE_FOUND",
+        "QUIESCENCE_MAX_PLY",
+        "STALEMATE_PIECE_LIMIT",
+        "FIFTY_MOVE_PLIES",
+        "EXACT",
+        "LOWER",
+        "UPPER",
+        "TABLE_BONUS",
+        "CAPTURE_BONUS",
+        "PROMOTION_BONUS",
+        "KILLER_BONUS",
+        "HISTORY_CAP",
+    ):
+        if getattr(agent, name) != getattr(fs, name):
+            raise Failure(f"{name}: agent {getattr(agent, name)} != fastsearch {getattr(fs, name)}")
+    print("  the search constants agree")
+
+
+def check_search(
+    fens: list[str], depth: int, state: fs.SearchState, memory: bool
+) -> tuple[int, int, int, int]:
+    """Both searches at one fixed depth. Returns (positions, same move, ties, score mismatches).
+
+    Without memory a score mismatch is a failure. With memory it is counted and reported.
+    """
+    compared = same = ties = mismatches = 0
+    state.ctl[fs.C_USE_TABLE] = int(memory)
+    state.ctl[fs.C_USE_KILLERS] = int(memory)
+    for fen in fens:
+        board = chess.Board(fen)
+        if board.is_game_over() or not board.is_valid():
+            continue
+        contempt = agent._contempt(agent.evaluate(board))
+        moves = list(board.legal_moves)
+        agent._order(board, moves)
+        first = moves[0]
+        with python_engine(board, memory):
+            search = agent._Search(deadline=float("inf"), contempt=contempt)
+            with contextlib.redirect_stdout(io.StringIO()):
+                py_move, py_score = agent._root(board, depth, first, search)
+            state.set_position(fen)
+            state.new_game()
+            state.remember(state.key())
+            state.begin_move(contempt)
+            first_c = fb.uci_to_move(state.board, state.st, state.undo, first.uci())
+            c_move, c_score = fs.root(state, depth, first_c)
+            compared += 1
+            if c_score != py_score:
+                if not memory:
+                    raise Failure(
+                        f"depth {depth} at {fen}: compiled {fb.move_to_uci(c_move)} {c_score}, "
+                        f"python {py_move.uci()} {py_score}"
+                    )
+                mismatches += 1
+                continue
+            if fb.move_to_uci(c_move) == py_move.uci():
+                same += 1
+                continue
+            if memory:
+                ties += 1
+                continue
+            # Different moves at the same score is a tie only if the Python search agrees
+            # the compiled move is worth that score.
+            board.push(chess.Move.from_uci(fb.move_to_uci(c_move)))
+            check = agent._Search(deadline=float("inf"), contempt=contempt)
+            alternative = -agent._negamax(
+                board, depth - 1, 1, -agent.INFINITY, agent.INFINITY, check
+            )
+            board.pop()
+            if alternative != py_score:
+                raise Failure(
+                    f"depth {depth} at {fen}: compiled {fb.move_to_uci(c_move)} scores "
+                    f"{alternative} by the Python search, not {py_score} ({py_move.uci()})"
+                )
+            ties += 1
+    return compared, same, ties, mismatches
+
+
+def check_speed(state: fs.SearchState, depth: int, python_depth: int) -> None:
+    """Node rates on the harness openings, everything on, fresh table per position."""
+    compiled_rates, python_rates = [], []
+    state.ctl[fs.C_USE_TABLE] = 1
+    state.ctl[fs.C_USE_KILLERS] = 1
+    print(f"  {'opening':<22} {'compiled d' + str(depth):>16} {'python d' + str(python_depth):>16}")
+    for name, fen in OPENINGS:
+        board = chess.Board(fen)
+        contempt = agent._contempt(agent.evaluate(board))
+        state.set_position(fen)
+        state.new_game()
+        state.remember(state.key())
+        state.begin_move(contempt)
+        moves = fb.legal_moves(state.board, state.st, state.undo)
+        started = time.perf_counter()
+        first = moves[0]
+        for d in range(1, depth + 1):
+            first, _ = fs.root(state, d, first)
+        elapsed = time.perf_counter() - started
+        compiled_rate = state.nodes / elapsed
+        compiled_rates.append(compiled_rate)
+
+        py_moves = list(board.legal_moves)
+        agent._order(board, py_moves)
+        py_first = py_moves[0]
+        with python_engine(board, True):
+            search = agent._Search(deadline=float("inf"), contempt=contempt)
+            started = time.perf_counter()
+            for d in range(1, python_depth + 1):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    py_first, _ = agent._root(board, d, py_first, search)
+            elapsed = time.perf_counter() - started
+        python_rate = search.nodes / elapsed
+        python_rates.append(python_rate)
+        print(
+            f"  {name:<22} {compiled_rate / 1e3:10.0f} k nps {python_rate / 1e3:10.0f} k nps  "
+            f"({state.nodes:,} vs {search.nodes:,} nodes)"
+        )
+    ratio = statistics.median(compiled_rates) / statistics.median(python_rates)
+    print(
+        f"  median compiled {statistics.median(compiled_rates) / 1e3:.0f} k nps, "
+        f"python {statistics.median(python_rates) / 1e3:.0f} k nps, ratio {ratio:.1f}x"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--positions", type=int, default=10_000)
+    parser.add_argument("--search-positions", type=int, default=300)
+    parser.add_argument("--search-depth", type=int, default=3)
+    parser.add_argument("--deep-positions", type=int, default=40, help="also at depth + 1")
+    parser.add_argument("--speed", action="store_true")
+    parser.add_argument("--speed-depth", type=int, default=6)
+    parser.add_argument("--python-depth", type=int, default=4)
     arguments = parser.parse_args()
 
     pst, weights = tables()
@@ -142,20 +314,41 @@ def main() -> None:
     compared = check_evaluation(fens, pst, weights)
     print(f"  {compared:,} generated positions agree, {time.perf_counter() - started:.1f} s")
 
-    board, st, _ = fb.from_fen(fens[0])
-    rounds = 200_000
+    print("\nsearch")
+    check_constants()
+    state = fs.SearchState(pst, weights)
     started = time.perf_counter()
-    for _ in range(rounds):
-        fs.evaluate(board, st, pst, weights)
-    elapsed = time.perf_counter() - started
-    print(f"  compiled evaluate from python: {rounds / elapsed / 1e6:5.2f} M calls/s")
-    reference = chess.Board(fens[0])
-    rounds = 20_000
-    started = time.perf_counter()
-    for _ in range(rounds):
-        agent.evaluate(reference)
-    elapsed = time.perf_counter() - started
-    print(f"  agent.evaluate:                {rounds / elapsed / 1e3:5.1f} k calls/s")
+    nodes = fs.warm(state)
+    print(
+        f"  warm-up search from the start position: {nodes:,} nodes, "
+        f"{time.perf_counter() - started:.2f} s"
+    )
+
+    sample = list(HANDMADE) + fens[: arguments.search_positions]
+    for depth, subset in (
+        (arguments.search_depth, sample),
+        (arguments.search_depth + 1, sample[: arguments.deep_positions]),
+    ):
+        if not subset:
+            continue
+        started = time.perf_counter()
+        compared, same, ties, _ = check_search(subset, depth, state, memory=False)
+        print(
+            f"  depth {depth}, table and killers off: {compared} positions, same score on all, "
+            f"same move on {same}, {ties} ties, {time.perf_counter() - started:.0f} s"
+        )
+        started = time.perf_counter()
+        compared, same, ties, mismatches = check_search(subset, depth, state, memory=True)
+        print(
+            f"  depth {depth}, everything on:         {compared} positions, same move on {same}, "
+            f"{ties} same score other move, {mismatches} different scores "
+            f"(reported, not gated), {time.perf_counter() - started:.0f} s"
+        )
+
+    if arguments.speed:
+        print("\nspeed")
+        check_speed(state, arguments.speed_depth, arguments.python_depth)
+
     print("\nEverything matches agent.py.")
 
 

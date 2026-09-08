@@ -19,6 +19,8 @@ codes are 1..6 white P N B R Q K and 7..12 black, `st[0]` is the side to move, `
 move, as in `agent.py`.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 from numba import njit
 from numba import types as nbt
@@ -366,3 +368,700 @@ def evaluate(board: np.ndarray, st: np.ndarray, pst: np.ndarray, w: np.ndarray) 
         if -drawish <= advantage <= drawish:
             score = score // 2 if score >= 0 else -((-score) // 2)
     return int(score) if st[0] == 0 else -int(score)
+
+
+# ----------------------------------------------------------------------------------------
+# The search: agent.py's negamax, quiescence, table, killers and history, compiled.
+# ----------------------------------------------------------------------------------------
+
+# The same constants agent.py uses; tests/test_fastsearch.py asserts they agree.
+MATE = 1_000_000
+INFINITY = MATE + 1
+MATE_FOUND = MATE - 1_000
+QUIESCENCE_MAX_PLY = 8
+STALEMATE_PIECE_LIMIT = 3
+FIFTY_MOVE_PLIES = 100
+EXACT, LOWER, UPPER = 0, 1, 2
+TABLE_BONUS = 4_000_000
+CAPTURE_BONUS = 1_000_000
+PROMOTION_BONUS = 500_000
+KILLER_BONUS = 400_000
+HISTORY_CAP = KILLER_BONUS - 3
+
+MAX_PLY = fb.MAX_PLY
+# The transposition table is one int64 array of TT_SIZE rows and five columns, indexed by
+# the low bits of the Zobrist key, replaced on every store. Two million rows of forty bytes
+# is 84 MB, allocated once at import and kept for the game.
+TT_BITS = 21
+TT_SIZE = 1 << TT_BITS
+TT_KEY, TT_DEPTH, TT_BOUND, TT_SCORE, TT_MOVE = 0, 1, 2, 3, 4
+TT_COLUMNS = 5
+# The game's positions, for repetition. A game is capped at 600 plies.
+HIST_SIZE = 1024
+# The control vector: counters the search keeps and switches the caller sets.
+C_NODES = 0  # nodes searched this move
+C_MAX_NODES = 1  # stop when C_NODES reaches this; the caller converts time into nodes
+C_ABORT = 2  # set by the search when it stopped early; its result is then meaningless
+C_CUTOFFS = 3
+C_DRAWS = 4  # repetition and fifty-move draws returned; see negamax
+C_CONTEMPT = 5  # what a draw is worth to the side to move at the root
+C_N_HIST = 6  # how many of `hist` are filled; hist[C_N_HIST - 1] must be the root
+C_USE_TABLE = 7  # 0 disables the transposition table (for the parity test)
+C_USE_KILLERS = 8  # 0 disables killers and history (for the parity test)
+C_COUNT = 9
+UNLIMITED = 1 << 62
+
+_ROW_T = nbt.int32[::1]
+_BUFS_T = nbt.int32[:, ::1]
+_RANKS_T = nbt.int64[:, ::1]
+_VEC_T = nbt.int64[::1]
+_KILLERS_T = nbt.int64[:, ::1]
+_HISTORY_T = nbt.int64[:, :, ::1]
+_TT_T = nbt.int64[:, ::1]
+
+
+@njit(nbt.int64(_BOARD_T, nbt.int64), cache=False)
+def men(board: np.ndarray, side: int) -> int:
+    """How many men `side` has on the board, king included."""
+    low = 1 + 6 * side
+    high = low + 5
+    count = 0
+    for sq in range(21, 99):
+        piece = board[sq]
+        if low <= piece <= high:
+            count += 1
+    return count
+
+
+@njit(nbt.boolean(_BOARD_T), cache=False)
+def insufficient_material(board: np.ndarray) -> bool:
+    """python-chess's `is_insufficient_material`, rule for rule.
+
+    Any pawn, rook or queen is sufficient, and the scan leaves on the first one it meets, so
+    a middlegame position costs a few loads. With none: a side with a knight is insufficient
+    only when it has nothing else and the other side is a bare king; a side with bishops
+    only when every bishop on the board, either colour, stands on one square colour and
+    there are no knights; a bare king always.
+    """
+    white_men = 0
+    black_men = 0
+    white_knights = 0
+    black_knights = 0
+    white_bishops = 0
+    black_bishops = 0
+    dark = False
+    light = False
+    for sq in range(21, 99):
+        piece = board[sq]
+        if piece in (EMPTY, OFF):
+            continue
+        white = piece <= 6
+        kind = piece if white else piece - 6
+        if kind in (1, 4, 5):
+            return False
+        if white:
+            white_men += 1
+        else:
+            black_men += 1
+        if kind == 2:
+            if white:
+                white_knights += 1
+            else:
+                black_knights += 1
+        elif kind == 3:
+            if white:
+                white_bishops += 1
+            else:
+                black_bishops += 1
+            if (FILE_OF[sq] + RANK_OF[sq]) % 2 == 0:
+                dark = True
+            else:
+                light = True
+    knights = white_knights + black_knights
+    if white_knights > 0:
+        if white_men > 2 or black_men != 1:
+            return False
+    elif white_bishops > 0 and ((dark and light) or knights > 0):
+        return False
+    if black_knights > 0:
+        if black_men > 2 or white_men != 1:
+            return False
+    elif black_bishops > 0 and ((dark and light) or knights > 0):
+        return False
+    return True
+
+
+@njit(nbt.int64(nbt.int64, nbt.int64), cache=False)
+def draw_score(contempt: int, ply: int) -> int:
+    """A draw from the mover at `ply`; contempt is from the root's side, so odd plies flip."""
+    return contempt if ply % 2 == 0 else -contempt
+
+
+@njit(nbt.int64(nbt.int64, nbt.int64), cache=False)
+def to_table(score: int, ply: int) -> int:
+    """A mate score counted from this node rather than from the root, for storing."""
+    if score > MATE_FOUND:
+        return score + ply
+    if score < -MATE_FOUND:
+        return score - ply
+    return score
+
+
+@njit(nbt.int64(nbt.int64, nbt.int64), cache=False)
+def from_table(score: int, ply: int) -> int:
+    """Undo to_table for a node at this ply."""
+    if score > MATE_FOUND:
+        return score - ply
+    if score < -MATE_FOUND:
+        return score + ply
+    return score
+
+
+@njit(nbt.boolean(_BOARD_T, nbt.int32), cache=False)
+def is_noisy(board: np.ndarray, move: int) -> bool:
+    """A capture or a promotion, which order themselves and are never killers."""
+    return board[(move >> 7) & 127] != EMPTY or (move & fb.FLAG_EP) != 0 or ((move >> 14) & 7) != 0
+
+
+@njit(nbt.int64(_BOARD_T, nbt.int32, _W_T), cache=False)
+def move_score(board: np.ndarray, move: int, w: np.ndarray) -> int:
+    """`agent._move_score`: MVV-LVA for captures, plus a promotion bonus; zero for quiet moves."""
+    frm = move & 127
+    to = (move >> 7) & 127
+    promo = (move >> 14) & 7
+    score = 0
+    captured = board[to]
+    if (move & fb.FLAG_EP) != 0 or captured != EMPTY:
+        victim = w[W_PAWN] if (move & fb.FLAG_EP) != 0 else w[(captured - 1) % 6]
+        attacker = w[(board[frm] - 1) % 6]
+        score += CAPTURE_BONUS + victim * 100 - attacker
+    if promo != 0:
+        score += PROMOTION_BONUS + w[promo - 1]
+    return score
+
+
+@njit(
+    nbt.void(
+        _BOARD_T,
+        nbt.int64,
+        _ROW_T,
+        nbt.int64,
+        nbt.int64,
+        _VEC_T,
+        _HISTORY_T,
+        _W_T,
+        _VEC_T,
+        nbt.boolean,
+    ),
+    cache=False,
+)
+def rank_moves(
+    board: np.ndarray,
+    side: int,
+    row: np.ndarray,
+    count: int,
+    table_move: int,
+    killers: np.ndarray,
+    history: np.ndarray,
+    w: np.ndarray,
+    ranks: np.ndarray,
+    use_killers: bool,
+) -> None:
+    """`agent._order_fully`'s key for each move: table move, captures, promotions, killers,
+    then quiet moves by history. The moves are picked highest first by `pick`."""
+    for i in range(count):
+        move = row[i]
+        if move == table_move:
+            ranks[i] = TABLE_BONUS
+            continue
+        rank = move_score(board, move, w)
+        if rank == 0 and use_killers:
+            if move == killers[0]:
+                rank = KILLER_BONUS
+            elif move == killers[1]:
+                rank = KILLER_BONUS - 1
+            else:
+                rank = min(history[side, move & 127, (move >> 7) & 127], HISTORY_CAP)
+        ranks[i] = rank
+
+
+@njit(nbt.void(_ROW_T, _VEC_T, nbt.int64, nbt.int64), cache=False)
+def pick(row: np.ndarray, ranks: np.ndarray, start: int, count: int) -> None:
+    """Swap the highest-ranked move of `row[start:count]` into `row[start]`.
+
+    Picking one move at a time rather than sorting the list costs nothing at a node that cuts
+    off after its first move, which is most of them. Ties keep generation order.
+    """
+    best = start
+    for i in range(start + 1, count):
+        if ranks[i] > ranks[best]:
+            best = i
+    if best != start:
+        move = row[start]
+        row[start] = row[best]
+        row[best] = move
+        rank = ranks[start]
+        ranks[start] = ranks[best]
+        ranks[best] = rank
+
+
+@njit(nbt.int64(_BOARD_T, _ST_T, _UNDO_T, _ROW_T), cache=False)
+def gen_noisy(board: np.ndarray, st: np.ndarray, undo: np.ndarray, row: np.ndarray) -> int:
+    """The legal captures and queen promotions: what quiescence searches when not in check.
+
+    Pseudo-legal first, then the noisy ones are kept and only those are tested for legality,
+    so a quiet leaf pays for a handful of make/unmake pairs rather than thirty.
+    """
+    count = fb.gen_moves(board, st, row)
+    side = st[0]
+    other = 1 - side
+    kept = 0
+    for i in range(count):
+        move = row[i]
+        if (
+            board[(move >> 7) & 127] == EMPTY
+            and (move & fb.FLAG_EP) == 0
+            and ((move >> 14) & 7) != 5
+        ):
+            continue
+        fb.make_move(board, st, undo, move)
+        legal = not fb.is_square_attacked(board, st[5 + side], other)
+        fb.unmake_move(board, st, undo, move)
+        if legal:
+            row[kept] = move
+            kept += 1
+    return kept
+
+
+@njit(
+    nbt.int64(
+        _BOARD_T,
+        _ST_T,
+        _UNDO_T,
+        _PST_T,
+        _W_T,
+        _BUFS_T,
+        _RANKS_T,
+        _VEC_T,
+        nbt.int64,
+        nbt.int64,
+        nbt.int64,
+        nbt.int64,
+    ),
+    cache=False,
+)
+def quiescence(
+    board: np.ndarray,
+    st: np.ndarray,
+    undo: np.ndarray,
+    pst: np.ndarray,
+    w: np.ndarray,
+    moves: np.ndarray,
+    ranks: np.ndarray,
+    ctl: np.ndarray,
+    alpha: int,
+    beta: int,
+    ply: int,
+    remaining: int,
+) -> int:
+    """`agent._quiescence`: captures and queen promotions until the position is quiet.
+
+    In check every evasion is searched and there is no standing pat. Otherwise the side to
+    move may stand on the static evaluation, and a side down to three men that has no legal
+    move is stalemated rather than evaluated. Capped at `remaining` plies.
+    """
+    ctl[C_NODES] += 1
+    if ctl[C_NODES] >= ctl[C_MAX_NODES]:
+        ctl[C_ABORT] = 1
+        return 0
+    if ply >= MAX_PLY - 1:
+        return evaluate(board, st, pst, w)
+    row = moves[ply]
+    if fb.in_check(board, st):
+        count = fb.gen_legal(board, st, undo, row)
+        if count == 0:
+            return -MATE + ply
+        if remaining == 0:
+            return evaluate(board, st, pst, w)
+        best = -INFINITY
+    else:
+        if men(board, st[0]) <= STALEMATE_PIECE_LIMIT and fb.gen_legal(board, st, undo, row) == 0:
+            return draw_score(ctl[C_CONTEMPT], ply)
+        best = evaluate(board, st, pst, w)
+        if best >= beta or remaining == 0:
+            return best
+        if best > alpha:
+            alpha = best
+        count = gen_noisy(board, st, undo, row)
+    rank_row = ranks[ply]
+    for i in range(count):
+        rank_row[i] = move_score(board, row[i], w)
+    for i in range(count):
+        pick(row, rank_row, i, count)
+        move = row[i]
+        fb.make_move(board, st, undo, move)
+        score = -quiescence(
+            board, st, undo, pst, w, moves, ranks, ctl, -beta, -alpha, ply + 1, remaining - 1
+        )
+        fb.unmake_move(board, st, undo, move)
+        if ctl[C_ABORT] != 0:
+            return 0
+        if score > best:
+            best = score
+            if best > alpha:
+                alpha = best
+                if alpha >= beta:
+                    break
+    return best
+
+
+@njit(
+    nbt.int64(
+        _BOARD_T,
+        _ST_T,
+        _UNDO_T,
+        _PST_T,
+        _W_T,
+        _BUFS_T,
+        _RANKS_T,
+        _KILLERS_T,
+        _HISTORY_T,
+        _TT_T,
+        _VEC_T,
+        _VEC_T,
+        _VEC_T,
+        nbt.int64,
+        nbt.int64,
+        nbt.int64,
+        nbt.int64,
+    ),
+    cache=False,
+)
+def negamax(
+    board: np.ndarray,
+    st: np.ndarray,
+    undo: np.ndarray,
+    pst: np.ndarray,
+    w: np.ndarray,
+    moves: np.ndarray,
+    ranks: np.ndarray,
+    killers: np.ndarray,
+    history: np.ndarray,
+    tt: np.ndarray,
+    path: np.ndarray,
+    hist: np.ndarray,
+    ctl: np.ndarray,
+    depth: int,
+    ply: int,
+    alpha: int,
+    beta: int,
+) -> int:
+    """`agent._negamax`: fail-soft alpha-beta, step for step in the same order.
+
+    Repetition and the fifty move rule first, then insufficient material, then quiescence at
+    depth zero, the table probe, move generation, the ordered move loop, and the table store.
+    Buffers are per ply (`moves[ply]`, `ranks[ply]`, `killers[ply]`), so a node never touches
+    its children's. On abort every frame still unmakes its move, so the board the caller
+    handed in is the board it gets back.
+    """
+    ctl[C_NODES] += 1
+    if ctl[C_NODES] >= ctl[C_MAX_NODES]:
+        ctl[C_ABORT] = 1
+        return 0
+    if ply >= MAX_PLY - 1:
+        return evaluate(board, st, pst, w)
+    key = st[7]
+    contempt = ctl[C_CONTEMPT]
+
+    # A position the game has stood in, or one already on this line, is a draw. Only the
+    # last `clock` positions can match: a capture or a pawn move changes the board for good,
+    # and the halfmove clock counts the plies since the last one. The ancestors on the path
+    # come first, nearest first, then the game's positions, latest first; hist's last entry
+    # is the root, which path[0] duplicates and is skipped.
+    clock = st[3]
+    if clock > 0:
+        k = 1
+        i = ply - 1
+        while k <= clock and i >= 1:
+            if path[i] == key:
+                ctl[C_DRAWS] += 1
+                return draw_score(contempt, ply)
+            i -= 1
+            k += 1
+        i = ctl[C_N_HIST] - 1
+        while k <= clock and i >= 0:
+            if hist[i] == key:
+                ctl[C_DRAWS] += 1
+                return draw_score(contempt, ply)
+            i -= 1
+            k += 1
+    row = moves[ply]
+    # The fifty move rule does not rescue a side that is being mated.
+    if clock >= FIFTY_MOVE_PLIES and (
+        not fb.in_check(board, st) or fb.gen_legal(board, st, undo, row) > 0
+    ):
+        ctl[C_DRAWS] += 1
+        return draw_score(contempt, ply)
+    if insufficient_material(board):
+        return draw_score(contempt, ply)
+    if depth <= 0:
+        return quiescence(
+            board, st, undo, pst, w, moves, ranks, ctl, alpha, beta, ply, QUIESCENCE_MAX_PLY
+        )
+
+    table_move = 0
+    slot = key & (TT_SIZE - 1)
+    if ctl[C_USE_TABLE] != 0 and tt[slot, TT_KEY] == key:
+        table_move = tt[slot, TT_MOVE]
+        if tt[slot, TT_DEPTH] >= depth:
+            score = from_table(tt[slot, TT_SCORE], ply)
+            bound = tt[slot, TT_BOUND]
+            if (
+                bound == EXACT
+                or (bound == LOWER and score >= beta)
+                or (bound == UPPER and score <= alpha)
+            ):
+                return score
+
+    count = fb.gen_legal(board, st, undo, row)
+    if count == 0:
+        return -MATE + ply if fb.in_check(board, st) else draw_score(contempt, ply)
+
+    draws_before = ctl[C_DRAWS]
+    window_alpha = alpha
+    best = -INFINITY
+    best_move = row[0]
+    path[ply] = key
+    side = st[0]
+    use_killers = ctl[C_USE_KILLERS] != 0
+    rank_row = ranks[ply]
+    rank_moves(board, side, row, count, table_move, killers[ply], history, w, rank_row, use_killers)
+    for i in range(count):
+        pick(row, rank_row, i, count)
+        move = row[i]
+        noisy = is_noisy(board, move)
+        fb.make_move(board, st, undo, move)
+        score = -negamax(
+            board,
+            st,
+            undo,
+            pst,
+            w,
+            moves,
+            ranks,
+            killers,
+            history,
+            tt,
+            path,
+            hist,
+            ctl,
+            depth - 1,
+            ply + 1,
+            -beta,
+            -alpha,
+        )
+        fb.unmake_move(board, st, undo, move)
+        if ctl[C_ABORT] != 0:
+            return 0
+        if score > best:
+            best = score
+            best_move = move
+            if best > alpha:
+                alpha = best
+                if alpha >= beta:
+                    ctl[C_CUTOFFS] += 1
+                    if use_killers and not noisy:
+                        if move != killers[ply, 0]:
+                            killers[ply, 1] = killers[ply, 0]
+                            killers[ply, 0] = move
+                        history[side, move & 127, (move >> 7) & 127] += depth * depth
+                    break
+
+    # A score that came out of a repetition or the fifty move rule belongs to the line, not
+    # to the position, so it is not stored; see agent._negamax for the rest of the reasoning.
+    if ctl[C_USE_TABLE] != 0 and ctl[C_DRAWS] == draws_before:
+        bound = UPPER if best <= window_alpha else LOWER if best >= beta else EXACT
+        tt[slot, TT_KEY] = key
+        tt[slot, TT_DEPTH] = depth
+        tt[slot, TT_BOUND] = bound
+        tt[slot, TT_SCORE] = to_table(best, ply)
+        tt[slot, TT_MOVE] = best_move
+    return best
+
+
+class Aborted(Exception):
+    """The node budget ran out inside an iteration. `root_best` is the best root move that
+    iteration had already proven, or 0 when its first move had not finished."""
+
+    def __init__(self, root_best: int) -> None:
+        super().__init__("node budget exhausted")
+        self.root_best = root_best
+
+
+class SearchState:
+    """Every buffer the compiled search reads or writes, allocated once and reused for the game.
+
+    `board`, `st` and `undo` are replaced by `set_position` each move; everything else is
+    fixed. The table and history persist for the game, killers are cleared each move by
+    `begin_move`, and `hist` holds every position the game has stood in, the current root
+    last, appended by `remember`.
+    """
+
+    def __init__(self, pst: np.ndarray, w: np.ndarray) -> None:
+        self.pst = pst
+        self.w = w
+        self.board, self.st, self.undo = fb.from_fen(fb.START_FEN)
+        self.moves = np.zeros((MAX_PLY, fb.MAX_MOVES), dtype=np.int32)
+        self.ranks = np.zeros((MAX_PLY, fb.MAX_MOVES), dtype=np.int64)
+        self.killers = np.zeros((MAX_PLY, 2), dtype=np.int64)
+        self.history = np.zeros((2, 120, 120), dtype=np.int64)
+        self.tt = np.zeros((TT_SIZE, TT_COLUMNS), dtype=np.int64)
+        self.path = np.zeros(MAX_PLY, dtype=np.int64)
+        self.hist = np.zeros(HIST_SIZE, dtype=np.int64)
+        self.ctl = np.zeros(C_COUNT, dtype=np.int64)
+        self.ctl[C_MAX_NODES] = UNLIMITED
+        self.ctl[C_USE_TABLE] = 1
+        self.ctl[C_USE_KILLERS] = 1
+
+    def set_position(self, fen: str) -> None:
+        self.board, self.st, self.undo = fb.from_fen(fen)
+
+    def key(self) -> int:
+        return int(self.st[7])
+
+    def new_game(self) -> None:
+        """Forget the table, the history counts and the game's positions."""
+        self.tt[:, TT_KEY] = 0
+        self.history[:] = 0
+        self.ctl[C_N_HIST] = 0
+
+    def decay_history(self) -> None:
+        """Halve the history counts, as agent._observe does between moves."""
+        self.history //= 2
+
+    def remember(self, key: int) -> None:
+        """Append a position the game has stood in. The root must be the last one appended
+        before a search starts."""
+        count = int(self.ctl[C_N_HIST])
+        if count >= HIST_SIZE:
+            self.hist[:-1] = self.hist[1:]
+            count -= 1
+        self.hist[count] = key
+        self.ctl[C_N_HIST] = count + 1
+
+    def begin_move(self, contempt: int) -> None:
+        """Reset what belongs to one move: the killers, the counters and the abort flag."""
+        self.killers[:] = 0
+        self.ctl[C_NODES] = 0
+        self.ctl[C_CUTOFFS] = 0
+        self.ctl[C_DRAWS] = 0
+        self.ctl[C_ABORT] = 0
+        self.ctl[C_MAX_NODES] = UNLIMITED
+        self.ctl[C_CONTEMPT] = contempt
+
+    @property
+    def nodes(self) -> int:
+        return int(self.ctl[C_NODES])
+
+    @property
+    def cutoffs(self) -> int:
+        return int(self.ctl[C_CUTOFFS])
+
+    def table_move(self) -> int:
+        """The table's move for the current position, or 0."""
+        key = self.key()
+        slot = key & (TT_SIZE - 1)
+        if int(self.tt[slot, TT_KEY]) == key:
+            return int(self.tt[slot, TT_MOVE])
+        return 0
+
+    def table_filled(self) -> int:
+        """How many table rows hold an entry; a count for the log line, not a hot path."""
+        return int(np.count_nonzero(self.tt[:, TT_KEY]))
+
+
+def root(
+    state: SearchState,
+    depth: int,
+    first: int,
+    budget: Callable[[], int] | None = None,
+) -> tuple[int, int]:
+    """Search every root move at one depth, `first` first. Mirrors `agent._root`.
+
+    Returns `(best_move, best_score)`. `budget`, when given, is called before each root move
+    and returns the node count at which the search must stop; when the compiled search reaches
+    it the iteration is abandoned and `Aborted` carries the best move it had proven. Because
+    `first` is searched first, anything that replaced it has already outscored it.
+    """
+    board, st, undo = state.board, state.st, state.undo
+    row = state.moves[0]
+    count = fb.gen_legal(board, st, undo, row)
+    ranks = state.ranks[0]
+    rank_moves(
+        board,
+        int(st[0]),
+        row,
+        count,
+        first,
+        state.killers[0],
+        state.history,
+        state.w,
+        ranks,
+        state.ctl[C_USE_KILLERS] != 0,
+    )
+    order = sorted(range(count), key=lambda i: -int(ranks[i]))
+    moves = [int(row[i]) for i in order]
+    state.path[0] = state.key()
+    best_move, best_score = moves[0], -INFINITY
+    root_best = 0
+    for move in moves:
+        if budget is not None:
+            limit = budget()
+            if limit <= state.nodes:
+                raise Aborted(root_best)
+            state.ctl[C_MAX_NODES] = limit
+        fb.make_move(board, st, undo, move)
+        score = -int(
+            negamax(
+                board,
+                st,
+                undo,
+                state.pst,
+                state.w,
+                state.moves,
+                state.ranks,
+                state.killers,
+                state.history,
+                state.tt,
+                state.path,
+                state.hist,
+                state.ctl,
+                depth - 1,
+                1,
+                -INFINITY,
+                -best_score,
+            )
+        )
+        fb.unmake_move(board, st, undo, move)
+        if state.ctl[C_ABORT] != 0:
+            raise Aborted(root_best)
+        if score > best_score:
+            best_move, best_score = move, score
+            root_best = move
+    return best_move, best_score
+
+
+def warm(state: SearchState, depth: int = 3) -> int:
+    """Run a short search from the start position so every compiled path has executed once.
+
+    The eager signatures above compile at import; this proves the whole graph runs, before
+    the clock starts. Returns the nodes it searched.
+    """
+    state.set_position(fb.START_FEN)
+    state.new_game()
+    state.remember(state.key())
+    state.begin_move(0)
+    moves = fb.legal_moves(state.board, state.st, state.undo)
+    root(state, depth, moves[0])
+    state.new_game()
+    return state.nodes
