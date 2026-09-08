@@ -5,10 +5,12 @@
 Each line of `positions.epd` is a FEN, then `bm <uci>` for the move we should have found, then
 `id "..."`. They are the real blunders from rated games, as judged by tools/analyse_game.py.
 A measurement tool: never shipped, and the engine never reads it. It reaches into the agent's
-search (`_root`, `_Search`, `_MEMORY`) to run fixed depths one at a time, so it reports the
-first depth at which the wanted move becomes the engine's choice, which is what a tactical
-suite is for. It measures sharpness, not strength: a change that solves more here can still
-lose games, so decide on the bench's Elo and read this alongside it.
+search to run fixed depths one at a time, so it reports the first depth at which the wanted
+move becomes the engine's choice, which is what a tactical suite is for. From v3.0 the agent
+has a compiled engine (`_COMPILED`, `fastsearch.root`) and that is what is measured; an older
+agent directory is run through its Python search (`_root`, `_Search`, `_MEMORY`). It measures
+sharpness, not strength: a change that solves more here can still lose games, so decide on the
+bench's Elo and read this alongside it.
 """
 
 import argparse
@@ -56,9 +58,10 @@ def load(path: Path) -> list[Position]:
 
 def _load_agent(agent_dir: Path) -> ModuleType:
     sys.path.insert(0, str(agent_dir))
-    for name in ("agent", "fastboard"):
+    for name in ("agent", "fastboard", "fastsearch"):
         sys.modules.pop(name, None)
-    return importlib.import_module("agent")
+    with contextlib.redirect_stdout(io.StringIO()):
+        return importlib.import_module("agent")
 
 
 def solve(agent: ModuleType, position: Position, max_depth: int, seconds: float) -> tuple[int, int]:
@@ -67,6 +70,8 @@ def solve(agent: ModuleType, position: Position, max_depth: int, seconds: float)
     The first is 0 when it never did. Depths are searched one at a time with a fresh table so
     each depth's answer is its own, not a leftover from a longer search of the same position.
     """
+    if getattr(agent, "_COMPILED", None) is not None:
+        return _solve_compiled(agent, position, max_depth, seconds)
     board = chess.Board(position.fen)
     agent._MEMORY.table.clear()
     agent._MEMORY.seen.clear()
@@ -89,6 +94,51 @@ def solve(agent: ModuleType, position: Position, max_depth: int, seconds: float)
                 solved_at = depth
         else:
             solved_at = 0  # it has to hold at the deepest depth finished, not merely appear once
+    return solved_at, reached
+
+
+def _solve_compiled(
+    agent: ModuleType, position: Position, max_depth: int, seconds: float
+) -> tuple[int, int]:
+    """`solve` for an agent with the compiled engine: the same fixed depths through `fastsearch`.
+
+    The compiled search stops on a node count, so the time limit is enforced between root
+    moves at a node rate measured as it goes, the way the agent itself does it.
+    """
+    fs = sys.modules["fastsearch"]
+    fb = sys.modules["fastboard"]
+    state = agent._COMPILED.state
+    board = chess.Board(position.fen)
+    contempt = agent._contempt(agent.evaluate(board))
+    state.set_position(position.fen)
+    state.new_game()
+    state.remember(state.key())
+    state.begin_move(contempt)
+    started = time.perf_counter()
+
+    def budget() -> int:
+        elapsed = time.perf_counter() - started
+        remaining = seconds - elapsed
+        if remaining <= 0.0:
+            return 0
+        nodes = int(state.nodes)
+        rate = nodes / elapsed if nodes and elapsed > 0.005 else agent._COMPILED.rate * 1000.0
+        return nodes + int(remaining * rate)
+
+    legal = state.legal_moves()
+    first = max(legal, key=lambda move: int(fs.move_score(state.board, move, state.w)))
+    solved_at, reached = 0, 0
+    for depth in range(1, max_depth + 1):
+        try:
+            first, _ = fs.root(state, depth, first, budget)
+        except fs.Aborted:
+            break
+        reached = depth
+        if fb.move_to_uci(first) == position.best:
+            if not solved_at:
+                solved_at = depth
+        else:
+            solved_at = 0
     return solved_at, reached
 
 

@@ -1,5 +1,14 @@
-"""A chess agent: iterative deepening alpha-beta negamax with quiescence over a material and
-piece-square evaluation, remembering what it searched and where the game has been."""
+"""A chess agent: iterative deepening alpha-beta negamax with quiescence over a tapered
+material-and-position evaluation, remembering what it searched and where the game has been.
+
+Two engines live in this file and play the same chess. The Python one, on python-chess, is
+v2.4 unchanged: it is the reference every number below was measured against and the fallback
+that plays if anything else fails. The compiled one, `fastsearch.py` over the numba board in
+`fastboard.py`, is the same evaluation and the same search, proven move for move against the
+Python one and run at thirty times its node rate; it is what plays. This file owns what both
+share: the evaluation's numbers, the time management, the game memory, the log line and the
+safety net.
+"""
 
 import resource
 import sys
@@ -54,6 +63,15 @@ GROWTH_UNKNOWN = 5.0
 # Under this many milliseconds the elapsed time is mostly measurement noise, and a rate
 # divided out of it says more about the clock than about the search, so we do not print one.
 NPS_FLOOR_MS = 5
+# The compiled search cannot read the clock, so it stops on a node count. Before each root
+# move the wrapper turns what is left of the hard budget into nodes at the rate measured so
+# far this move (and before its first node, at the rate of the previous move, or of the
+# warm-up at import), scaled down a little so a rate that sags mid-iteration lands inside
+# the budget rather than past it. The clock itself is read between root moves.
+NODE_BUDGET_SAFETY = 0.9
+# The warm-up search at import: deep enough to run every compiled path and to measure the
+# machine's node rate, shallow enough to cost a fraction of a second.
+WARM_UP_DEPTH = 5
 
 # Ordering keys, highest first: the table's move, then captures, then promotions, then the
 # killers, then the quiet moves by how often they have cut off before.
@@ -1055,16 +1073,18 @@ def _reachable(previous: chess.Board, board: chess.Board) -> bool:
     return False
 
 
-def _observe(board: chess.Board) -> None:
+def _observe(board: chess.Board) -> bool:
     """Fold the position we were handed into the game history, forgetting a game we are not in.
 
     The first fen we are given is where the game starts for repetition and fifty move purposes,
     so there is nothing to remember before it. A process is meant to live for exactly one game;
     if what arrives is not one legal move on from what we handed back, we are somewhere else
-    and everything we remember is about another game.
+    and everything we remember is about another game. Returns whether the game continues, so
+    the compiled engine's memory can follow the same decision.
     """
     previous = _MEMORY.expected
-    if previous is None or not _reachable(previous, board):
+    continuing = previous is not None and _reachable(previous, board)
+    if not continuing:
         _MEMORY.table.clear()
         _MEMORY.seen.clear()
         _MEMORY.history = [0] * len(_MEMORY.history)
@@ -1073,10 +1093,15 @@ def _observe(board: chess.Board) -> None:
         # two plies later, but it decays, and halving stops a long game's counts running away.
         _MEMORY.history = [count // 2 for count in _MEMORY.history]
     _MEMORY.seen.add(_key(board))
+    return continuing
 
 
-def _think(fen: str, time_left_ms: int) -> str:
-    """Deepen until the budget is spent, keeping the best move we have proven so far."""
+def _think_python(fen: str, time_left_ms: int) -> str:
+    """Deepen until the budget is spent, keeping the best move we have proven so far.
+
+    This is v2.4's move, on python-chess. It plays when the compiled engine is unavailable or
+    has failed on this move; see `_think`.
+    """
     started = time.perf_counter()
     board = chess.Board(fen)
     moves = list(board.legal_moves)
@@ -1166,6 +1191,208 @@ def _think(fen: str, time_left_ms: int) -> str:
     _MEMORY.seen.add(_key(after))
     _MEMORY.expected = after
     return best.uci()
+
+
+# The compiled engine. `fastsearch` is imported inside a try because numba compiles it at
+# import, and a compile that fails on the platform must cost us the speed, not the game. When
+# it is missing, `_COMPILED` stays None and `_think` plays the Python engine on every move.
+try:
+    import fastboard as fb
+    import fastsearch as fs
+
+    COMPILED_IMPORT_ERROR: str | None = None
+except Exception:  # anything at all: the fallback is the point
+    COMPILED_IMPORT_ERROR = traceback.format_exc()
+
+
+@dataclass(slots=True)
+class _Compiled:
+    """The compiled engine's buffers, and what we know about its speed on this machine."""
+
+    state: "fs.SearchState"
+    # Nodes per millisecond: from the last move long enough to measure, or the warm-up.
+    rate: float
+
+
+def _load_compiled() -> "_Compiled | None":
+    """Pack the evaluation for the compiled search, allocate its buffers and warm it up.
+
+    The tables and weights above are the single source of truth: the compiled evaluation reads
+    them packed into two arrays and returns exactly the integers `evaluate` returns
+    (`tests/test_fastsearch.py`). The warm-up search runs every compiled path once, inside the
+    import budget, and its node rate seeds the time manager's first estimate.
+    """
+    if COMPILED_IMPORT_ERROR is not None:
+        print(COMPILED_IMPORT_ERROR, file=sys.stderr, flush=True)
+        print("compiled search unavailable, the Python engine plays", flush=True)
+        return None
+    try:
+        pst = fs.pack_tables(MIDDLEGAME_TABLES, ENDGAME_TABLES, PIECE_VALUES)
+        weights = fs.pack_weights(
+            piece_values=PIECE_VALUES,
+            passed_mg=PASSED_MG,
+            passed_eg=PASSED_EG,
+            isolated_mg=ISOLATED_MG,
+            isolated_eg=ISOLATED_EG,
+            doubled_mg=DOUBLED_MG,
+            doubled_eg=DOUBLED_EG,
+            rook_open_mg=ROOK_OPEN_MG,
+            rook_open_eg=ROOK_OPEN_EG,
+            rook_semi_open_mg=ROOK_SEMI_OPEN_MG,
+            rook_semi_open_eg=ROOK_SEMI_OPEN_EG,
+            bishop_pair_mg=BISHOP_PAIR_MG,
+            bishop_pair_eg=BISHOP_PAIR_EG,
+            shield_penalty=SHIELD_PENALTY,
+            shield_max_cover=SHIELD_MAX_COVER,
+            mop_up_cmd=MOP_UP_CMD,
+            mop_up_close=MOP_UP_CLOSE,
+            mop_up_loose_cmd=MOP_UP_LOOSE_CMD,
+            mop_up_loose_close=MOP_UP_LOOSE_CLOSE,
+            mop_up_min_advantage=MOP_UP_MIN_ADVANTAGE,
+            mop_up_max_weak_pieces=MOP_UP_MAX_WEAK_PIECES,
+            mop_up_bare_pieces=MOP_UP_BARE_PIECES,
+            drawish_margin=DRAWISH_MARGIN,
+            phase_rook=PHASE_ROOK,
+            phase_queen=PHASE_QUEEN,
+            phase_max=PHASE_MAX,
+        )
+        state = fs.SearchState(pst, weights)
+        started = time.perf_counter()
+        nodes = fs.warm(state, WARM_UP_DEPTH)
+        warm_ms = max((time.perf_counter() - started) * 1000.0, 1.0)
+        rate = nodes / warm_ms
+        print(
+            f"compiled search ready: warm-up depth {WARM_UP_DEPTH} in {warm_ms:.0f}ms, "
+            f"{nodes} nodes, nps {rate * 1000.0:.0f}",
+            flush=True,
+        )
+        return _Compiled(state, rate)
+    except Exception:
+        traceback.print_exc()
+        print("compiled search failed to start, the Python engine plays", flush=True)
+        return None
+
+
+_COMPILED = _load_compiled()
+
+
+def _think_compiled(compiled: _Compiled, fen: str, time_left_ms: int) -> str:
+    """The same move as `_think_python`, searched by the compiled engine.
+
+    The clock rules are v2.3's, unchanged: `_budgets`, the iteration gate, `PANIC_MS` and the
+    safety margin. What differs is how an iteration is stopped: the compiled search cannot
+    read the clock, so before each root move the remaining hard budget is turned into a node
+    count at the rate measured so far, and the search abandons the iteration when it gets
+    there. Iterative deepening stays here so the previous depth's move is always in hand.
+    """
+    started = time.perf_counter()
+    board = chess.Board(fen)
+    if not any(board.legal_moves):
+        return "0000"
+
+    state = compiled.state
+    continuing = _observe(board)  # the Python memory stays current for the fallback
+    if continuing:
+        state.decay_history()
+    else:
+        state.new_game()
+    state.set_position(fen)
+    state.remember(state.key())
+    soft_ms, hard_ms = _budgets(time_left_ms)
+    state.begin_move(_contempt(evaluate(board)))
+
+    legal = state.legal_moves()
+    # The same first move `_think_python` would try: the best capture by MVV-LVA, unless the
+    # table already knows this position, most likely from the search two plies ago.
+    best = max(legal, key=lambda move: int(fs.move_score(state.board, move, state.w)))
+    table_move = state.table_move()
+    if table_move in legal:
+        best = table_move
+    best_score = 0
+    reached = 0
+    partial = False
+    last_ms, previous_ms = 0.0, 0.0
+
+    def budget() -> int:
+        """The node count at which the search must stop, from what is left of the hard budget."""
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        remaining_ms = hard_ms - elapsed_ms
+        if remaining_ms <= 0.0:
+            return 0
+        nodes = state.nodes
+        rate = nodes / elapsed_ms if nodes and elapsed_ms >= NPS_FLOOR_MS else compiled.rate
+        return nodes + int(remaining_ms * rate * NODE_BUDGET_SAFETY)
+
+    deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
+    for depth in range(1, deepest + 1):
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if depth > 1 and (
+            elapsed_ms >= soft_ms or elapsed_ms + _projected(last_ms, previous_ms) > hard_ms
+        ):
+            break
+        iteration_started = time.perf_counter()
+        try:
+            best, best_score = fs.root(state, depth, best, budget)
+        except fs.Aborted as aborted:
+            if aborted.root_best:
+                best = aborted.root_best
+                partial = True
+            break
+        previous_ms = last_ms
+        last_ms = (time.perf_counter() - iteration_started) * 1000.0
+        reached = depth
+        if best_score >= MATE_FOUND:
+            break
+
+    spent_ms = (time.perf_counter() - started) * 1000.0
+    uci = fb.move_to_uci(best)
+    depth_text = f"d{reached} score {best_score:+d}" if reached else "d0"
+    move_text = f"move {uci}"
+    if partial:
+        move_text += f" from partial d{reached + 1}"
+    rate_text = ""
+    if spent_ms >= NPS_FLOOR_MS:
+        compiled.rate = state.nodes / spent_ms
+        rate_text = f"nps {compiled.rate * 1000.0:.0f} "
+    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR
+    print(
+        f"{depth_text} {move_text} nodes {state.nodes} "
+        f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
+        f"clock {time_left_ms} tt {state.table_filled()} cut {state.cutoffs} "
+        f"contempt {state.ctl[fs.C_CONTEMPT]:+d} peakrss {rss_mb:.0f}MB",
+        flush=True,
+    )
+
+    # Both this position and the one after our reply are part of the game's history, for
+    # both engines' memories.
+    after = chess.Board(fen)
+    after.push(chess.Move.from_uci(uci))
+    _MEMORY.seen.add(_key(after))
+    _MEMORY.expected = after
+    fb.make_move(state.board, state.st, state.undo, best)
+    state.remember(state.key())
+    fb.unmake_move(state.board, state.st, state.undo, best)
+    return uci
+
+
+def _think(fen: str, time_left_ms: int) -> str:
+    """The compiled engine's move, checked legal; failing that, the Python engine's.
+
+    The fallback is handed the clock less what the compiled attempt spent, so its own budgets
+    shrink to fit. A fallback prints why, so a competition log shows it happened.
+    """
+    if _COMPILED is not None:
+        started = time.perf_counter()
+        try:
+            uci = _think_compiled(_COMPILED, fen, time_left_ms)
+            if chess.Move.from_uci(uci) in chess.Board(fen).legal_moves:
+                return uci
+            print(f"compiled search returned {uci}, not legal here; the Python engine plays")
+        except Exception:
+            traceback.print_exc()
+            print("compiled search failed on this move; the Python engine plays", flush=True)
+        time_left_ms = max(int(time_left_ms - (time.perf_counter() - started) * 1000.0), 0)
+    return _think_python(fen, time_left_ms)
 
 
 def get_move(fen: str, time_left_ms: int) -> str:

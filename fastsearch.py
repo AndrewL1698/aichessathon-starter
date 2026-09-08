@@ -929,6 +929,10 @@ class SearchState:
     def key(self) -> int:
         return int(self.st[7])
 
+    def legal_moves(self) -> list[int]:
+        """The legal moves of the current position, for the root."""
+        return fb.legal_moves(self.board, self.st, self.undo)
+
     def new_game(self) -> None:
         """Forget the table, the history counts and the game's positions."""
         self.tt[:, TT_KEY] = 0
