@@ -45,8 +45,11 @@ PANIC_MS = 1_000
 # this good the ratio is nearer 2 while one move keeps failing high and nearer 8 when the
 # window reopens, so the observed ratio is clamped to that range; before two iterations have
 # run there is no ratio to observe and we assume the middle of it.
+# The cap is 4 rather than 8: once the table has made an early iteration nearly free, the
+# ratio between it and the next real one is not a branching factor, and at 8 the projection
+# refused depth 5 on most of round 73's moves with most of the soft budget unspent.
 GROWTH_MIN = 2.0
-GROWTH_MAX = 8.0
+GROWTH_MAX = 4.0
 GROWTH_UNKNOWN = 5.0
 # Under this many milliseconds the elapsed time is mostly measurement noise, and a rate
 # divided out of it says more about the clock than about the search, so we do not print one.
