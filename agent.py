@@ -21,6 +21,9 @@ MATE_FOUND = MATE - 1_000
 MAX_DEPTH = 64
 # Quiescence is bounded so a long capture chain, or a run of checks, cannot explode.
 QUIESCENCE_MAX_PLY = 8
+# Quiescence proves a stalemate only when the side to move has this many men or fewer, king
+# included. See _quiescence.
+STALEMATE_PIECE_LIMIT = 3
 # The clock is read once every 1024 nodes; reading it per node costs more than it saves.
 NODE_CHECK_MASK = 1023
 # A budget of a few hundred milliseconds is only a handful of those slices, and there
@@ -95,11 +98,27 @@ PIECE_VALUES: dict[int, int] = {
     chess.KING: 0,
 }
 
+# The evaluation is written twice, once for a board full of pieces and once for a board that is
+# nearly bare, and the two are mixed by how much material is left. The same square is worth
+# different things at the two ends: a king belongs behind its pawns in one and in the middle of
+# the board in the other, and a pawn on the sixth rank is a nuisance in one and a queen in the
+# other. A single table has to compromise between them and gets both wrong.
+#
+# Phase counts non-pawn material: a minor is 1, a rook 2, a queen 4, so a full board is 24 and
+# a pawn endgame is 0. Promotions can push it past 24, so it is clamped.
+PHASE_ROOK = 2
+PHASE_QUEEN = 4
+PHASE_MAX = 24
+
 type PieceSquareTable = tuple[tuple[int, ...], ...]
 
 # Each row is one rank, starting at White's home rank. A Black piece looks up the vertically
 # mirrored square. The bonuses refine material without being large enough to overpower it.
-PAWN_TABLE: PieceSquareTable = (
+
+# Middlegame pawns: take the centre, and leave the pawns in front of a castled king alone.
+# The -20 on d2/e2 is what makes the engine push them; the +10 on the wing pawns beside them
+# is what stops it from opening its own king for nothing.
+PAWN_MG: PieceSquareTable = (
     (0, 0, 0, 0, 0, 0, 0, 0),
     (5, 10, 10, -20, -20, 10, 10, 5),
     (5, -5, -10, 0, 0, -10, -5, 5),
@@ -110,7 +129,23 @@ PAWN_TABLE: PieceSquareTable = (
     (0, 0, 0, 0, 0, 0, 0, 0),
 )
 
-KNIGHT_TABLE: PieceSquareTable = (
+# Endgame pawns: a pawn's only ambition is the eighth rank, and no file is better than another
+# for it, so the table is flat across each rank and grows steeply up the board. Passed-pawn
+# bonuses are added on top of this; these numbers are what an ordinary pawn is worth.
+PAWN_EG: PieceSquareTable = (
+    (0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 0, 0, 0, 0, 0, 0, 0),
+    (5, 5, 5, 5, 5, 5, 5, 5),
+    (15, 15, 15, 15, 15, 15, 15, 15),
+    (30, 30, 30, 30, 30, 30, 30, 30),
+    (55, 55, 55, 55, 55, 55, 55, 55),
+    (90, 90, 90, 90, 90, 90, 90, 90),
+    (0, 0, 0, 0, 0, 0, 0, 0),
+)
+
+# Middlegame knights: a knight on the rim reaches four squares and a knight in the centre
+# reaches eight, so the table is a bowl. The small plus on the second rank is development.
+KNIGHT_MG: PieceSquareTable = (
     (-50, -40, -30, -30, -30, -30, -40, -50),
     (-40, -20, 0, 5, 5, 0, -20, -40),
     (-30, 5, 10, 15, 15, 10, 5, -30),
@@ -121,7 +156,22 @@ KNIGHT_TABLE: PieceSquareTable = (
     (-50, -40, -30, -30, -30, -30, -40, -50),
 )
 
-BISHOP_TABLE: PieceSquareTable = (
+# Endgame knights: the same bowl, symmetric about the middle rank because there is no home
+# rank to develop from any more, and a little shallower because with few targets left the
+# difference between a good square and a bad one matters less than it did.
+KNIGHT_EG: PieceSquareTable = (
+    (-40, -30, -20, -20, -20, -20, -30, -40),
+    (-30, -10, 0, 0, 0, 0, -10, -30),
+    (-20, 0, 10, 15, 15, 10, 0, -20),
+    (-20, 5, 15, 20, 20, 15, 5, -20),
+    (-20, 5, 15, 20, 20, 15, 5, -20),
+    (-20, 0, 10, 15, 15, 10, 0, -20),
+    (-30, -10, 0, 0, 0, 0, -10, -30),
+    (-40, -30, -20, -20, -20, -20, -30, -40),
+)
+
+# Middlegame bishops: long diagonals and the two fianchetto squares, corners punished.
+BISHOP_MG: PieceSquareTable = (
     (-20, -10, -10, -10, -10, -10, -10, -20),
     (-10, 5, 0, 0, 0, 0, 5, -10),
     (-10, 10, 10, 10, 10, 10, 10, -10),
@@ -132,7 +182,22 @@ BISHOP_TABLE: PieceSquareTable = (
     (-20, -10, -10, -10, -10, -10, -10, -20),
 )
 
-ROOK_TABLE: PieceSquareTable = (
+# Endgame bishops: centralisation only. The fianchetto squares mean nothing once the king is
+# not sitting next to them, and the bishop wants to see both wings at once.
+BISHOP_EG: PieceSquareTable = (
+    (-15, -10, -10, -5, -5, -10, -10, -15),
+    (-10, 0, 0, 0, 0, 0, 0, -10),
+    (-10, 0, 5, 10, 10, 5, 0, -10),
+    (-5, 5, 10, 15, 15, 10, 5, -5),
+    (-5, 5, 10, 15, 15, 10, 5, -5),
+    (-10, 0, 5, 10, 10, 5, 0, -10),
+    (-10, 0, 0, 0, 0, 0, 0, -10),
+    (-15, -10, -10, -5, -5, -10, -10, -15),
+)
+
+# Middlegame rooks: the seventh rank, and the centre files where the pawns come off first.
+# Rook on an open file is worth much more than this and is scored separately.
+ROOK_MG: PieceSquareTable = (
     (0, 0, 0, 5, 5, 0, 0, 0),
     (-5, 0, 0, 0, 0, 0, 0, -5),
     (-5, 0, 0, 0, 0, 0, 0, -5),
@@ -143,7 +208,21 @@ ROOK_TABLE: PieceSquareTable = (
     (0, 0, 0, 0, 0, 0, 0, 0),
 )
 
-QUEEN_TABLE: PieceSquareTable = (
+# Endgame rooks: almost flat. A rook is a rook wherever it stands once the board is empty, so
+# the only thing left to say is that an active rook up the board cuts the enemy king off.
+ROOK_EG: PieceSquareTable = (
+    (0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 0, 5, 5, 5, 5, 0, 0),
+    (0, 0, 5, 5, 5, 5, 0, 0),
+    (5, 5, 5, 5, 5, 5, 5, 5),
+    (10, 10, 10, 10, 10, 10, 10, 10),
+    (0, 0, 0, 0, 0, 0, 0, 0),
+)
+
+# Middlegame queen: keep her off the rim and out of the game before the minors are out.
+QUEEN_MG: PieceSquareTable = (
     (-20, -10, -10, -5, -5, -10, -10, -20),
     (-10, 0, 5, 0, 0, 0, 0, -10),
     (-10, 5, 5, 5, 5, 5, 0, -10),
@@ -154,7 +233,22 @@ QUEEN_TABLE: PieceSquareTable = (
     (-20, -10, -10, -5, -5, -10, -10, -20),
 )
 
-KING_TABLE: PieceSquareTable = (
+# Endgame queen: centralised, where she covers both wings. Symmetric: there is no development
+# left to encourage, only activity.
+QUEEN_EG: PieceSquareTable = (
+    (-20, -15, -10, -5, -5, -10, -15, -20),
+    (-15, -5, 0, 0, 0, 0, -5, -15),
+    (-10, 0, 5, 5, 5, 5, 0, -10),
+    (-5, 0, 5, 10, 10, 5, 0, -5),
+    (-5, 0, 5, 10, 10, 5, 0, -5),
+    (-10, 0, 5, 5, 5, 5, 0, -10),
+    (-15, -5, 0, 0, 0, 0, -5, -15),
+    (-20, -15, -10, -5, -5, -10, -15, -20),
+)
+
+# Middlegame king: behind its own pawns, and the castled corners are the two peaks. Everything
+# from the third rank up is punished hard enough that the king only walks there to escape.
+KING_MG: PieceSquareTable = (
     (20, 30, 10, 0, 0, 10, 30, 20),
     (20, 20, 0, 0, 0, 0, 20, 20),
     (-10, -20, -20, -20, -20, -20, -20, -10),
@@ -165,26 +259,391 @@ KING_TABLE: PieceSquareTable = (
     (-30, -40, -40, -50, -50, -40, -40, -30),
 )
 
-PIECE_SQUARE_TABLES: dict[int, PieceSquareTable] = {
-    chess.PAWN: PAWN_TABLE,
-    chess.KNIGHT: KNIGHT_TABLE,
-    chess.BISHOP: BISHOP_TABLE,
-    chess.ROOK: ROOK_TABLE,
-    chess.QUEEN: QUEEN_TABLE,
-    chess.KING: KING_TABLE,
-}
+# Endgame king: the exact opposite, a bowl pulling the king to the middle. This is the sign
+# flip that makes the king walk out and support its pawns once the queens are gone, and it is
+# also the first half of driving a bare enemy king to the edge: their king in a corner is
+# -50 for them. The mop-up term below is the other half.
+KING_EG: PieceSquareTable = (
+    (-50, -30, -30, -30, -30, -30, -30, -50),
+    (-30, -20, -10, -10, -10, -10, -20, -30),
+    (-30, -10, 10, 20, 20, 10, -10, -30),
+    (-30, -10, 20, 30, 30, 20, -10, -30),
+    (-30, -10, 20, 30, 30, 20, -10, -30),
+    (-30, -10, 10, 20, 20, 10, -10, -30),
+    (-30, -20, -10, -10, -10, -10, -20, -30),
+    (-50, -30, -30, -30, -30, -30, -30, -50),
+)
+
+MIDDLEGAME_TABLES: tuple[PieceSquareTable, ...] = (
+    PAWN_MG,
+    KNIGHT_MG,
+    BISHOP_MG,
+    ROOK_MG,
+    QUEEN_MG,
+    KING_MG,
+)
+ENDGAME_TABLES: tuple[PieceSquareTable, ...] = (
+    PAWN_EG,
+    KNIGHT_EG,
+    BISHOP_EG,
+    ROOK_EG,
+    QUEEN_EG,
+    KING_EG,
+)
+
+
+def _flat_table(table: PieceSquareTable, value: int, colour: chess.Color) -> tuple[int, ...]:
+    """One number per square: the piece's material value plus what the table says about it.
+
+    Folding material in means the per-square loop is one lookup and one add, and mirroring the
+    rows here means Black costs exactly what White costs at search time.
+    """
+    rows = table if colour == chess.WHITE else table[::-1]
+    return tuple(value + rows[square >> 3][square & 7] for square in range(64))
+
+
+# Indexed by piece type minus one, so that the loop in evaluate() can walk the six bitboards
+# python-chess already keeps and never build a Piece object.
+_MG_WHITE: tuple[tuple[int, ...], ...] = tuple(
+    _flat_table(MIDDLEGAME_TABLES[index], PIECE_VALUES[index + 1], chess.WHITE)
+    for index in range(6)
+)
+_MG_BLACK: tuple[tuple[int, ...], ...] = tuple(
+    _flat_table(MIDDLEGAME_TABLES[index], PIECE_VALUES[index + 1], chess.BLACK)
+    for index in range(6)
+)
+_EG_WHITE: tuple[tuple[int, ...], ...] = tuple(
+    _flat_table(ENDGAME_TABLES[index], PIECE_VALUES[index + 1], chess.WHITE) for index in range(6)
+)
+_EG_BLACK: tuple[tuple[int, ...], ...] = tuple(
+    _flat_table(ENDGAME_TABLES[index], PIECE_VALUES[index + 1], chess.BLACK) for index in range(6)
+)
+
+
+def _neighbour_files() -> tuple[int, ...]:
+    """For each square, the whole of the files either side of it."""
+    masks = []
+    for square in range(64):
+        file_index = square & 7
+        mask = 0
+        if file_index > 0:
+            mask |= chess.BB_FILES[file_index - 1]
+        if file_index < 7:
+            mask |= chess.BB_FILES[file_index + 1]
+        masks.append(mask)
+    return tuple(masks)
+
+
+def _front_spans(colour: chess.Color, files: int) -> tuple[int, ...]:
+    """For each square, the squares ahead of it on its own file, and `files` either side of it.
+
+    With `files` zero this is the doubled-pawn test; with `files` one it is the passed-pawn
+    test, since a pawn is passed exactly when no enemy pawn stands on those squares.
+    """
+    masks = []
+    for square in range(64):
+        file_index, rank_index = square & 7, square >> 3
+        span = 0
+        for offset in range(-files, files + 1):
+            neighbour = file_index + offset
+            if 0 <= neighbour <= 7:
+                span |= chess.BB_FILES[neighbour]
+        ahead = 0
+        ranks = range(rank_index + 1, 8) if colour == chess.WHITE else range(rank_index)
+        for rank_ahead in ranks:
+            ahead |= chess.BB_RANKS[rank_ahead]
+        masks.append(span & ahead)
+    return tuple(masks)
+
+
+def _shields(colour: chess.Color) -> tuple[int, ...]:
+    """For each king square, the six squares a pawn shield can stand on: its own file and the
+    two beside it, on the two ranks in front of the king."""
+    masks = []
+    for square in range(64):
+        file_index, rank_index = square & 7, square >> 3
+        files = 0
+        for neighbour in range(max(0, file_index - 1), min(7, file_index + 1) + 1):
+            files |= chess.BB_FILES[neighbour]
+        ranks = (
+            (rank_index + 1, rank_index + 2)
+            if colour == chess.WHITE
+            else (rank_index - 1, rank_index - 2)
+        )
+        ahead = 0
+        for rank_ahead in ranks:
+            if 0 <= rank_ahead <= 7:
+                ahead |= chess.BB_RANKS[rank_ahead]
+        masks.append(files & ahead)
+    return tuple(masks)
+
+
+def _centre_distances() -> tuple[int, ...]:
+    """Manhattan distance from each square to the nearest of the four centre squares."""
+    distances = []
+    for square in range(64):
+        file_index, rank_index = square & 7, square >> 3
+        distances.append(abs(2 * file_index - 7) // 2 + abs(2 * rank_index - 7) // 2)
+    return tuple(distances)
+
+
+_FILE_OF: tuple[int, ...] = tuple(chess.BB_FILES[square & 7] for square in range(64))
+_NEIGHBOUR_FILES: tuple[int, ...] = _neighbour_files()
+_AHEAD_WHITE: tuple[int, ...] = _front_spans(chess.WHITE, 0)
+_AHEAD_BLACK: tuple[int, ...] = _front_spans(chess.BLACK, 0)
+_PASSED_WHITE: tuple[int, ...] = _front_spans(chess.WHITE, 1)
+_PASSED_BLACK: tuple[int, ...] = _front_spans(chess.BLACK, 1)
+_SHIELD_WHITE: tuple[int, ...] = _shields(chess.WHITE)
+_SHIELD_BLACK: tuple[int, ...] = _shields(chess.BLACK)
+_CENTRE_DISTANCE: tuple[int, ...] = _centre_distances()
+
+# Passed pawns by the rank they have reached, counted from their own side: index 1 is a pawn
+# still at home and index 6 is one step from queening. Nothing else on the board grows this
+# steeply, and in the endgame a passer on the seventh is most of a piece on its own.
+PASSED_MG: tuple[int, ...] = (0, 5, 10, 20, 35, 60, 90, 0)
+PASSED_EG: tuple[int, ...] = (0, 10, 20, 35, 60, 95, 140, 0)
+# A pawn with no friend on either neighbouring file can never be defended by a pawn again.
+ISOLATED_MG = 14
+ISOLATED_EG = 18
+# Two pawns on one file: one of them is not going anywhere, and they cover five files between
+# them instead of six. It costs more in the endgame, where the extra file is a passed pawn.
+DOUBLED_MG = 10
+DOUBLED_EG = 22
+
+# A rook sees the whole board down a file with no pawns on it, and half of one down a file
+# with only enemy pawns. Worth less once there are few pawns left to block anything.
+ROOK_OPEN_MG = 22
+ROOK_OPEN_EG = 12
+ROOK_SEMI_OPEN_MG = 10
+ROOK_SEMI_OPEN_EG = 6
+# Two bishops cover both square colours, which matters more as the board empties.
+BISHOP_PAIR_MG = 25
+BISHOP_PAIR_EG = 45
+
+# Each of the three squares in front of the king that has no pawn on it. Middlegame only: in
+# the endgame there is nothing left to attack with and the king table wants the king out.
+SHIELD_PENALTY = 14
+SHIELD_FILES = 3
+
+# Mop-up. When one side cannot lose material fast enough to matter, the only thing left to
+# score is geometry: push their king to a corner and walk ours up next to it. Without this
+# every move in KRvK ties on material and piece-square score and the game is drawn by the
+# fifty move rule. The weights are bounded by MOP_UP_CMD * 6 + MOP_UP_CLOSE * 12, which is
+# 120 centipawns, well under a minor piece, so this can never buy a bad trade.
+MOP_UP_CMD = 10
+MOP_UP_CLOSE = 5
+# The same geometry, a third as loud, for a won position that has not been reduced to a bare
+# king yet: enough to stop a +15 position wandering, not enough to distort a real endgame.
+MOP_UP_LOOSE_CMD = 4
+MOP_UP_LOOSE_CLOSE = 2
+# Below this much material advantage there is nothing to mop up.
+MOP_UP_MIN_ADVANTAGE = 400
+# Mop-up is only looked at when the weaker side has a king and at most two other men; that
+# popcount is the gate that keeps this off the middlegame path entirely.
+MOP_UP_MAX_WEAK_PIECES = 3
+# The full weights need the weaker side down to a king and at most one minor.
+MOP_UP_BARE_PIECES = 2
+
+# With no pawns anywhere, an advantage smaller than a minor piece is usually not a win at all:
+# rook against a bishop, or two rooks against a queen, are books draws with correct defence.
+# Halving keeps the sign, so the search still prefers the ending, but stops it paying material
+# to reach one and stops contempt reading it as a won game.
+DRAWISH_MARGIN = 200
+
+
+def _phase(board: chess.Board) -> int:
+    """How much of the board is still a middlegame, from 24 down to 0."""
+    phase = (
+        chess.popcount(board.knights | board.bishops)
+        + PHASE_ROOK * chess.popcount(board.rooks)
+        + PHASE_QUEEN * chess.popcount(board.queens)
+    )
+    return PHASE_MAX if phase > PHASE_MAX else phase
+
+
+def _material(board: chess.Board, side: int) -> int:
+    """The material one side has, in centipawns, straight off the bitboards."""
+    return (
+        PIECE_VALUES[chess.PAWN] * chess.popcount(board.pawns & side)
+        + PIECE_VALUES[chess.KNIGHT] * chess.popcount(board.knights & side)
+        + PIECE_VALUES[chess.BISHOP] * chess.popcount(board.bishops & side)
+        + PIECE_VALUES[chess.ROOK] * chess.popcount(board.rooks & side)
+        + PIECE_VALUES[chess.QUEEN] * chess.popcount(board.queens & side)
+    )
+
+
+def _pawn_structure(white_pawns: int, black_pawns: int) -> tuple[int, int]:
+    """Passed, isolated and doubled pawns, from White's side, as (middlegame, endgame).
+
+    One pass per pawn over three precomputed masks. The masks are built once at import, so
+    nothing here walks a file square by square.
+    """
+    middlegame = endgame = 0
+    pawns = white_pawns
+    while pawns:
+        square = (pawns & -pawns).bit_length() - 1
+        pawns &= pawns - 1
+        if not _PASSED_WHITE[square] & black_pawns:
+            rank_index = square >> 3
+            middlegame += PASSED_MG[rank_index]
+            endgame += PASSED_EG[rank_index]
+        if not _NEIGHBOUR_FILES[square] & white_pawns:
+            middlegame -= ISOLATED_MG
+            endgame -= ISOLATED_EG
+        if _AHEAD_WHITE[square] & white_pawns:
+            middlegame -= DOUBLED_MG
+            endgame -= DOUBLED_EG
+    pawns = black_pawns
+    while pawns:
+        square = (pawns & -pawns).bit_length() - 1
+        pawns &= pawns - 1
+        if not _PASSED_BLACK[square] & white_pawns:
+            rank_index = 7 - (square >> 3)
+            middlegame -= PASSED_MG[rank_index]
+            endgame -= PASSED_EG[rank_index]
+        if not _NEIGHBOUR_FILES[square] & black_pawns:
+            middlegame += ISOLATED_MG
+            endgame += ISOLATED_EG
+        if _AHEAD_BLACK[square] & black_pawns:
+            middlegame += DOUBLED_MG
+            endgame += DOUBLED_EG
+    return middlegame, endgame
+
+
+def _pieces(
+    board: chess.Board, white: int, black: int, white_pawns: int, black_pawns: int
+) -> tuple[int, int]:
+    """Rooks on open and half-open files, and the bishop pair, as (middlegame, endgame).
+
+    Mobility would belong here too and is deliberately absent: python-chess has to generate
+    moves to count it, which costs more at one leaf than everything else in this file together.
+    """
+    middlegame = endgame = 0
+    all_pawns = white_pawns | black_pawns
+    rooks = board.rooks & white
+    while rooks:
+        square = (rooks & -rooks).bit_length() - 1
+        rooks &= rooks - 1
+        file_mask = _FILE_OF[square]
+        if not all_pawns & file_mask:
+            middlegame += ROOK_OPEN_MG
+            endgame += ROOK_OPEN_EG
+        elif not white_pawns & file_mask:
+            middlegame += ROOK_SEMI_OPEN_MG
+            endgame += ROOK_SEMI_OPEN_EG
+    rooks = board.rooks & black
+    while rooks:
+        square = (rooks & -rooks).bit_length() - 1
+        rooks &= rooks - 1
+        file_mask = _FILE_OF[square]
+        if not all_pawns & file_mask:
+            middlegame -= ROOK_OPEN_MG
+            endgame -= ROOK_OPEN_EG
+        elif not black_pawns & file_mask:
+            middlegame -= ROOK_SEMI_OPEN_MG
+            endgame -= ROOK_SEMI_OPEN_EG
+    if chess.popcount(board.bishops & white) >= 2:
+        middlegame += BISHOP_PAIR_MG
+        endgame += BISHOP_PAIR_EG
+    if chess.popcount(board.bishops & black) >= 2:
+        middlegame -= BISHOP_PAIR_MG
+        endgame -= BISHOP_PAIR_EG
+    return middlegame, endgame
+
+
+def _king_shield(white_king: int, black_king: int, white_pawns: int, black_pawns: int) -> int:
+    """Middlegame penalty for the pawns missing from in front of each king, White's side."""
+    white_cover = chess.popcount(_SHIELD_WHITE[white_king] & white_pawns)
+    black_cover = chess.popcount(_SHIELD_BLACK[black_king] & black_pawns)
+    if white_cover > SHIELD_FILES:
+        white_cover = SHIELD_FILES
+    if black_cover > SHIELD_FILES:
+        black_cover = SHIELD_FILES
+    return (black_cover - white_cover) * SHIELD_PENALTY
+
+
+def _mop_up(board: chess.Board, white: int, black: int, white_king: int, black_king: int) -> int:
+    """Endgame bonus, White's side, for a helpless king driven to the edge with ours close by.
+
+    The gate is a popcount, so a middlegame position leaves this function on its first line.
+    """
+    white_count = chess.popcount(white)
+    black_count = chess.popcount(black)
+    if white_count > MOP_UP_MAX_WEAK_PIECES and black_count > MOP_UP_MAX_WEAK_PIECES:
+        return 0
+    advantage = _material(board, white) - _material(board, black)
+    if advantage > MOP_UP_MIN_ADVANTAGE:
+        weak_king, weak_count, weak = black_king, black_count, black
+        sign = 1
+    elif advantage < -MOP_UP_MIN_ADVANTAGE:
+        weak_king, weak_count, weak = white_king, white_count, white
+        sign = -1
+    else:
+        return 0
+    # A king plus at most one minor cannot make progress or trade its way out of the mate, so
+    # the geometry is the whole truth about the position and the loud weights are safe. With
+    # more than that on the board this is only a nudge away from shuffling.
+    helpless = not (board.pawns | board.rooks | board.queens) & weak
+    bare = weak_count <= MOP_UP_BARE_PIECES and helpless
+    cmd, close = (MOP_UP_CMD, MOP_UP_CLOSE) if bare else (MOP_UP_LOOSE_CMD, MOP_UP_LOOSE_CLOSE)
+    separation = abs((white_king & 7) - (black_king & 7)) + abs(
+        (white_king >> 3) - (black_king >> 3)
+    )
+    return sign * (cmd * _CENTRE_DISTANCE[weak_king] + close * (14 - separation))
 
 
 def evaluate(board: chess.Board) -> int:
-    """Return a material-and-position score from the side-to-move's perspective."""
-    white_score = 0
-    for square, piece in board.piece_map().items():
-        table_square = square if piece.color == chess.WHITE else chess.square_mirror(square)
-        table = PIECE_SQUARE_TABLES[piece.piece_type]
-        value = PIECE_VALUES[piece.piece_type]
-        value += table[chess.square_rank(table_square)][chess.square_file(table_square)]
-        white_score += value if piece.color == chess.WHITE else -value
-    return white_score if board.turn == chess.WHITE else -white_score
+    """Return a tapered material-and-position score from the side-to-move's perspective."""
+    white = board.occupied_co[chess.WHITE]
+    black = board.occupied_co[chess.BLACK]
+    bitboards = (board.pawns, board.knights, board.bishops, board.rooks, board.queens, board.kings)
+
+    middlegame = endgame = 0
+    for index in range(6):
+        occupied = bitboards[index]
+        mg_table = _MG_WHITE[index]
+        eg_table = _EG_WHITE[index]
+        pieces = occupied & white
+        while pieces:
+            square = (pieces & -pieces).bit_length() - 1
+            pieces &= pieces - 1
+            middlegame += mg_table[square]
+            endgame += eg_table[square]
+        mg_table = _MG_BLACK[index]
+        eg_table = _EG_BLACK[index]
+        pieces = occupied & black
+        while pieces:
+            square = (pieces & -pieces).bit_length() - 1
+            pieces &= pieces - 1
+            middlegame -= mg_table[square]
+            endgame -= eg_table[square]
+
+    white_pawns = bitboards[0] & white
+    black_pawns = bitboards[0] & black
+    pawn_mg, pawn_eg = _pawn_structure(white_pawns, black_pawns)
+    piece_mg, piece_eg = _pieces(board, white, black, white_pawns, black_pawns)
+    middlegame += pawn_mg + piece_mg
+    endgame += pawn_eg + piece_eg
+
+    kings = bitboards[5]
+    white_king = (kings & white).bit_length() - 1
+    black_king = (kings & black).bit_length() - 1
+    # A position with a king missing is not one the search can reach, but evaluate() is called
+    # on whatever fen we are handed, and a bit_length of zero would index the tables at -1.
+    if white_king >= 0 and black_king >= 0:
+        middlegame += _king_shield(white_king, black_king, white_pawns, black_pawns)
+        endgame += _mop_up(board, white, black, white_king, black_king)
+
+    phase = _phase(board)
+    # Truncated toward zero rather than floored, so that mirroring the board negates the score
+    # exactly instead of leaving White a centipawn ahead of Black in the same position.
+    total = middlegame * phase + endgame * (PHASE_MAX - phase)
+    score = total // PHASE_MAX if total >= 0 else -(-total // PHASE_MAX)
+    if not bitboards[0]:
+        advantage = _material(board, white) - _material(board, black)
+        if -DRAWISH_MARGIN <= advantage <= DRAWISH_MARGIN:
+            score = score // 2 if score >= 0 else -(-score // 2)
+    return score if board.turn == chess.WHITE else -score
 
 
 class _Timeout(Exception):
@@ -399,13 +858,21 @@ def _quiescence(
             return evaluate(board)
         best = -INFINITY
     else:
+        # A stalemate down here would otherwise score as the stand-pat, and three games were
+        # thrown away that way while up eleven to seventeen pawns. Proving it costs a full move
+        # generation, which is far too much at every quiet leaf, so it is asked only when the
+        # side to move is down to a king and at most two other men: exactly the side that gets
+        # stalemated, and a movegen that is nearly free because there is so little to generate.
+        # The popcount is the gate, so a middlegame leaf never reaches the generator.
+        if chess.popcount(board.occupied_co[board.turn]) <= STALEMATE_PIECE_LIMIT and not any(
+            board.legal_moves
+        ):
+            return _draw_score(ply, search)
         best = evaluate(board)
         if best >= beta or remaining == 0:
             return best
         alpha = max(alpha, best)
         # Captures, plus the quiet promotions, which change material as much as a capture does.
-        # A stalemate here scores as the stand-pat instead of 0; proving it costs a full move
-        # generation at every quiet leaf, which is far more than the rare error is worth.
         moves = list(board.generate_legal_captures())
         # Only the queen: an underpromotion is a way to avoid a stalemate or to fork, and
         # neither is something a search of the noisy moves alone can see.
