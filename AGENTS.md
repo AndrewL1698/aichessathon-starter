@@ -101,3 +101,9 @@ tie-breaks replay. The platform sets nothing of the kind, so do not read it in y
 
 Python 3.12, type-annotated, ruff and mypy strict clean. Keep `agent.py` readable: it is the
 thing a judge reads if your games get flagged, and the thing you have to explain at the final.
+
+## Team workflow and status
+
+`docs/TEAM.md` is how this team works on the entry: branch and PR conventions, benchmarking
+rules, ladder anchors, machine setup, and the live status of every PR. `docs/STRATEGY.md` is the
+research brief and phased plan. Read both before proposing or starting work.
