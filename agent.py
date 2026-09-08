@@ -21,6 +21,11 @@ MATE_FOUND = MATE - 1_000
 MAX_DEPTH = 64
 # Quiescence is bounded so a long capture chain, or a run of checks, cannot explode.
 QUIESCENCE_MAX_PLY = 8
+# Null move pruning: the depth taken off the search after the pass, and the least depth at
+# which it is tried. From depth 2 the reduced search is quiescence alone, so there the pass
+# amounts to asking whether standing pat already beats beta.
+NULL_MOVE_REDUCTION = 2
+NULL_MOVE_MIN_DEPTH = 2
 # The clock is read once every 1024 nodes; reading it per node costs more than it saves.
 NODE_CHECK_MASK = 1023
 # A budget of a few hundred milliseconds is only a handful of those slices, and there
@@ -431,7 +436,13 @@ def _quiescence(
 
 
 def _negamax(
-    board: chess.Board, depth: int, ply: int, alpha: int, beta: int, search: _Search
+    board: chess.Board,
+    depth: int,
+    ply: int,
+    alpha: int,
+    beta: int,
+    search: _Search,
+    null_ok: bool = True,
 ) -> int:
     """Fail-soft alpha-beta by observing that both sides' scores are exact opposites."""
     search.nodes += 1
@@ -479,6 +490,28 @@ def _negamax(
                 or (bound == UPPER and score <= alpha)
             ):
                 return score
+
+    # Null move pruning: hand the opponent a free move, and if a reduced search still cannot
+    # get them under beta, the real moves would not either. Skipped in check, where passing is
+    # illegal, with only king and pawns, where zugzwang makes passing the best move there is,
+    # and right after another pass. A mate found through a pass is not trusted.
+    if (
+        null_ok
+        and depth >= NULL_MOVE_MIN_DEPTH
+        and abs(beta) < MATE_FOUND
+        and board.occupied_co[board.turn] & ~(board.pawns | board.kings)
+        and not board.is_check()
+    ):
+        search.path.add(key)
+        board.push(chess.Move.null())
+        score = -_negamax(
+            board, depth - 1 - NULL_MOVE_REDUCTION, ply + 1, -beta, -beta + 1, search, False
+        )
+        board.pop()
+        search.path.discard(key)
+        if beta <= score < MATE_FOUND:
+            search.cutoffs += 1
+            return score
 
     moves = list(board.legal_moves)
     if not moves:
