@@ -617,13 +617,14 @@ def _think(fen: str, time_left_ms: int) -> str:
     deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
     for depth in range(1, deepest + 1):
         elapsed_ms = (time.perf_counter() - started) * 1000.0
-        # Start an iteration only when the soft budget is projected to fall inside it, not
-        # after it, so the average move lands near the budget: an iteration costs several
-        # times the one before, so refusing every one that could end past the budget leaves
-        # most of the budget unspent. Gating on the time already spent, as this used to,
-        # admits an iteration with the whole rest of the hard budget ahead of it, and one
-        # that runs to the deadline is wasted entirely.
-        if depth > 1 and elapsed_ms + _projected(last_ms, previous_ms) / 2.0 > soft_ms:
+        # Start an iteration while the soft budget is not yet spent and the whole iteration
+        # is projected to finish inside the hard budget. The first condition keeps the average
+        # move near the soft budget; the second refuses only iterations that would be cut off
+        # by the deadline and wasted, rather than every iteration that might end past the
+        # soft budget, which left most of the clock unspent.
+        if depth > 1 and (
+            elapsed_ms >= soft_ms or elapsed_ms + _projected(last_ms, previous_ms) > hard_ms
+        ):
             break
         iteration_started = time.perf_counter()
         try:
