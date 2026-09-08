@@ -32,6 +32,9 @@ FINE_CHECK_BELOW_MS = 300
 # Budgets in milliseconds, all derived from the clock we were handed, never from a constant.
 SOFT_DIVISOR = 25
 SOFT_BONUS_MS = 400
+# Clock the soft budget never plans to spend. A game long enough to reach it plays on the
+# increment from there, which the bonus is deliberately under.
+RESERVE_MS = 10_000
 HARD_DIVISOR = 8
 # The referee times us from when it sends the request, so process overhead is on our clock.
 SAFETY_MARGIN_MS = 300
@@ -305,8 +308,15 @@ def _draw_score(ply: int, search: _Search) -> int:
 
 
 def _budgets(time_left_ms: int) -> tuple[float, float]:
-    """Return the soft and hard budgets in milliseconds for a move with this much clock."""
-    soft = time_left_ms / SOFT_DIVISOR + SOFT_BONUS_MS
+    """Return the soft and hard budgets in milliseconds for a move with this much clock.
+
+    The soft budget is a share of the clock above the reserve, so as the clock falls toward
+    the reserve the target shrinks to the bonus alone, and the bonus is under the increment,
+    so the clock stops falling there instead of sinking to a few seconds in a long game. The
+    hard budget is still a share of the whole clock: a move may still use time from the
+    reserve to finish what it started.
+    """
+    soft = max(time_left_ms - RESERVE_MS, 0) / SOFT_DIVISOR + SOFT_BONUS_MS
     # Never plan to use the last of the clock: the reply still has to travel back. The margin
     # is taken off last so that it always wins. Under it there is no time to think at all, the
     # budget is zero, and the search aborts at its first clock check, which is the only safe
