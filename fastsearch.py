@@ -70,6 +70,9 @@ from fastboard import (
 # `PIECE_VALUES` is the evaluation's, read here only for MVV-LVA ordering.
 from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate
 
+# Spans this module's own compilation; `fasteval` has already recorded its own by here.
+_STARTED = time.perf_counter()
+
 # --------------------------------------------------------------------------------------
 # Every constant below is the one `agent.py` searches with. Changing one here and not
 # there makes the two engines different engines, and the fallback in `agent.py` exists to
@@ -967,9 +970,14 @@ def think(fen: str, time_left_ms: int) -> str:
     deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
     for depth in range(1, deepest + 1):
         elapsed_ms = (time.perf_counter() - started) * 1000.0
-        # Start an iteration only when the soft budget is projected to fall inside it; see
-        # the same gate in `agent.py` for why this is not "have we spent the budget yet".
-        if depth > 1 and elapsed_ms + projected(last_ms, previous_ms) / 2.0 > soft_ms:
+        # Start an iteration while the soft budget is not yet spent and the whole iteration
+        # is projected to finish inside the hard budget. The first condition keeps the average
+        # move near the soft budget; the second refuses only iterations that would be cut off
+        # by the deadline and wasted, rather than every iteration that might end past the soft
+        # budget, which left most of the clock unspent. This is `agent.py`'s gate exactly.
+        if depth > 1 and (
+            elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > hard_ms
+        ):
             break
         iteration_started = time.perf_counter()
         score = int(
@@ -1080,3 +1088,5 @@ def warm() -> None:
 
 
 warm()
+
+COMPILE_SECONDS = time.perf_counter() - _STARTED

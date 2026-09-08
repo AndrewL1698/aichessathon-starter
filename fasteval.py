@@ -28,9 +28,16 @@ Squares are mailbox indices (a8 is 21, h1 is 98). `FILE_OF` and `RANK_OF` map on
 every mask below is written in.
 """
 
+import time
+
 import numpy as np
 from numba import njit
 from numba import types as nbt
+
+# Every `@njit` below compiles as it is decorated, so what `COMPILE_SECONDS` at the foot of
+# this file spans is the compilation of the whole module, not only the `warm()` call at the
+# end of it. `agent.py` prints it, so the platform's log says what the init budget went on.
+_STARTED = time.perf_counter()
 
 # --------------------------------------------------------------------------------------
 # The weights. Copied verbatim from `evaluate` and its constants in `agent.py`; that file is
@@ -636,3 +643,5 @@ def warm() -> None:
 
 
 warm()
+
+COMPILE_SECONDS = time.perf_counter() - _STARTED
