@@ -164,3 +164,19 @@ Reserve-floor re-run from scratch:
 
 The 60.9% did not reproduce: 44.6% over 56 games. Best-of-three selection at 32 games is worth
 about a hundred Elo of optimism, which is why the re-run step exists. Cycle 2 closed.
+
+## Cycle 3 opening, 2026-09-08: the merged prod (v2.3 + PR #5 evaluation) against v2.3
+
+Prod moved under cycle 2: a teammate merged the evaluation PR on top of v2.3. Benched before
+anything else; baseline v2.3.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| prod-eval | baseline | 10s+0.1s | 32 | +25 =3 -4 | 82.8% | +273 | +153 to +510 | 0 / 0 / 0 / 0 | 1.27s | 74 MB |
+| prod-eval | sunfish | 10s+0.1s | 16 | +10 =3 -3 | 71.9% | +163 | +13 to +420 | 0 / 0 / 0 / 0 | 1.27s | 59 MB |
+| prod-eval | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.26s | 42 MB |
+
+Same eight opening positions, one move each at a 75 s clock: v2.3 mean depth 5.25 at median
+50k nps, prod 5.38 at 62k nps. 120 s self-play: 51 moves, clean, peak RSS 243 MB, clock 17 to
+21 s at the end. Regression suite 3 of 12 (v2.2 also 3 of 12, a different three). Built as
+`submission-v2.4.zip`; the 45 s proxy match follows.

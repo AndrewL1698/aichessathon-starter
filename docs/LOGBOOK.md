@@ -367,3 +367,23 @@ It is a good strategy, but it is the second fix, not the first. Right now the en
 depth it has time for on nearly every move; a dynamic rule sitting on top of a gate that
 refuses iterations would still be refused. Gate first, measure, then "extend when unstable"
 as a cycle 3 candidate.
+
+### 2026-09-08, cycle 3 opening: the evaluation merge is v2.4. Shipped on the numbers.
+
+While cycle 2 was closing, a teammate merged PR #5 into `prod` on top of v2.3: a tapered
+evaluation (separate middlegame and endgame piece-square tables blended by how much material
+is left), mop-up terms that drive a won ending to mate, passed, isolated and doubled pawn
+terms, and a king shield. Standard techniques all; "tapered evaluation" and "mop-up" are the
+names to look up. It had not been benchmarked against v2.3 when it landed.
+
+Benched first: **82.8% against v2.3** (+25 =3 -4 over 32 games), Elo +273, interval +153 to
++510, the first lower bound above zero in this log by a wide margin; 71.9% against Sunfish;
+no illegal moves, exceptions, timeouts or over-budget moves; peak RSS 243 MB in a 120 s game.
+On the same eight positions it searches to the same depth (5.38 vs 5.25) at higher speed
+(62k vs 50k nps), so the gain is evaluation quality, not depth. The regression suite stays at
+3 of 12: those positions are tactical and this change is positional. Built as
+`submission-v2.4.zip` from 1077652 and handed over for the next round; the 45 s platform
+proxy match is running and goes into the bench log when done.
+
+Blunders per game: still 8 and 4 from v2.2's two rated games; v2.3 and v2.4 have not played
+a rated game yet as this is written.
