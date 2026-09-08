@@ -1,0 +1,79 @@
+AI CHESSATHON MATCH LOG
+=======================
+
+MATCH
+  Round          Rated 74
+  Team           2 Pawns and a Queen
+  Colour         White
+  Opponent       Makina
+  Opening        Sicilian Sveshnikov
+  Start FEN      r1bqkb1r/pp3ppp/2np4/1N1Pp3/8/8/PPP2PPP/R1BQKB1R b KQkq - 0 8
+  You moved      Second
+  Machine        w-a91dab
+  Finished       2026-09-08 20:19:57 UTC
+  Match ID       9629dfe1-0106-496f-be22-4c8c475a4757
+
+INIT
+  Ready in       0.5 s
+  Budget         90.0 s
+  Used           1 percent
+
+CLOCK
+  Base           120.0 s plus 0.5 s per move
+  Moves          19
+  Time used      55.1 s
+  Slowest        4.9 s on move 18
+  Fastest        1.2 s on move 8
+  Average        2.9 s
+  Left at end    74.4 s
+
+RESULT
+  Lost by checkmate
+  Game lasted 116.3 s
+
+MOVES
+    #  move          time     clock left
+    1  Bc4           2.4 s      118.1 s
+    2  Nc3           2.8 s      115.8 s
+    3  O-O           4.9 s      111.5 s
+    4  g4            4.5 s      107.5 s
+    5  Be3           2.5 s      105.5 s
+    6  Re1           4.3 s      101.7 s
+    7  gxf5          3.9 s       98.3 s
+    8  Be2           1.2 s       97.6 s
+    9  Qd2           1.3 s       96.8 s
+   10  Bg5           2.1 s       95.2 s
+   11  f4            2.7 s       93.0 s
+   12  Qxf4          2.7 s       90.9 s
+   13  Qg3           2.5 s       88.9 s
+   14  Kh1           3.1 s       86.3 s
+   15  Nxe4          2.9 s       83.8 s
+   16  Bf3           2.7 s       81.6 s
+   17  Qxg7+         1.4 s       80.7 s
+   18  Rg1+          4.9 s       76.3 s
+   19  Rg2           2.4 s       74.4 s
+
+OUTPUT
+  2,474 bytes on stderr
+
+  d4 score +20 move f1c4 nodes 48621 nps 20222 2404ms soft 5200 hard 15000 clock 120000 tt 1836 cut 1808 contempt +0 peakrss 19MB
+  d5 score +40 move b5c3 nodes 86767 nps 31393 2764ms soft 5124 hard 14762 clock 118094 tt 4511 cut 2877 contempt +0 peakrss 21MB
+  d5 score +45 move e1g1 nodes 150381 nps 30887 4869ms soft 5033 hard 14479 clock 115829 tt 8951 cut 4346 contempt +0 peakrss 23MB
+  d5 score +45 move g2g4 nodes 122900 nps 27512 4467ms soft 4858 hard 13932 clock 111459 tt 12816 cut 3923 contempt +0 peakrss 25MB
+  d5 score +55 move c1e3 nodes 73366 nps 29444 2492ms soft 4700 hard 13436 clock 107491 tt 15527 cut 2851 contempt +0 peakrss 26MB
+  d5 score +45 move f1e1 nodes 124477 nps 28856 4314ms soft 4620 hard 13187 clock 105498 tt 20587 cut 5279 contempt +0 peakrss 28MB
+  d5 score +45 move g4f5 nodes 110023 nps 28563 3852ms soft 4467 hard 12710 clock 101683 tt 24306 cut 4025 contempt +0 peakrss 31MB
+  d4 score +25 move c4e2 nodes 25778 nps 21448 1202ms soft 4333 hard 12291 clock 98330 tt 26371 cut 2040 contempt +0 peakrss 32MB
+  d4 score +25 move d1d2 nodes 28021 nps 21607 1297ms soft 4305 hard 12203 clock 97627 tt 27948 cut 1572 contempt +0 peakrss 32MB
+  d4 score -55 move e3g5 nodes 52223 nps 24380 2142ms soft 4273 hard 12104 clock 96829 tt 29889 cut 1777 contempt +0 peakrss 33MB
+  d5 score -270 move f2f4 nodes 70080 nps 26343 2660ms soft 4207 hard 11898 clock 95186 tt 33188 cut 3481 contempt +0 peakrss 35MB
+  d5 score -370 move d2f4 nodes 77737 nps 29303 2653ms soft 4121 hard 11628 clock 93024 tt 35902 cut 2880 contempt +0 peakrss 36MB
+  d5 score -655 move f4g3 nodes 62761 nps 25117 2499ms soft 4035 hard 11359 clock 90870 tt 38506 cut 2734 contempt +50 peakrss 37MB
+  d6 score -655 move g1h1 nodes 124008 nps 40094 3093ms soft 3955 hard 11109 clock 88871 tt 41618 cut 3272 contempt +50 peakrss 38MB
+  d6 score -1395 move c3e4 nodes 113830 nps 38659 2944ms soft 3851 hard 10784 clock 86276 tt 45232 cut 3638 contempt +50 peakrss 42MB
+  d6 score -999992 move e2f3 nodes 116128 nps 42827 2712ms soft 3753 hard 10479 clock 83831 tt 48520 cut 3485 contempt +50 peakrss 43MB
+  d8 score -999994 move g3g7 nodes 60677 nps 43610 1391ms soft 3665 hard 10202 clock 81618 tt 49490 cut 1343 contempt +50 peakrss 43MB
+  d7 score -999996 move e1g1 nodes 133301 nps 27038 4930ms soft 3629 hard 10091 clock 80726 tt 65112 cut 16130 contempt +50 peakrss 50MB
+  d6 score -999998 move g1g2 nodes 124106 nps 52274 2374ms soft 3452 hard 9537 clock 76294 tt 66821 cut 1921 contempt +50 peakrss 50MB
+
+Email hello@aichessathon.com with this file if anything here is unclear.
