@@ -5,6 +5,7 @@ import resource
 import sys
 import time
 import traceback
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 
 import chess
@@ -45,19 +46,21 @@ TABLE_BONUS = 4_000_000
 CAPTURE_BONUS = 1_000_000
 PROMOTION_BONUS = 500_000
 KILLER_BONUS = 400_000
-# History counts are clamped below the killers so no amount of them outranks one.
-HISTORY_CAP = KILLER_BONUS - 1
+# History counts are clamped below both killers so no amount of them ever ties one.
+HISTORY_CAP = KILLER_BONUS - 3
 HISTORY_SIDE = 64 * 64
 
 # What a stored score says about the true one: it is the score, or a bound on it.
 EXACT, LOWER, UPPER = 0, 1, 2
+# What python-chess's transposition key is: a tuple, and what we key everything on. See _key.
+type _Key = Hashable
 # depth, bound, score relative to the node's ply, and the move that was best there.
 type _Entry = tuple[int, int, int, chess.Move | None]
-# A million entries measures at 320 MB of the container's two gigabytes, which leaves room for
-# an evaluation heavier than this one. The table is cleared rather than evicted when it fills:
-# a clear costs one search of refilling and happens a handful of times in a long game, while
-# any eviction policy costs something on every store.
-TABLE_MAX_ENTRIES = 1_000_000
+# An entry costs about 816 bytes, so half a million of them is 410 MB of the container's two
+# gigabytes, which leaves room for an evaluation heavier than this one. The table is cleared
+# rather than evicted when it fills: a clear costs one search of refilling and happens a
+# handful of times in a long game, while any eviction policy costs something on every store.
+TABLE_MAX_ENTRIES = 500_000
 
 # A draw is not worth zero. Above this much advantage a draw is a loss of half a point we had
 # in hand, and below minus this much it is half a point rescued.
@@ -70,6 +73,7 @@ FIFTY_MOVE_PLIES = 100
 # getrusage reports the peak resident set in bytes on macOS and in kilobytes on Linux, which
 # is where this actually runs.
 RSS_DIVISOR = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+
 PIECE_VALUES: dict[int, int] = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
@@ -179,12 +183,15 @@ class _Timeout(Exception):
 class _Memory:
     """What survives from one of our moves to the next. The process lives for one game."""
 
-    # The transposition table, keyed on a digest of the position; see _key.
-    table: dict[int, _Entry] = field(default_factory=dict)
+    # The transposition table, keyed on the position; see _key.
+    table: dict[_Key, _Entry] = field(default_factory=dict)
     # Quiet cutoff counts, indexed by side to move, from-square and to-square.
     history: list[int] = field(default_factory=lambda: [0] * (2 * HISTORY_SIDE))
     # Every position this game has stood in, ours and the opponent's, from the first fen on.
-    seen: set[int] = field(default_factory=set)
+    # Playing Black we never see the opening position itself, because the first fen we are
+    # handed is already one ply in; the referee still claims at the third occurrence, so that
+    # is one position we are blind to rather than a position we can repeat into a lost draw.
+    seen: set[_Key] = field(default_factory=set)
     # The position we handed back last move. The next fen has to be one legal move from it.
     expected: chess.Board | None = None
 
@@ -205,7 +212,7 @@ class _Search:
     root_best: chess.Move | None = None
     # The keys on the path from the root down to the node being searched. A node that meets a
     # key already on the path returns before pushing it again, so a key is never in here twice.
-    path: set[int] = field(default_factory=set)
+    path: set[_Key] = field(default_factory=set)
     killers: list[list[chess.Move | None]] = field(
         default_factory=lambda: [[None, None] for _ in range(MAX_DEPTH + 1)]
     )
@@ -215,15 +222,16 @@ class _Search:
     draws: int = 0
 
 
-def _key(board: chess.Board) -> int:
-    """A digest of the position that ignores the move counters, so transpositions collide.
+def _key(board: chess.Board) -> _Key:
+    """The position as python-chess describes it, without the move counters.
 
-    python-chess builds the tuple; hashing it down to one integer costs a fifth of the memory
-    of keeping the tuples, which is what makes a table of this size affordable. A collision
-    gives a wrong score, never an illegal move: a stored move is only ever played after it has
-    matched one of the legal moves.
+    The tuple is the key, not its hash. CPython reduces an integer's hash modulo 2**61 - 1, so
+    hashing the tuple would fold the top three bits of every bitboard onto the bottom three:
+    a rook on h8 would collide with a rook on c1. A dict keyed on the tuples costs about two
+    and a half times the memory and 24 ns more per lookup, against the 540 ns a node already
+    spends building the key, and it cannot hand back another position's score.
     """
-    return hash(board._transposition_key())
+    return board._transposition_key()
 
 
 def _to_table(score: int, ply: int) -> int:
@@ -249,7 +257,9 @@ def _from_table(score: int, ply: int) -> int:
     return score
 
 
-def _store(key: int, depth: int, bound: int, score: int, move: chess.Move | None, ply: int) -> None:
+def _store(
+    key: _Key, depth: int, bound: int, score: int, move: chess.Move | None, ply: int
+) -> None:
     """Write what this node proved, keeping the table inside its memory budget."""
     table = _MEMORY.table
     if len(table) >= TABLE_MAX_ENTRIES:
@@ -325,7 +335,7 @@ def _ordered_fully(
         if move == table_move:
             return TABLE_BONUS
         score = _move_score(board, move)
-        if score:
+        if score:  # non-zero means a capture or a promotion
             return score
         if move == killers[0]:
             return KILLER_BONUS
@@ -408,8 +418,11 @@ def _negamax(
     key = _key(board)
     # A position the game has already stood in, or one already on this path, is a draw: the
     # referee claims the third occurrence, and the second is the move that offers it. Counting
-    # two rather than three is the usual simplification and it errs towards playing on. A
-    # repeated position is never checkmate, since the game would have ended the first time.
+    # two rather than three is the standard simplification, and it is not neutral. Winning, it
+    # makes us shy of positions that are not yet drawn, which is what we want. Losing, it lets
+    # us bank a half point the opponent has not agreed to give, so we may steer at a draw that
+    # is still one move from being refused. A repeated position is never checkmate, since the
+    # game would have ended the first time it appeared.
     if key in _MEMORY.seen or key in search.path:
         search.draws += 1
         return _draw_score(ply, search)
@@ -468,9 +481,12 @@ def _negamax(
     search.path.discard(key)
 
     # A score that came out of a repetition belongs to the path, not to the position, so it is
-    # not written. Scores that came out of a stalemate or of insufficient material are written,
-    # even though contempt colours them too: those are properties of the position, and the
-    # error is bounded by the contempt, which never exceeds half a pawn.
+    # not written. A stalemate or an insufficient-material node returns before this and is never
+    # written either; what is written is an ancestor whose score came up through one. Contempt
+    # colours those, and it is re-derived every move, so an entry stored while we were winning
+    # and read back while we were losing is out by 2 * CONTEMPT, a whole pawn. Those are
+    # properties of the position rather than of the path, and a pawn of error on a drawn line
+    # is worth less than the searches the entries save.
     if search.draws == draws_before:
         bound = UPPER if best <= window_alpha else LOWER if best >= beta else EXACT
         _store(key, depth, bound, best, best_move, ply)
@@ -483,8 +499,8 @@ def _root(
     """Search every root move at one depth, trying the previous iteration's best move first."""
     search.root_best = None
     search.path.clear()
-    key = _key(board)
-    draws_before = search.draws
+    # The root's own killers are always empty: beta is infinity here, so no root move ever cuts
+    # off and nothing is ever recorded at ply 0. Passing them keeps the one ordering function.
     moves = _ordered_fully(board, list(board.legal_moves), first, search.killers[0])
 
     best_move, best_score = moves[0], -INFINITY
@@ -498,9 +514,6 @@ def _root(
             # replaces it here has already outscored it at this depth, so a partial iteration
             # only ever hands back a move it has proven better.
             search.root_best = move
-    # No move was ever cut off here, since beta stayed at infinity, so the score is exact.
-    if search.draws == draws_before:
-        _store(key, depth, EXACT, best_score, best_move, 0)
     return best_move, best_score
 
 
@@ -583,7 +596,7 @@ def _think(fen: str, time_left_ms: int) -> str:
         f"d{reached} score {best_score:+d} move {best.uci()} nodes {search.nodes} "
         f"nps {nps:.0f} {spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {len(_MEMORY.table)} cut {search.cutoffs} "
-        f"contempt {search.contempt:+d} rss {rss_mb:.0f}MB",
+        f"contempt {search.contempt:+d} peakrss {rss_mb:.0f}MB",
         flush=True,
     )
 
