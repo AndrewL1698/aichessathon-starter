@@ -313,3 +313,50 @@ stopped at depth 4 in about a second with 3 to 5 s of soft budget left. The iter
 projects the next depth at up to 8 times the last one, and when the table has made depth
 3 nearly free the ratio between depths 3 and 4 hits that cap, so depth 5 is refused. That
 is the cycle 2 diagnosis.
+
+### 2026-09-08, cycle 2: time management. PR #7 opened for gate-hard.
+
+Three candidates off `prod` (a6c1fa6), one change each, 64 fast games each plus two 120 s
+games against the baseline. No disqualifiers anywhere. The regression suite bypasses the
+time manager, so it is unchanged for all three (baseline: 3 of 12).
+
+**Gate on the hard budget** (`time/gate-hard`, 8cc4670, **PR #7**). Theory: the gate
+refused any iteration projected to end past the soft budget, and the projection is capped
+at 8x the last iteration, which the table-warmed early depths trip constantly; rounds 73 and
+74 both show depth-4 moves stopping in a second with 4 s of budget unspent, and all four of
+round 74's blunders are such moves. New rule in `_think`: start while the soft budget is
+unspent and the whole projected iteration fits the hard budget. Fast bench vs baseline:
+53.1%, Elo +22, interval -81 to +128 (32 games). 120 s: spent 131 to 136% of soft over the
+first 40 moves, depth 6.33 and 5.83 vs the baseline's 6.00 and 5.55 on the other side of the
+same boards, 1 loss 1 draw. Clock 12 s at move 47, 6 s at move 80 in a 120-move game (the
+baseline reached 4.8 s in the same game). **Chosen for the PR** because it is the change
+that acts on the diagnosed mechanism; the Elo lower bound is not above zero, and the fast
+control cannot show a 120 s time-management change, so this is a judgment on the 120 s
+depth evidence and two rated games, stated as such.
+
+**Growth cap 4** (`time/growth-cap`, 7a5d60d). Theory: same diagnosis, minimal remedy, cap
+the projected growth at 4 instead of 8. Fast bench vs baseline: 42.2%, Elo -55, interval
+-168 to +48. 120 s: spent 100 to 120% of soft, depth 5.47 and 6.08 vs 5.78 and 5.92, 1 win
+1 draw. **Not promoted**: the fast result points the wrong way, and gate-hard reaches deeper.
+
+**Reserve floor** (`time/reserve-floor`, ace9ebc). Theory: Phase 0 showed the budget formula
+sinks the clock to 4 s in long games; computing the soft budget from `clock - 10 s` makes
+it floor there, since the 400 ms bonus is under the 500 ms increment. Fast bench vs
+baseline: 60.9%, Elo +77, interval -14 to +181, the best of the three, but at a 10 s clock
+the reserve makes it play a flat 400 ms budget, so its edge there is holding more clock into
+the endgame, not the platform's regime. 120 s: spent 84 to 86% of soft (it spends slightly
+less, by design), floor 7.0 s in a 144-move game where the baseline sank to 4.7 s, 1 win 1
+loss. **Not a fix for depth; the right companion to gate-hard once that has shipped.** A
+from-scratch re-run is queued.
+
+Still running as this was written: gate-hard's 56-game re-run, 24 games each for gate-hard
+and growth-cap at 45 s + 0.2 s (the platform's 120 s in nodes per game), and reserve-floor's
+re-run. Results go into PR #7 and here.
+
+**On dynamic allocation** (asked this cycle): standard engines do vary time by position,
+and it works: spend less when the move is forced or the table's move has held across
+iterations, spend more when the best move changed in the last iteration or the score fell.
+It is a good strategy, but it is the second fix, not the first. Right now the engine refuses
+depth it has time for on nearly every move; a dynamic rule sitting on top of a gate that
+refuses iterations would still be refused. Gate first, measure, then "extend when unstable"
+as a cycle 3 candidate.
