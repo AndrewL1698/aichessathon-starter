@@ -21,6 +21,10 @@ MATE_FOUND = MATE - 1_000
 MAX_DEPTH = 64
 # Quiescence is bounded so a long capture chain, or a run of checks, cannot explode.
 QUIESCENCE_MAX_PLY = 8
+# Futility pruning at the frontier: one ply from the leaves, a quiet move is not searched when
+# the static evaluation plus this margin cannot reach alpha. A quiet move rarely gains more
+# than this, and quiescence would only have looked at the captures after it anyway.
+FUTILITY_MARGIN = 150
 # The clock is read once every 1024 nodes; reading it per node costs more than it saves.
 NODE_CHECK_MASK = 1023
 # A budget of a few hundred milliseconds is only a handful of those slices, and there
@@ -489,9 +493,25 @@ def _negamax(
     window_alpha = alpha
     best = -INFINITY
     best_move = moves[0]
+    # Only at the frontier, never in check and never around a mate score. At a futile node
+    # the best score starts at what the pruning assumed, so a node whose every move was
+    # pruned returns that bound and stores nothing tighter than it.
+    futile = False
+    if depth == 1 and abs(alpha) < MATE_FOUND and not board.is_check():
+        futile_score = evaluate(board) + FUTILITY_MARGIN
+        if futile_score <= alpha:
+            futile = True
+            best = futile_score
     search.path.add(key)
     _order_fully(board, moves, table_move, search.killers[ply])
     for move in moves:
+        if (
+            futile
+            and not board.is_capture(move)
+            and move.promotion is None
+            and not board.gives_check(move)
+        ):
+            continue
         board.push(move)
         score = -_negamax(board, depth - 1, ply + 1, -beta, -alpha, search)
         board.pop()
