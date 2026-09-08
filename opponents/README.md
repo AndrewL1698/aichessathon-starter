@@ -78,13 +78,20 @@ is still budgeted 4.3 s, so strength at the real control is unchanged.
 
 ## Measured
 
-All of these are after that change. Terminations are per game and no run flagged.
+All of these are after that change. No run flagged, and no game ended illegal or crashed on
+either side. Sunfish's slowest move at 120 s + 0.5 s is its first, at 4.24 s.
 
-| Matchup | Games | Time control | Score | Terminations |
+| Matchup | Games | Time control | Score for sunfish | Terminations |
 |---|---|---|---|---|
 | sunfish vs minimax | 16 | 10 s + 0.1 s | 96.9% +- 6.1% (+15 =1 -0) | checkmate 15, threefold 1 |
 | sunfish vs random | 16 | 2 s + 0.1 s | 100% (+16 =0 -0) | checkmate 16 |
+| sunfish vs our search agent | 32 | 10 s + 0.1 s | 56.2% +- 13.0% (+11 =14 -7) | checkmate 18, threefold 13, insufficient material 1 |
 | sunfish vs prod | 16 | 10 s + 0.1 s | 100% (+16 =0 -0) | checkmate 16 |
+
+The head-to-head is the one that matters. 56.2% is +44 elo with a 95% interval of -47 to +141,
+so at 32 games our search agent and a 1465 reference are not yet distinguishable: read it as
+"we have reached this anchor", not as "we are ahead of it". Closing that interval needs hundreds
+of games, and the eight openings stop being independent past sixteen, so it is optimistic.
 
 The prod row was measured before the budget change and has not been rerun; prod loses every game
 at either budget, so the number is the same either way.
