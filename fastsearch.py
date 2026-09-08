@@ -50,6 +50,8 @@ the two sets would have found. In the middlegame the halfmove clock is small and
 handful of comparisons.
 """
 
+import resource
+import sys
 import time
 
 import numpy as np
@@ -117,6 +119,11 @@ CONTEMPT_THRESHOLD = 150
 
 FIFTY_MOVE_PLIES = 100
 
+# getrusage reports the peak resident set in bytes on macOS and in kilobytes on Linux, which
+# is where this actually runs. Printed on every move, because the benchmark harness reads the
+# largest one out of the log and the platform's 2 GB is the cap that ends a game outright.
+RSS_DIVISOR = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+
 # --------------------------------------------------------------------------------------
 # Null-move pruning, the one thing here that `agent.py` does not do. Give the opponent two
 # moves in a row and search the result shallowly: if they still cannot reach beta, the real
@@ -129,7 +136,15 @@ FIFTY_MOVE_PLIES = 100
 # runs the score-equality test with it off, and the bench measures both settings.
 # --------------------------------------------------------------------------------------
 
-NULL_MOVE_PRUNING = True
+# Off, on the evidence. Head to head over 32 games at 10 s + 0.1 s against exactly this
+# engine with it on, it scored 51.6%, Elo +11 with a 95% interval of -100 to +124: no
+# measurable gain either way, and it solved one fewer of the twelve regression positions
+# (2/12 against 3/12). It is unsound about quiet lines by construction, and with it off this
+# search returns the same score as `agent.py`'s at every depth, which is a property worth
+# keeping for nothing. The code and the switch stay because the interval is far too wide to
+# call it harmful either, and it should be measured again once there is a principal variation
+# search to reduce against, which is where null move usually earns its keep.
+NULL_MOVE_PRUNING = False
 # Two plies shallower plus the ply the null move itself costs.
 NULL_MOVE_REDUCTION = 2
 # Below this there is nothing left to save: the reduced search would be a quiescence call.
@@ -1138,7 +1153,8 @@ def think(fen: str, time_left_ms: int) -> str:
         f"{depth_text} {move_text} nodes {STATS[NODES]} "
         f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {hit_rate} cut {STATS[CUTOFFS]} "
-        f"null {STATS[NULL_CUTOFFS]} contempt {STATS[CONTEMPT_AT]:+d}",
+        f"null {STATS[NULL_CUTOFFS]} contempt {STATS[CONTEMPT_AT]:+d} "
+        f"peakrss {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR:.0f}MB",
         flush=True,
     )
 
