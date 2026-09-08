@@ -911,6 +911,17 @@ def _quiescence(
             )
             if move.promotion == chess.QUEEN
         ]
+        # Quiet checks at the first quiescence ply only: a check at the leaf is the tactic
+        # the static evaluation cannot see, and the reply is searched as an evasion below.
+        # Deeper than one ply the checks would chase each other without limit.
+        if remaining == QUIESCENCE_MAX_PLY:
+            moves += [
+                move
+                for move in board.legal_moves
+                if not board.is_capture(move)
+                and move.promotion is None
+                and board.gives_check(move)
+            ]
 
     _order(board, moves)
     for move in moves:
