@@ -294,6 +294,20 @@ the target metric: 8 (150 cp) / 4 (300 cp) for round 73.** All eight are in
 play, a ratio of 0.38 (`harness/readlog.py`), so local depth-6 games overstate what the
 platform sees; on the platform the same search reaches depth 4 to 5.
 
+### 2026-09-08, round 74: lost to Makina in 19 moves. The time manager is implicated.
+
+Stockfish 19 at depth 18 over the round 74 PGN: 19 of our moves, ACPL 123, **4 real blunders
+at 150 cp, 0 cosmetic** (moves 14, 17, 20 and 21; the last, Qg3 instead of Bh5, walked into a
+forced mate). Blunders per game: 4, which over 19 moves is a worse rate than round 73's 8
+over 47. The four are in `tests/positions`; the baseline solves 1 of them in 20 s.
+
+Every one of the four was a depth-4 or depth-5 move that stopped after 1.3 to 2.7 s with
+about 4 s of soft budget still available. The game ended with 74.4 s of 129.5 s unspent (57%)
+and an average spend of 68% of the soft budget, the same pattern as round 73 and the same
+mechanism: the iteration gate refusing depth 5 or 6 because its projection of the next
+iteration's cost is capped at eight times the last one. Competition nps was 20k to 52k,
+median 29k.
+
 Also from the log: the average move spent 66% of its soft budget, and 30 of 47 moves
 stopped at depth 4 in about a second with 3 to 5 s of soft budget left. The iteration gate
 projects the next depth at up to 8 times the last one, and when the table has made depth

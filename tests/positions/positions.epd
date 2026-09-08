@@ -9,3 +9,8 @@ r1r3k1/3n2p1/2bBn1qp/7R/1R1Pp3/p3P2P/P2QBPP1/6K1 b - - 11 34; bm e6g5; id "r73 m
 r2r2k1/6p1/2bBnnqR/8/1R1Pp3/p3P2P/P3BPP1/2Q3K1 b - - 0 36; bm g6h6; id "r73 m36 Qe8 -171"
 r2rq1k1/6p1/2b1nn1R/4B3/1R1Pp3/p3P2P/P3BPP1/2Q3K1 b - - 2 37; bm g7h6; id "r73 m37 Nd5 -194"
 r2rq1k1/8/1R2n2p/4B3/1n1Pp3/p3P2P/P3BPP1/2Q3K1 b - - 2 40; bm b4d5; id "r73 m40 Rdc8 -447"
+# Round 74 vs Makina (we were White, lost by checkmate in 19 moves). 150 cp threshold.
+r1bq1rk1/1p2bppp/p2p4/3Pp3/2B3Pn/2N1B3/PPP2P1P/R2Q1RK1 w - - 3 14; bm c4d3; id "r74 m14 Re1 -179"
+2rq1rk1/1p2b1pp/p2p4/3Ppb2/7n/2N1B3/PPP1BP1P/R2QR1K1 w - - 2 17; bm a2a4; id "r74 m17 Qd2 -274"
+2r2rk1/1p2b1pp/p2p2q1/3P1bB1/5p1n/2N5/PPPQB2P/R3R1K1 w - - 0 20; bm e2d3; id "r74 m20 Qxf4 -253"
+2r2rk1/1p4pp/p2p2q1/3P1bb1/5Q1n/2N5/PPP1B2P/R3R1K1 w - - 0 21; bm e2h5; id "r74 m21 Qg3 -mate"
