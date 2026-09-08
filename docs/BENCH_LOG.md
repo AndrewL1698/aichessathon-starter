@@ -245,4 +245,12 @@ The same eight in one process through `tests.test_fastsearch --speed`, table on,
 position: median 2,397k nps at depth 6 against 70k at depth 4, 34x. Import with the warm-up
 search 2.4 s. Peak RSS 264 to 282 MB on 120 s moves.
 
-Games follow as they finish.
+The first gate with games: 200 against v2.4 at the fast control, four at a time, 22 minutes.
+Terminations: 185 checkmates, 11 threefold repetitions, 4 insufficient material.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3-200 | baseline | 10s+0.1s | 200 | +181 =15 -4 | 94.2% | +486 | +416 to +596 | 0 / 0 / 0 / 0 | 1.28s | 266 MB |
+
+The worst move is the 1.25 s hard budget plus the slice the node budget lands in, as it was for
+every python-chess version. The 120 s games, the gauntlet and the proxy follow.
