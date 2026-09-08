@@ -73,6 +73,12 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 · **In progress** `phase1/movegen` (PR 6): `fastboard.py`, the numba mailbox core
+  (10x12 int8 board, packed int32 moves, pseudo-legal generation, make/unmake, attack detection,
+  incremental Zobrist in `st[7]`). No search and no evaluation yet. All 30 published perft counts
+  match, plus start depth 6 and Kiwipete depth 5; 12,000 random positions agree with python-chess
+  on legal moves, fen and key. 25M perft nodes/s against python-chess's 85k in our search.
+  Import with warm-up 1.2 s, RSS 149 MB. `uv run python -m tests.test_fastboard [--full]`.
 - 2026-09-08 · **PR #4 merged** to `prod`: table keyed on the transposition tuple (500k cap,
   ~270 MB), killers, history, repetition/fifty-move draws with contempt. Post-merge: 100% vs
   old prod (32–0), 84.4% vs the #2 search, KQvK/KRRvK/KPvK convert, 120 s opening moves 2–7 s.
