@@ -1,8 +1,9 @@
 # Bench log
 
-Every improvement cycle appends here. The frozen reference is `local-opponents/baseline`, a
-byte-identical copy of `agent.py` at `a6c1fa6` (tag `build-20260908-a6c1fa6`), the build that
-went to the rated round on 2026-09-08. Never edit it; freeze a new directory instead.
+Every improvement cycle appends here. The frozen reference is the shipped build under its version
+name (`docs/VERSIONS.md`): `local-opponents/v2.2` (a6c1fa6) for cycles 1 and 2, the build that
+played rounds 73 and 74; `local-opponents/v2.3` (8cc4670) from the 17:00 upload on. Never edit
+a frozen copy; freeze the next version beside it.
 
 ## How a run is scored
 

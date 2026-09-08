@@ -22,7 +22,7 @@ import chess
 import chess.pgn
 
 ROOT = Path(__file__).resolve().parent.parent
-LOCAL_AGENT = ROOT / "local-opponents" / "baseline"
+LOCAL_AGENT = ROOT / "local-opponents" / "v2.3"
 # The score change that counts as a swing, in centipawns, and the score that means a mate.
 SWING_CP = 150
 MATE_CP = 900_000

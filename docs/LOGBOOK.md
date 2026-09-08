@@ -1,7 +1,7 @@
 # Logbook
 
-Two parts. Part 1 explains the engine that won round 73, build `a6c1fa6` (tag
-`build-20260908-a6c1fa6`), as a story of one move. Part 2 is the running record of every change
+Two parts. Part 1 explains the engine that won round 73, v2.2 (commit `a6c1fa6`, tag `v2.2`;
+see `docs/VERSIONS.md` for the numbering), as a story of one move. Part 2 is the running record of every change
 we tried afterwards, including the ones we threw away.
 
 Everything the platform runs is in `agent.py`. `fastboard.py` is also in the zip, a numba board
