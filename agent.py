@@ -918,9 +918,7 @@ def _quiescence(
             moves += [
                 move
                 for move in board.legal_moves
-                if not board.is_capture(move)
-                and move.promotion is None
-                and board.gives_check(move)
+                if not board.is_capture(move) and move.promotion is None and board.gives_check(move)
             ]
 
     _order(board, moves)
