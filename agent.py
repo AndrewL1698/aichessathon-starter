@@ -21,6 +21,11 @@ MATE_FOUND = MATE - 1_000
 MAX_DEPTH = 64
 # Quiescence is bounded so a long capture chain, or a run of checks, cannot explode.
 QUIESCENCE_MAX_PLY = 8
+# Late move reductions: quiet moves the ordering ranked low are searched a ply shallower, and
+# only get the full depth if the shallow search says they beat alpha after all.
+LMR_MIN_DEPTH = 3
+LMR_FULL_MOVES = 3
+LMR_REDUCTION = 1
 # The clock is read once every 1024 nodes; reading it per node costs more than it saves.
 NODE_CHECK_MASK = 1023
 # A budget of a few hundred milliseconds is only a handful of those slices, and there
@@ -491,9 +496,27 @@ def _negamax(
     best_move = moves[0]
     search.path.add(key)
     _order_fully(board, moves, table_move, search.killers[ply])
-    for move in moves:
+    in_check = board.is_check()
+    killers = search.killers[ply]
+    for searched, move in enumerate(moves):
+        quiet = not board.is_capture(move) and move.promotion is None
         board.push(move)
-        score = -_negamax(board, depth - 1, ply + 1, -beta, -alpha, search)
+        # A quiet move ranked below the first few, at a node not in check, that neither gives
+        # check nor is a killer, gets one ply less. If it beats alpha anyway it is searched
+        # again at the full depth, so a reduction can only cost time, never a move.
+        if (
+            depth >= LMR_MIN_DEPTH
+            and searched >= LMR_FULL_MOVES
+            and quiet
+            and not in_check
+            and move not in killers
+            and not board.is_check()
+        ):
+            score = -_negamax(board, depth - 1 - LMR_REDUCTION, ply + 1, -beta, -alpha, search)
+            if score > alpha:
+                score = -_negamax(board, depth - 1, ply + 1, -beta, -alpha, search)
+        else:
+            score = -_negamax(board, depth - 1, ply + 1, -beta, -alpha, search)
         board.pop()
         if score > best:
             best, best_move = score, move
