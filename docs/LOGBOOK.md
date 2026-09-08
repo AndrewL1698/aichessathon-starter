@@ -519,5 +519,9 @@ solved at depth 7 to 9 (v2.4 solved 3 at depth 5 to 7). Deeper is not automatica
 by Stockfish's lights, which is why the suite does not decide anything. `tests.test_fastboard`
 clean. **200 fast games against v2.4: +181 =15 -4, 94.2%, Elo +486, interval +416 to +596,
 no illegal moves, exceptions, flags or over-budget moves, worst move 1.28 s at a 9 s clock,
-peak RSS 266 MB.** The first lower bound in this log above a hundred, let alone four. The 120 s
-games, the gauntlet with Sunfish and minimax, and the 45 s proxy follow in `docs/BENCH_LOG.md`.
+peak RSS 266 MB.** The first lower bound in this log above a hundred, let alone four. Two 120 s
+games against v2.4, one per colour: both won by checkmate, depth 8.05 and 8.93 over the first
+40 moves against 5.85 and 6.33 on the other side of the board, slowest moves landing inside
+the hard budget with 25 ms the largest overshoot, clock never under 12 s, peak RSS 263 MB, no
+fallback on any move. The gauntlet with Sunfish and minimax and the 45 s proxy follow in
+`docs/BENCH_LOG.md`.

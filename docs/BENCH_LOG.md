@@ -253,4 +253,15 @@ Terminations: 185 checkmates, 11 threefold repetitions, 4 insufficient material.
 | v3-200 | baseline | 10s+0.1s | 200 | +181 =15 -4 | 94.2% | +486 | +416 to +596 | 0 / 0 / 0 / 0 | 1.28s | 266 MB |
 
 The worst move is the 1.25 s hard budget plus the slice the node budget lands in, as it was for
-every python-chess version. The 120 s games, the gauntlet and the proxy follow.
+every python-chess version.
+
+120 s + 0.5 s games against v2.4 from the English Opening, one per colour, both won by v3.0 by
+checkmate (57 and 54 moves). First 40 moves, v3.0 against v2.4 on the other side of the same
+board: depth 8.05 / 8.93 against 5.85 / 6.33; spend 116% / 124% of the soft budget against
+v2.4's 116% / 134%; 7 and 5 partial iterations. Slowest moves 12.9 s at a 13.0 s hard budget
+and 13.8 s at 13.8 s: the node budget lands the abort inside the hard budget, and the largest
+overshoot past it was 25 ms, the root-move granularity, against the 32 to 49 ms clock-check
+slices of the python-chess versions. Clock minimum 12.3 s and 14.7 s (v2.4 sank to 9.3 s in
+the first game). Median 2.35M and 2.40M nps over the game against v2.4's 92k and 94k. Peak RSS
+263 MB, both games; no fallback to the Python engine on any move. The gauntlet and the proxy
+follow.
