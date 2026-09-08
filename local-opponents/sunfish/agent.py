@@ -1,7 +1,7 @@
 """Sunfish as a local benchmarking opponent, wrapped in the platform's agent contract.
 
 Sunfish (github.com/thomasahle/sunfish, GPL-3) is not vendored here. Run
-`opponents/fetch_sunfish.sh` to drop `sunfish.py` beside this file; the harness puts the agent
+`local-opponents/fetch_sunfish.sh` to drop `sunfish.py` beside this file; the harness puts the agent
 directory first on sys.path, so `import sunfish` then finds it.
 
 Sunfish keeps a 120 character padded board that is always seen from the side to move, so a
@@ -18,7 +18,7 @@ try:
     import sunfish
 except ImportError as error:  # pragma: no cover - a missing download, not a code path
     raise ImportError(
-        f"sunfish.py is not in {Path(__file__).parent}. Run opponents/fetch_sunfish.sh"
+        f"sunfish.py is not in {Path(__file__).parent}. Run local-opponents/fetch_sunfish.sh"
     ) from error
 
 # Sunfish squares: a1 is 91 and rank 8 is ten lower per rank, inside a 12x10 padded board.
@@ -142,4 +142,7 @@ def get_move(fen: str, time_left_ms: int) -> str:
         print(f"sunfish returned {uci}, which is not legal in {fen}", flush=True)
     else:
         print(f"sunfish found no move in {fen}", flush=True)
-    return next(iter(board.legal_moves)).uci()
+    # A terminal position has no move to fall back to. The harness never asks about one, but
+    # returning the null move is a loss and raising here would be a crash.
+    fallback = next(iter(board.legal_moves), None)
+    return fallback.uci() if fallback is not None else "0000"

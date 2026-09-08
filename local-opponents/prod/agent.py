@@ -1,4 +1,4 @@
-"""The pre-Phase-0 submission, frozen from agent.py at prod commit 29e6dc1 as an opponent."""
+"""agent.py frozen at prod 29e6dc1, behaviourally identical to today's prod 1151aa3."""
 
 import chess
 

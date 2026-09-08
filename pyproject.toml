@@ -26,7 +26,7 @@ dev = ["mypy>=1.18", "ruff>=0.14"]
 
 [tool.ruff]
 line-length = 100
-extend-exclude = ["opponents/sunfish/sunfish.py"]
+extend-exclude = ["local-opponents/sunfish/sunfish.py"]
 target-version = "py312"
 
 [tool.ruff.lint]
