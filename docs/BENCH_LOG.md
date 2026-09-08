@@ -263,5 +263,20 @@ and 13.8 s at 13.8 s: the node budget lands the abort inside the hard budget, an
 overshoot past it was 25 ms, the root-move granularity, against the 32 to 49 ms clock-check
 slices of the python-chess versions. Clock minimum 12.3 s and 14.7 s (v2.4 sank to 9.3 s in
 the first game). Median 2.35M and 2.40M nps over the game against v2.4's 92k and 94k. Peak RSS
-263 MB, both games; no fallback to the Python engine on any move. The gauntlet and the proxy
-follow.
+263 MB, both games; no fallback to the Python engine on any move.
+
+The gauntlet, two games at a time alongside the 120 s games:
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3-gauntlet | baseline | 10s+0.1s | 32 | +28 =4 -0 | 93.8% | +470 | +345 to +946 | 0 / 0 / 0 / 0 | 1.22s | 266 MB |
+| v3-gauntlet | sunfish | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.23s | 263 MB |
+| v3-gauntlet | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.35s | 263 MB |
+| v3-gauntlet | overall | 10s+0.1s | 64 | +60 =4 -0 | 96.9% | +597 | +475 to +1146 | 0 / 0 / 0 / 0 | 1.35s | 266 MB |
+
+v2.4 scored 71.9% against Sunfish on this bench; v3.0 wins all sixteen. The minimax column's
+worst move, 1.35 s at a 7.3 s clock, is not over budget by the bench's rule (a quarter of the
+clock) but it is 48% past the 0.91 s hard budget, where the python-chess versions overshot by
+one clock-check slice of tens of milliseconds. The node budget for a root move is set from the
+node rate measured so far in the move, so a rate that sags inside that one subtree runs past
+the deadline; see the logbook for the backstop this led to and the re-run on the final code.
