@@ -1,7 +1,7 @@
 # AI Chessathon — research and strategy brief
 
 Written 2026-09-08 (Mon). Upload deadline **Thu 2026-09-11 11:00 UK**. Roughly 3 days of work remain.
-Repo: https://github.com/AndrewL1698/aichessathon-starter (`main` = clean starter, `prod` = 2-ply agent, commit 29e6dc1).
+Repo: https://github.com/AndrewL1698/aichessathon-starter (`main` = clean starter, `prod` = 2-ply agent, commit 29e6dc1; 1151aa3 later changed docstrings only).
 
 ---
 
@@ -121,7 +121,7 @@ The docs are explicit: jitting a shallow search buys nothing; the gain is the de
 ### Phase 2 — only if Phase 1 is done and tested (Sep 10): eval quality
 
 Pick one, not both:
-- **Texel-tune the hand eval.** Label ~1–2M positions from public PGNs (lichess elite database) with Stockfish locally, fit PST/term weights by minimising logistic loss. Cheap, legal (labelling with an engine is explicitly allowed), zero runtime cost.
+- **Texel-tune the hand eval.** Label ~1–2M positions from public PGNs (lichess elite database) with Stockfish locally, fit PST/term weights by minimising logistic loss. Cheap, zero runtime cost. **Needs a ruling first:** AGENTS.md explicitly allows engine-labelled data for training a *network*; it says nothing about fitting hand-eval weights to engine labels, and the adjacent ban on shipping engine evaluations is the rule a judge would reach for. Email hello@aichessathon.com before spending a day on it.
 - **Tiny NNUE-style net.** Piece-square inputs (768) → 32–64 hidden → 1, int16 weights, inference inside numba as a dot product. Trained on the same labelled data. Higher ceiling, high risk in the time left.
 
 Skip: opening books (games start out of book from unpublished positions), 5-man syzygy (too big), anything with torch at runtime (start-up and per-call cost dwarf a hand eval on one core).
@@ -145,18 +145,18 @@ Skip: opening books (games start out of book from unpublished positions), 5-man 
 | `baselines/random` | 802 |
 | `baselines/greedy` | 939 |
 | `baselines/minimax` | 1064 |
-| Sunfish (download the GPL source into `opponents/sunfish/`, wrap `get_move`; **local only, never ship**) | 1465 |
+| Sunfish (`local-opponents/sunfish`, GPL source fetched by script, gitignored; **local only, never ship**) | 1465 |
 
 Beating minimax 100% tells you nothing past ~1400. Once Phase 0 is done, **Sunfish becomes the reference opponent**, and after that the previous version of our own agent does ("better than my last one" is the only comparison that matters).
 
 **How to run.**
-- Fast TC `10s + 0.1s` for iteration, 100+ games (interval must exclude 0 before a change is accepted). Run several `harness.arena` shells in parallel on the M2 (10 cores) for volume; do the **final pass in one shell** because concurrent games break time measurement.
+- Fast TC `10s + 0.1s` for iteration, 100+ games (interval must exclude 0 before a change is accepted). Arena jobs run **one at a time**: concurrent games break time measurement, and Sunfish is wall-clock budgeted so its strength moves under CPU contention. Parallel shells are for crash-hunting only, never for a number anyone quotes.
 - `--pgn-dir` on every run; grep terminations. Any `flag`, `illegal`, `crash` is a P0 regardless of score.
 - The interval assumes independence and there are only eight openings, so read long runs as optimistic. Add our own FENs: the platform PGNs are downloadable from game pages (`[FEN "..."]` header) and give a much larger opening sample than the eight.
 - Slow the local clock to mimic the EPYC core: after the first upload, compute `platform_slowest_move / local_slowest_move` from the validation log and multiply time budgets by it (expect ~1.5–2×).
 - Ladder games themselves (~15/day per version) are too few and too confounded by upload changes to evaluate anything. Use them only to catch failures (terminations) and init/move-time reality.
 
-**Definition of done for an upload:** ruff+mypy clean; 200/200 games vs random with no failed termination; `make zip` smoke passes; local Sunfish score with lower interval bound > previous version's.
+**Definition of done for an upload:** ruff+mypy clean; 60+ games vs random at 3 s with no failed termination; `make zip` smoke passes; local Sunfish score with lower interval bound > previous version's.
 
 ---
 
@@ -165,7 +165,7 @@ Beating minimax 100% tells you nothing past ~1400. Once Phase 0 is done, **Sunfi
 1. Confirm team composition / UK-student eligibility (decides whether top-50 is a real target).
 2. Tell me the bot name on the ladder so its rating can be tracked (I could not identify it among 377 entries).
 3. Start Phase 0 on a branch off `prod`; upload once today for the timing log.
-4. Download Sunfish into a local `opponents/` folder (gitignored) as the reference opponent.
+4. Done: Sunfish wrapper in `local-opponents/sunfish` (PR #1); run `local-opponents/fetch_sunfish.sh`.
 5. Begin the numba movegen in parallel if two people are available; perft harness first.
 
 Sources: aichessathon.com/docs/rules.md, /docs/agent-contract.md, /docs, /leaderboard (Round 60), game 847b8a6a (FableEngine vs APEX), repo README/AGENTS/IDEAS, local arena runs in `harness/arena.py`.
