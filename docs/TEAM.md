@@ -73,20 +73,21 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
-- 2026-09-08 · **Audit of PRs #1–#3 done.** Blocking finding: `opponents/` was importable and
-  one stray `import opponents` would have zipped GPL Sunfish; renamed to `local-opponents/`.
-  `prod` moved to 1151aa3 (docstrings + .vscode) and was merged into `phase0/search`.
-- 2026-09-08 · **PR #1 updated** (`50daf57`): Sunfish wrapper no longer flags at fast controls
-  (budget bonus proportional to the clock, 1 s reserve, deadline handed to Sunfish early). Zero
-  flags on either side across 64 games; 96.9% vs minimax unchanged.
-- 2026-09-08 · **PR #2 open** `phase0/search`: iterative deepening, alpha-beta, quiescence,
-  MVV-LVA, time management; eval unchanged. 95.3% vs minimax, 84.4% vs prod, 0 failed
-  terminations in 172 games. **43.8% ± 13.0% vs Sunfish** (clean run, no flags): at the 1465
-  anchor, not past it. 13 of 14 draws were threefold repetitions.
-- 2026-09-08 · **PR #1 open** `tooling/local-opponents`: Sunfish wrapper, fetch script, frozen
-  prod. Sunfish 96.9% vs minimax confirms calibration.
-- 2026-09-08 · **PR #3 open** `docs/team-workflow`: this file and `docs/STRATEGY.md`.
-- 2026-09-08 · **In progress** `phase0/memory`: transposition table, killers, history,
-  repetition with contempt. Interim: threefold draws vs prod 10 → 0.
-- 2026-09-08 · **Not started:** evaluation PR (tapered PST, pawn structure, mop-up), numba
-  rewrite, first platform upload for timing calibration. Team's ladder bot name unknown.
+- 2026-09-08 · **PR #4 open** `phase0/memory` (stacked on #2): transposition table, killers,
+  history, repetition + fifty-move as draws, contempt ±50 past ±150 cp. 96.9% vs prod with
+  **zero** threefold draws (was 10/32); 75% vs the #2 search over 64 games; KQvK, KRRvK, KPvK
+  now convert in self-play; KRvK still draws by fifty moves (needs a mop-up eval term). Sunfish
+  flat at 46.9% ± 13.9%: the next Elo is in evaluation. Peak RSS 141 MB. Under audit.
+- 2026-09-08 · **PR #2 audited**: no critical findings; search proven exact vs an unpruned
+  reference. Fixing before merge: soft budget never binds (first three 120 s moves spent
+  15/13/11 s), sub-310 ms clock clamp order, insufficient-material shortcut unreachable at
+  depth 0, diagnostic accuracy. Branch `phase0/search-fixes`, will fast-forward #2.
+- 2026-09-08 · **PRs #1 and #3 merged** to `prod` after audit. `opponents/` renamed
+  `local-opponents/` so `harness/package.py` can never zip GPL Sunfish (an `import opponents`
+  in any root module would have). `prod` also gained 1151aa3 (docstrings + .vscode).
+- 2026-09-08 · **Next:** evaluation PR off `phase0/memory` once #2's fixes are merged into it:
+  tapered PST, passed/isolated/doubled pawns, rook on open file, king shield, **mop-up**
+  (king-to-edge + king proximity when the loser has only a king), stalemate check in the
+  endgame. Then first platform upload from `prod` for timing calibration. Then numba, where
+  the TT probe needs an incremental Zobrist key or it becomes the bottleneck.
+- 2026-09-08 · Team's ladder bot name and UK-student eligibility still unconfirmed.
