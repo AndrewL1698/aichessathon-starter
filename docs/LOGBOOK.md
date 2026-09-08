@@ -387,3 +387,21 @@ proxy match is running and goes into the bench log when done.
 
 Blunders per game: still 8 and 4 from v2.2's two rated games; v2.3 and v2.4 have not played
 a rated game yet as this is written.
+
+### 2026-09-08, round 75: v2.3's first rated game. Won vs Brokefish in 82 moves.
+
+The time change did what it was for: 149 s of 161 s used (7% unspent, against 28% in round
+73 and 57% in round 74), average spend 89% of the soft budget (was 66% and 68%), slowest move
+9.3 s against a 9.3 s hard budget (the abort path, as designed), and still 12 s on the clock
+at the end of an 82-move game. Depth 4 to 6 as before: the platform's 27k nps median is what
+bounds depth now, not the gate. Peak RSS 119 MB. 62 of 82 move lines survive; 2.4 KB of the
+middle is gone and nothing is inferred from it.
+
+Stockfish 19 at depth 18: ACPL 72, **5 real blunders and 4 cosmetic** (the cosmetic four are
+in an ending we were winning by a queen; the tool separates them as asked). All five real
+ones are in the middlegame, moves 23 to 34, and three of them are the same missed idea
+(Ba4+ with the bishop). They are in `tests/positions`, which now holds 17.
+
+**Blunders per game, real only: 8 (v2.2, r73), 4 (v2.2, r74), 5 (v2.3, r75).** Same order of
+magnitude; the one game is not evidence either way on v2.3's blunder rate, but it is
+evidence that the unspent-clock problem is gone.
