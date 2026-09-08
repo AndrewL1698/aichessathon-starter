@@ -420,34 +420,43 @@ ROOK_SEMI_OPEN_EG = 6
 BISHOP_PAIR_MG = 25
 BISHOP_PAIR_EG = 45
 
-# Each of the three squares in front of the king that has no pawn on it. Middlegame only: in
-# the endgame there is nothing left to attack with and the king table wants the king out.
+# Charged per missing pawn of the three the king would like in front of it. Middlegame only:
+# in the endgame there is nothing left to attack with and the king table wants the king out.
+# The mask is six squares, three files by two ranks, and the count is capped at three, so this
+# is "how many of the three files are covered at all" rather than "how close the cover is":
+# pawns on f3, g3 and h3 read as a full shield even though f2, g2 and h2 are empty. A king on
+# its own last rank has an empty mask and is charged the full amount, which double-counts the
+# middlegame king table's own dislike of that square; both push the same way, so it stands.
 SHIELD_PENALTY = 14
-SHIELD_FILES = 3
+SHIELD_MAX_COVER = 3
 
 # Mop-up. When one side cannot lose material fast enough to matter, the only thing left to
 # score is geometry: push their king to a corner and walk ours up next to it. Without this
 # every move in KRvK ties on material and piece-square score and the game is drawn by the
 # fifty move rule. The weights are bounded by MOP_UP_CMD * 6 + MOP_UP_CLOSE * 12, which is
-# 120 centipawns, well under a minor piece, so this can never buy a bad trade.
+# 120 centipawns: well under a minor piece, so geometry never outweighs a piece, though it
+# can outweigh a pawn, which in a position with a bare king is the trade we want anyway.
 MOP_UP_CMD = 10
 MOP_UP_CLOSE = 5
 # The same geometry, a third as loud, for a won position that has not been reduced to a bare
 # king yet: enough to stop a +15 position wandering, not enough to distort a real endgame.
 MOP_UP_LOOSE_CMD = 4
 MOP_UP_LOOSE_CLOSE = 2
-# Below this much material advantage there is nothing to mop up.
+# Below this much material advantage there is nothing to mop up. The bound is inclusive so
+# that a queen against a rook, or a rook against a pawn, which land exactly on it, are in.
 MOP_UP_MIN_ADVANTAGE = 400
-# Mop-up is only looked at when the weaker side has a king and at most two other men; that
-# popcount is the gate that keeps this off the middlegame path entirely.
+# Mop-up is only looked at when the weaker side has a king and at most two other men. The
+# cheap version of that test, that neither side is bigger than this, is what keeps the whole
+# term off the middlegame path; which side is actually the weaker one is decided after.
 MOP_UP_MAX_WEAK_PIECES = 3
 # The full weights need the weaker side down to a king and at most one minor.
 MOP_UP_BARE_PIECES = 2
 
 # With no pawns anywhere, an advantage smaller than a minor piece is usually not a win at all:
-# rook against a bishop, or two rooks against a queen, are books draws with correct defence.
+# rook against a bishop, or two rooks against a queen, are book draws with correct defence.
 # Halving keeps the sign, so the search still prefers the ending, but stops it paying material
-# to reach one and stops contempt reading it as a won game.
+# to reach one and stops contempt reading it as a won game. Those two are the whole target;
+# nothing here claims to know which rook endings are drawn.
 DRAWISH_MARGIN = 200
 
 
@@ -483,28 +492,32 @@ def _pawn_structure(white_pawns: int, black_pawns: int) -> tuple[int, int]:
     while pawns:
         square = (pawns & -pawns).bit_length() - 1
         pawns &= pawns - 1
-        if not _PASSED_WHITE[square] & black_pawns:
+        # The rear pawn of a doubled pair is behind one of its own and can never queen ahead
+        # of it, so it is not a passed pawn however empty the enemy files are.
+        blocked = _AHEAD_WHITE[square] & white_pawns
+        if not blocked and not _PASSED_WHITE[square] & black_pawns:
             rank_index = square >> 3
             middlegame += PASSED_MG[rank_index]
             endgame += PASSED_EG[rank_index]
         if not _NEIGHBOUR_FILES[square] & white_pawns:
             middlegame -= ISOLATED_MG
             endgame -= ISOLATED_EG
-        if _AHEAD_WHITE[square] & white_pawns:
+        if blocked:
             middlegame -= DOUBLED_MG
             endgame -= DOUBLED_EG
     pawns = black_pawns
     while pawns:
         square = (pawns & -pawns).bit_length() - 1
         pawns &= pawns - 1
-        if not _PASSED_BLACK[square] & white_pawns:
+        blocked = _AHEAD_BLACK[square] & black_pawns
+        if not blocked and not _PASSED_BLACK[square] & white_pawns:
             rank_index = 7 - (square >> 3)
             middlegame -= PASSED_MG[rank_index]
             endgame -= PASSED_EG[rank_index]
         if not _NEIGHBOUR_FILES[square] & black_pawns:
             middlegame += ISOLATED_MG
             endgame += ISOLATED_EG
-        if _AHEAD_BLACK[square] & black_pawns:
+        if blocked:
             middlegame += DOUBLED_MG
             endgame += DOUBLED_EG
     return middlegame, endgame
@@ -552,14 +565,19 @@ def _pieces(
 
 
 def _king_shield(white_king: int, black_king: int, white_pawns: int, black_pawns: int) -> int:
-    """Middlegame penalty for the pawns missing from in front of each king, White's side."""
+    """Middlegame penalty for the pawns missing from in front of each king, White's side.
+
+    Positive when White is the better covered of the two. Mirroring the board negates this,
+    as it does every term here, so a mirror test cannot tell this sign from its opposite; the
+    check that can is a position where one king is covered and the other is bare.
+    """
     white_cover = chess.popcount(_SHIELD_WHITE[white_king] & white_pawns)
     black_cover = chess.popcount(_SHIELD_BLACK[black_king] & black_pawns)
-    if white_cover > SHIELD_FILES:
-        white_cover = SHIELD_FILES
-    if black_cover > SHIELD_FILES:
-        black_cover = SHIELD_FILES
-    return (black_cover - white_cover) * SHIELD_PENALTY
+    if white_cover > SHIELD_MAX_COVER:
+        white_cover = SHIELD_MAX_COVER
+    if black_cover > SHIELD_MAX_COVER:
+        black_cover = SHIELD_MAX_COVER
+    return (white_cover - black_cover) * SHIELD_PENALTY
 
 
 def _mop_up(board: chess.Board, white: int, black: int, white_king: int, black_king: int) -> int:
@@ -572,13 +590,17 @@ def _mop_up(board: chess.Board, white: int, black: int, white_king: int, black_k
     if white_count > MOP_UP_MAX_WEAK_PIECES and black_count > MOP_UP_MAX_WEAK_PIECES:
         return 0
     advantage = _material(board, white) - _material(board, black)
-    if advantage > MOP_UP_MIN_ADVANTAGE:
+    if advantage >= MOP_UP_MIN_ADVANTAGE:
         weak_king, weak_count, weak = black_king, black_count, black
         sign = 1
-    elif advantage < -MOP_UP_MIN_ADVANTAGE:
+    elif advantage <= -MOP_UP_MIN_ADVANTAGE:
         weak_king, weak_count, weak = white_king, white_count, white
         sign = -1
     else:
+        return 0
+    # The gate above only proved that one of the two sides is small. If the small one is the
+    # side that is ahead, there is nothing to mop up: the other side still has an army.
+    if weak_count > MOP_UP_MAX_WEAK_PIECES:
         return 0
     # A king plus at most one minor cannot make progress or trade its way out of the mate, so
     # the geometry is the whole truth about the position and the loud weights are safe. With
@@ -640,6 +662,12 @@ def evaluate(board: chess.Board) -> int:
     total = middlegame * phase + endgame * (PHASE_MAX - phase)
     score = total // PHASE_MAX if total >= 0 else -(-total // PHASE_MAX)
     if not bitboards[0]:
+        # A single minor and two kings is a dead draw, and the tables would otherwise call it
+        # a third of a piece. _negamax asks the rules for this, but quiescence never does, so
+        # a capture sequence that ends here has to be told inside the evaluation or the search
+        # will trade into it believing it is ahead.
+        if not (board.rooks | board.queens) and chess.popcount(board.knights | board.bishops) <= 1:
+            return 0
         advantage = _material(board, white) - _material(board, black)
         if -DRAWISH_MARGIN <= advantage <= DRAWISH_MARGIN:
             score = score // 2 if score >= 0 else -(-score // 2)
