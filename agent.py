@@ -23,22 +23,34 @@ MAX_DEPTH = 64
 QUIESCENCE_MAX_PLY = 8
 # The clock is read once every 1024 nodes; reading it per node costs more than it saves.
 NODE_CHECK_MASK = 1023
+# A budget of a few hundred milliseconds is only a handful of those slices, and there
+# overshooting one of them is a flag, so a small budget reads the clock eight times as often.
+# The reads that adds cost nothing next to the game they save.
+FINE_CHECK_MASK = 127
+FINE_CHECK_BELOW_MS = 300
 
 # Budgets in milliseconds, all derived from the clock we were handed, never from a constant.
 SOFT_DIVISOR = 25
 SOFT_BONUS_MS = 400
-HARD_MULTIPLIER = 3
 HARD_DIVISOR = 8
 # The referee times us from when it sends the request, so process overhead is on our clock.
 SAFETY_MARGIN_MS = 300
-MINIMUM_BUDGET_MS = 10.0
 # Below this the clock is nearly gone: search one ply plus quiescence and reply immediately.
-# It is deliberately low. The hard budget already caps a move at an eighth of the clock, so
-# this only has to cover the last seconds; set at 5 s it fires for most of a 10 s game, and a
-# depth-1 engine cannot see a stalemate at all, because quiescence never generates quiet moves.
+# One second, not the five this started at: the hard budget already caps a move at an eighth
+# of the clock, so panic only has to cover the last moves of a spent clock. At 5 s the arena's
+# 10 s control sat across the threshold, about 70% of moves came back at depth 1, and that
+# scored 79.7% against minimax where 1 s scores 95.3%.
 PANIC_MS = 1_000
-# An iteration that starts this late into the soft budget will not finish, so do not start it.
-START_FRACTION = 0.5
+# What the next iteration is expected to cost, as a multiple of the last one. With ordering
+# this good the ratio is nearer 2 while one move keeps failing high and nearer 8 when the
+# window reopens, so the observed ratio is clamped to that range; before two iterations have
+# run there is no ratio to observe and we assume the middle of it.
+GROWTH_MIN = 2.0
+GROWTH_MAX = 8.0
+GROWTH_UNKNOWN = 5.0
+# Under this many milliseconds the elapsed time is mostly measurement noise, and a rate
+# divided out of it says more about the clock than about the search, so we do not print one.
+NPS_FLOOR_MS = 5
 
 # Ordering keys, highest first: the table's move, then captures, then promotions, then the
 # killers, then the quiet moves by how often they have cut off before.
@@ -56,7 +68,7 @@ EXACT, LOWER, UPPER = 0, 1, 2
 type _Key = Hashable
 # depth, bound, score relative to the node's ply, and the move that was best there.
 type _Entry = tuple[int, int, int, chess.Move | None]
-# An entry costs about 816 bytes, so half a million of them is 410 MB of the container's two
+# An entry costs about 500 bytes, so half a million of them is 250 MB of the container's two
 # gigabytes, which leaves room for an evaluation heavier than this one. The table is cleared
 # rather than evicted when it fills: a clear costs one search of refilling and happens a
 # handful of times in a long game, while any eviction policy costs something on every store.
@@ -204,6 +216,8 @@ class _Search:
     """The little state one search needs. Nothing here survives the move."""
 
     deadline: float
+    # Nodes between clock reads. A small budget sets this finer so the abort lands on time.
+    check_mask: int = NODE_CHECK_MASK
     # What a draw is worth to the side to move at the root, so to us. See _draw_score.
     contempt: int = 0
     nodes: int = 0
@@ -293,9 +307,11 @@ def _draw_score(ply: int, search: _Search) -> int:
 def _budgets(time_left_ms: int) -> tuple[float, float]:
     """Return the soft and hard budgets in milliseconds for a move with this much clock."""
     soft = time_left_ms / SOFT_DIVISOR + SOFT_BONUS_MS
-    hard = min(HARD_MULTIPLIER * soft, time_left_ms / HARD_DIVISOR)
-    # Never plan to use the last of the clock: the reply still has to travel back.
-    hard = max(min(hard, time_left_ms - SAFETY_MARGIN_MS), MINIMUM_BUDGET_MS)
+    # Never plan to use the last of the clock: the reply still has to travel back. The margin
+    # is taken off last so that it always wins. Under it there is no time to think at all, the
+    # budget is zero, and the search aborts at its first clock check, which is the only safe
+    # thing to do on a clock that short.
+    hard = max(min(time_left_ms / HARD_DIVISOR, time_left_ms - SAFETY_MARGIN_MS), 0.0)
     return min(soft, hard), hard
 
 
@@ -315,19 +331,18 @@ def _move_score(board: chess.Board, move: chess.Move) -> int:
     return score
 
 
-def _ordered(board: chess.Board, moves: list[chess.Move]) -> list[chess.Move]:
-    """Sort moves so that alpha-beta meets the ones most likely to cut off first."""
+def _order(board: chess.Board, moves: list[chess.Move]) -> None:
+    """Sort moves in place so alpha-beta meets the ones most likely to cut off first."""
     moves.sort(key=lambda move: _move_score(board, move), reverse=True)
-    return moves
 
 
-def _ordered_fully(
+def _order_fully(
     board: chess.Board,
     moves: list[chess.Move],
     table_move: chess.Move | None,
     killers: list[chess.Move | None],
-) -> list[chess.Move]:
-    """Order a full move list, using everything earlier searches learned about these moves."""
+) -> None:
+    """Sort a full move list in place, using everything earlier searches learned about it."""
     history = _MEMORY.history
     side = int(board.turn) * HISTORY_SIDE
 
@@ -344,7 +359,6 @@ def _ordered_fully(
         return min(history[side + move.from_square * 64 + move.to_square], HISTORY_CAP)
 
     moves.sort(key=rank, reverse=True)
-    return moves
 
 
 def _remember_cutoff(
@@ -372,7 +386,7 @@ def _quiescence(
 ) -> int:
     """Search the noisy continuations so the evaluation is never read mid-exchange."""
     search.nodes += 1
-    if not search.nodes & NODE_CHECK_MASK and time.perf_counter() > search.deadline:
+    if not search.nodes & search.check_mask and time.perf_counter() > search.deadline:
         raise _Timeout
 
     if board.is_check():
@@ -393,9 +407,18 @@ def _quiescence(
         # A stalemate here scores as the stand-pat instead of 0; proving it costs a full move
         # generation at every quiet leaf, which is far more than the rare error is worth.
         moves = list(board.generate_legal_captures())
-        moves += board.generate_legal_moves(board.pawns, chess.BB_BACKRANKS & ~board.occupied)
+        # Only the queen: an underpromotion is a way to avoid a stalemate or to fork, and
+        # neither is something a search of the noisy moves alone can see.
+        moves += [
+            move
+            for move in board.generate_legal_moves(
+                board.pawns, chess.BB_BACKRANKS & ~board.occupied
+            )
+            if move.promotion == chess.QUEEN
+        ]
 
-    for move in _ordered(board, moves):
+    _order(board, moves)
+    for move in moves:
         board.push(move)
         score = -_quiescence(board, -beta, -alpha, ply + 1, remaining - 1, search)
         board.pop()
@@ -412,7 +435,7 @@ def _negamax(
 ) -> int:
     """Fail-soft alpha-beta by observing that both sides' scores are exact opposites."""
     search.nodes += 1
-    if not search.nodes & NODE_CHECK_MASK and time.perf_counter() > search.deadline:
+    if not search.nodes & search.check_mask and time.perf_counter() > search.deadline:
         raise _Timeout
 
     key = _key(board)
@@ -434,6 +457,11 @@ def _negamax(
         search.draws += 1
         return _draw_score(ply, search)
 
+    # A cheap gate on the expensive call: material is only ever insufficient with no pawn,
+    # rook or queen anywhere on the board. It comes before the depth check because quiescence
+    # would score a dead draw from the tables instead, and at depth 1 that is every leaf.
+    if not board.pawns | board.rooks | board.queens and board.is_insufficient_material():
+        return _draw_score(ply, search)
     if depth <= 0:
         return _quiescence(board, alpha, beta, ply, QUIESCENCE_MAX_PLY, search)
 
@@ -452,11 +480,6 @@ def _negamax(
             ):
                 return score
 
-    # A cheap gate on the expensive call: material is only ever insufficient with no pawn,
-    # rook or queen anywhere on the board.
-    if not board.pawns | board.rooks | board.queens and board.is_insufficient_material():
-        return _draw_score(ply, search)
-
     moves = list(board.legal_moves)
     if not moves:
         # Mate is scored by ply so that a shorter mate outranks a longer one and we convert.
@@ -467,7 +490,8 @@ def _negamax(
     best = -INFINITY
     best_move = moves[0]
     search.path.add(key)
-    for move in _ordered_fully(board, moves, table_move, search.killers[ply]):
+    _order_fully(board, moves, table_move, search.killers[ply])
+    for move in moves:
         board.push(move)
         score = -_negamax(board, depth - 1, ply + 1, -beta, -alpha, search)
         board.pop()
@@ -499,9 +523,10 @@ def _root(
     """Search every root move at one depth, trying the previous iteration's best move first."""
     search.root_best = None
     search.path.clear()
+    moves = list(board.legal_moves)
     # The root's own killers are always empty: beta is infinity here, so no root move ever cuts
     # off and nothing is ever recorded at ply 0. Passing them keeps the one ordering function.
-    moves = _ordered_fully(board, list(board.legal_moves), first, search.killers[0])
+    _order_fully(board, moves, first, search.killers[0])
 
     best_move, best_score = moves[0], -INFINITY
     for move in moves:
@@ -515,6 +540,12 @@ def _root(
             # only ever hands back a move it has proven better.
             search.root_best = move
     return best_move, best_score
+
+
+def _projected(last_ms: float, previous_ms: float) -> float:
+    """Estimate what the next iteration costs from the last one and how fast cost is growing."""
+    growth = last_ms / previous_ms if previous_ms > 0.0 else GROWTH_UNKNOWN
+    return last_ms * min(max(growth, GROWTH_MIN), GROWTH_MAX)
 
 
 def _reachable(previous: chess.Board, board: chess.Board) -> bool:
@@ -559,12 +590,16 @@ def _think(fen: str, time_left_ms: int) -> str:
 
     _observe(board)
     soft_ms, hard_ms = _budgets(time_left_ms)
+    mask = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone. Reading it off the
     # previous iteration's score would be sharper but it feeds back: a root score that is
     # itself a contempt-flavoured draw drags contempt to zero, which makes the same draw
     # acceptable on the next iteration, which is exactly the mistake this is here to stop.
-    search = _Search(deadline=started + hard_ms / 1000.0, contempt=_contempt(evaluate(board)))
-    best = _ordered(board, moves)[0]
+    search = _Search(
+        deadline=started + hard_ms / 1000.0, check_mask=mask, contempt=_contempt(evaluate(board))
+    )
+    _order(board, moves)
+    best = moves[0]
     # What the table already knows about this position, most likely from the search two plies
     # ago, is better ordering than anything else we have before the first iteration runs.
     entry = _MEMORY.table.get(_key(board))
@@ -574,35 +609,62 @@ def _think(fen: str, time_left_ms: int) -> str:
             best = stored_move
     best_score = 0
     reached = 0
+    partial = False
+    last_ms, previous_ms = 0.0, 0.0
 
-    for depth in range(1, 2 if time_left_ms < PANIC_MS else MAX_DEPTH + 1):
+    # A zero budget means the clock is under the safety margin, and then even the first
+    # hundred nodes are time we do not have: the ordered first move is the whole reply.
+    deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
+    for depth in range(1, deepest + 1):
         elapsed_ms = (time.perf_counter() - started) * 1000.0
-        if depth > 1 and elapsed_ms > soft_ms * START_FRACTION:
+        # Start an iteration only when the soft budget is projected to fall inside it, not
+        # after it, so the average move lands near the budget: an iteration costs several
+        # times the one before, so refusing every one that could end past the budget leaves
+        # most of the budget unspent. Gating on the time already spent, as this used to,
+        # admits an iteration with the whole rest of the hard budget ahead of it, and one
+        # that runs to the deadline is wasted entirely.
+        if depth > 1 and elapsed_ms + _projected(last_ms, previous_ms) / 2.0 > soft_ms:
             break
+        iteration_started = time.perf_counter()
         try:
             best, best_score = _root(board, depth, best, search)
         except _Timeout:
+            # The unwind skips every board.pop() of the line being searched, so `board` is
+            # left with that line still on it. Nothing below touches the board, and the next
+            # move builds a new one from its fen.
             if search.root_best is not None:
                 best = search.root_best
+                partial = True
             break
+        previous_ms = last_ms
+        last_ms = (time.perf_counter() - iteration_started) * 1000.0
         reached = depth
         if best_score >= MATE_FOUND:
             break  # A forced mate is in hand; searching deeper cannot shorten it.
 
     spent_ms = (time.perf_counter() - started) * 1000.0
-    nps = search.nodes / max(spent_ms, 1.0) * 1000.0
+    # `best_score` and `reached` are the last completed iteration's. After an abort the move
+    # is not: it is one the unfinished iteration had already proven better, so say where it
+    # came from rather than reading as the score's move.
+    depth_text = f"d{reached} score {best_score:+d}" if reached else "d0"
+    move_text = f"move {best.uci()}"
+    if partial:
+        move_text += f" from partial d{reached + 1}"
+    rate_text = ""
+    if spent_ms >= NPS_FLOOR_MS:
+        rate_text = f"nps {search.nodes / spent_ms * 1000.0:.0f} "
     rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR
     print(
-        f"d{reached} score {best_score:+d} move {best.uci()} nodes {search.nodes} "
-        f"nps {nps:.0f} {spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
+        f"{depth_text} {move_text} nodes {search.nodes} "
+        f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {len(_MEMORY.table)} cut {search.cutoffs} "
         f"contempt {search.contempt:+d} peakrss {rss_mb:.0f}MB",
         flush=True,
     )
 
     # We are handed the position after the opponent's reply next, so both this position and the
-    # one we are about to make are part of the game's history. A timeout unwinds out of the
-    # search without popping, so this starts from the fen rather than from the search's board.
+    # one we are about to make are part of the game's history. The abort above leaves `board`
+    # mid-line, as it says, so this starts again from the fen.
     after = chess.Board(fen)
     after.push(best)
     _MEMORY.seen.add(_key(after))
