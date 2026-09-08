@@ -1,4 +1,4 @@
-"""A deterministic two-ply chess agent using negamax and positional evaluation."""
+"""A depth 2 chess agent using negamax and positional evaluation"""
 
 import chess
 
@@ -127,8 +127,19 @@ def negamax(board: chess.Board, depth: int, ply: int) -> int:
 
 
 def get_move(fen: str, time_left_ms: int) -> str:
-    """Return the best legal UCI move after searching our move and the opponent's reply."""
-    del time_left_ms  # Fixed-depth search does not need clock management yet.
+    """Return a legal move in UCI notation, after searching our moves and the opponent's reply.
+
+    fen           the position to move in, and your colour is the side to move
+    time_left_ms  your clock before this move, in milliseconds
+    returns       "e2e4", or "e7e8q" for a promotion
+
+    The process stays alive, but suspended between your moves, so state you keep on a module or in a
+    closure survives to the next call. It does not survive to the next game
+
+    print() is safe. Your stdout is redirected away from the protocol stream and kept in a
+    log only your team can read, after validation and after every rated game.
+    """
+    del time_left_ms  # No need for clock management yet, as currently this is only fixed-depth search.
     board = chess.Board(fen)
     legal_moves = sorted(board.legal_moves, key=lambda move: move.uci())
     if not legal_moves:
