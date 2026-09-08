@@ -17,6 +17,7 @@ overshoots by are not flagged, and a genuine time-management break is.
 import argparse
 import io
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ from harness.sandbox import local
 ROOT = Path(__file__).resolve().parent.parent
 OVER_BUDGET_SHARE = 0.25
 TRACEBACK = "Traceback (most recent call last)"
+# The agent prints its peak resident set on every move; the largest one in the log is the peak.
+PEAK_RSS = re.compile(r"peakrss (\d+)MB")
 
 # The gauntlet, most games against the frozen baseline because that is the real signal.
 GAUNTLET: tuple[tuple[str, Path, int], ...] = (
@@ -92,6 +95,7 @@ class Played:
     over_budget: int
     worst_ms: float
     worst_clock_ms: float
+    peak_rss_mb: int
     seconds: float
 
     @property
@@ -180,6 +184,7 @@ def _assess(
     # The agent catches exceptions inside get_move and prints the traceback, so a search
     # that blew up shows in the log and nowhere else. The log keeps its first and last 4 KB.
     exceptions = crashes + log.count(TRACEBACK)
+    peak_rss_mb = max((int(found) for found in PEAK_RSS.findall(log)), default=0)
 
     remaining = {chess.WHITE: float(base_ms), chess.BLACK: float(base_ms)}
     worst_ms, worst_clock_ms, over_budget = 0.0, 0.0, 0
@@ -209,6 +214,7 @@ def _assess(
         over_budget,
         worst_ms,
         worst_clock_ms,
+        peak_rss_mb,
         seconds,
     )
 
@@ -253,6 +259,10 @@ def _worst(played: list[Played]) -> Played | None:
     return max(played, key=lambda game: game.worst_ms, default=None)
 
 
+def _peak_rss(played: list[Played]) -> int:
+    return max((game.peak_rss_mb for game in played), default=0)
+
+
 def _summary(name: str, played: list[Played]) -> str:
     tally = _tally(played)
     counts = _disqualifiers(played)
@@ -264,7 +274,10 @@ def _summary(name: str, played: list[Played]) -> str:
     )
     counts_text = ", ".join(f"{key} {value}" for key, value in counts.items())
     verdict = "  DISQUALIFIED" if any(counts.values()) else ""
-    return f"{name:9} {tally.text()}\n{'':9} {counts_text}, worst move {worst_text}{verdict}"
+    return (
+        f"{name:9} {tally.text()}\n{'':9} {counts_text}, worst move {worst_text}, "
+        f"peak RSS {_peak_rss(played)} MB{verdict}"
+    )
 
 
 def _markdown(label: str, name: str, played: list[Played], arguments: argparse.Namespace) -> str:
@@ -279,7 +292,7 @@ def _markdown(label: str, name: str, played: list[Played], arguments: argparse.N
         f"+{tally.wins} ={tally.draws} -{tally.losses} | {tally.score:.1%} | "
         f"{_elo_text(tally.score)} | {_elo_text(low)} to {_elo_text(high)} | "
         f"{counts['illegal']} / {counts['exceptions']} / {counts['timeouts']} / "
-        f"{counts['over_budget']} | {worst_text} |"
+        f"{counts['over_budget']} | {worst_text} | {_peak_rss(played)} MB |"
     )
 
 
@@ -355,9 +368,9 @@ def main() -> None:
 
     print(
         "\n| run | opponent | control | games | +=- | score | Elo | 95% "
-        "| ill/exc/tmo/over | worst |"
+        "| ill/exc/tmo/over | worst | RSS |"
     )
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for name, _, _ in GAUNTLET:
         if played[name]:
             print(_markdown(label, name, played[name], arguments))

@@ -108,3 +108,11 @@ parallel the bench plays about 450 games an hour, so a next cycle spent on 300 t
 null move against the baseline, plus the 120 s confirmation, would settle it. Nothing was
 merged to `main` and nothing was uploaded. Branches: `cand/null-move` (132a964), `cand/lmr`
 (5990f59), `cand/futility` (4d8f361), tooling on `tooling/bench`. PGNs under `../pgn/bench-*`.
+
+## Phase 0, 2026-09-08: spend the clock (phase0/spend-the-clock, b12c8f0)
+
+Not a bench run: self-play verification at 120 s + 0.5 s of SOFT_DIVISOR 16 and
+TABLE_MAX_ENTRIES 1M. 20 plies clean. Full game 130 moves, draw by repetition, 0 exceptions,
+0 illegal, slowest 10.5 s vs hard 11.9 s, 22 moves 3 to 49 ms over hard (clock-check slice),
+peak RSS 514 MB at 996k table entries. Clock: 12.8 s after move 47, 8.7 s after move 60,
+4.4 s minimum. Failed the 10 s floor; not tagged, not shipped. The bench now reports peak RSS.
