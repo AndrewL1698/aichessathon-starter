@@ -20,10 +20,25 @@ A move is one int32: bits 0-6 from, 7-13 to, 14-16 promotion piece type, 17 en p
 capture, 18 castling, 19 double pawn push. Move lists are preallocated int32 arrays plus a
 count; nothing here allocates per node.
 
-The en passant square is stored only when an enemy pawn actually sits beside the pushed pawn,
-which keeps the Zobrist key free of noise that would split identical positions in the table.
-`to_fen` then prints the square only when the capture is genuinely legal, which is the rule
-python-chess follows, so the two agree character for character.
+The en passant square is stored when, and only when, an en passant capture is actually legal.
+That one criterion is used by `make_move`, by `from_fen` and by `to_fen` alike, so a position
+has exactly one Zobrist key no matter which path reached it: playing d2d4 inside a search and
+parsing the fen the harness hands back next move must agree, or the transposition table and
+repetition detection quietly index the same position twice. It also keeps the key free of the
+noise a merely-adjacent enemy pawn would add, and it is the rule python-chess prints by, so
+fens agree character for character.
+
+Two invariants the callers own, because numba does not bounds-check:
+
+- The undo stack is `UNDO_SIZE` deep. `from_fen` resets the pointer to zero, so the depth a
+  search reaches is its own search depth plus its quiescence depth, far inside that. Overrun
+  raises rather than scribbling past the array.
+- A move buffer must hold `MAX_MOVES`. `gen_moves` checks it has room before each piece and
+  raises rather than running into the next ply's row of a shared 2-D buffer.
+
+`uci_to_move` raises `ValueError` for anything that is not string-equal to a generated legal
+move, so the root has to catch it; that is the intended failure when a caller passes a move
+this board does not believe in.
 """
 
 import numpy as np
@@ -32,7 +47,7 @@ from numba import types as nbt
 
 EMPTY = 0
 OFF = 13
-MAX_MOVES = 256
+MAX_MOVES = 320
 MAX_PLY = 128
 UNDO_SIZE = 1024
 
@@ -80,10 +95,9 @@ _BUFS_T = nbt.int32[:, ::1]
 def is_square_attacked(board: np.ndarray, sq: int, by_side: int) -> bool:
     """Is `sq` attacked by any piece of `by_side` (0 white, 1 black)?"""
     base = 6 * by_side
-    if by_side == 0:
-        if board[sq + 9] == 1 or board[sq + 11] == 1:
-            return True
-    elif board[sq - 9] == 7 or board[sq - 11] == 7:
+    pawn = base + 1
+    behind = sq + 9 if by_side == 0 else sq - 11
+    if board[behind] == pawn or board[behind + 2] == pawn:
         return True
     knight = base + 2
     king = base + 6
@@ -115,6 +129,38 @@ def in_check(board: np.ndarray, st: np.ndarray) -> bool:
     return is_square_attacked(board, st[5 + side], 1 - side)
 
 
+@njit(nbt.boolean(_BOARD_T, nbt.int64, nbt.int64, nbt.int64, nbt.int64), cache=False)
+def ep_capture_legal(
+    board: np.ndarray, ep_sq: int, pushed: int, capturer: int, king_sq: int
+) -> bool:
+    """Can `capturer` legally capture the pawn on `pushed` en passant, landing on `ep_sq`?
+
+    This is the single criterion that decides whether a position has an en passant square at
+    all, so `make_move`, `from_fen` and `to_fen` all agree and one position keeps one key. It
+    plays the capture on the board directly rather than through `make_move`, because it is
+    called from inside `make_move` and must not touch the undo stack. Only a double push with
+    an enemy pawn already beside it gets this far, which is rare enough for the cost to vanish.
+    """
+    pawn = 1 + 6 * capturer
+    victim = 1 + 6 * (1 - capturer)
+    if board[pushed] != victim:
+        return False
+    for step in range(-1, 2, 2):
+        frm = pushed + step
+        if board[frm] != pawn:
+            continue
+        board[frm] = EMPTY
+        board[pushed] = EMPTY
+        board[ep_sq] = pawn
+        safe = not is_square_attacked(board, king_sq, 1 - capturer)
+        board[frm] = pawn
+        board[pushed] = victim
+        board[ep_sq] = EMPTY
+        if safe:
+            return True
+    return False
+
+
 @njit(nbt.int64(_BOARD_T, _ST_T, _MOVES_T), cache=False)
 def gen_moves(board: np.ndarray, st: np.ndarray, out: np.ndarray) -> int:
     """Write the pseudo-legal moves into `out` and return how many there are.
@@ -128,12 +174,14 @@ def gen_moves(board: np.ndarray, st: np.ndarray, out: np.ndarray) -> int:
     my_lo = 1 + 6 * side
     my_hi = my_lo + 5
     opp_lo = 1 + 6 * (1 - side)
-    opp_hi = opp_lo + 5
+    opp_hi = opp_lo + 4
     n = 0
     for frm in range(21, 99):
         piece = board[frm]
         if piece < my_lo or piece > my_hi:
             continue
+        if n > out.shape[0] - 30:
+            raise IndexError("fastboard: move buffer too small, raise MAX_MOVES")
         kind = piece - 6 * side
         if kind == 1:
             if side == 0:
@@ -255,6 +303,8 @@ def make_move(board: np.ndarray, st: np.ndarray, undo: np.ndarray, move: int) ->
     key = st[7]
 
     sp = st[8]
+    if sp >= undo.shape[0]:
+        raise IndexError("fastboard: undo stack overflow, raise UNDO_SIZE")
     undo[sp, 0] = captured
     undo[sp, 1] = st[2]
     undo[sp, 2] = st[1]
@@ -304,10 +354,13 @@ def make_move(board: np.ndarray, st: np.ndarray, undo: np.ndarray, move: int) ->
 
     ep = 0
     if (move & FLAG_DOUBLE) != 0:
-        enemy_pawn = 1 + 6 * (1 - side)
+        other = 1 - side
+        enemy_pawn = 1 + 6 * other
         if board[to - 1] == enemy_pawn or board[to + 1] == enemy_pawn:
-            ep = (frm + to) // 2
-            key ^= ZOB_EP[(ep - 21) % 10]
+            candidate = (frm + to) // 2
+            if ep_capture_legal(board, candidate, to, other, st[5 + other]):
+                ep = candidate
+                key ^= ZOB_EP[(ep - 21) % 10]
     st[2] = ep
 
     st[3] = 0 if reset_clock else st[3] + 1
@@ -441,25 +494,42 @@ def square_name(sq: int) -> str:
 
 
 def from_fen(fen: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Parse a FEN into `(board, st, undo)`."""
-    board, st, undo = new_state()
+    """Parse a FEN into `(board, st, undo)`, raising `ValueError` on anything malformed.
+
+    The validation is not pedantry. A rank holding nine entries would write past its row and
+    destroy a border sentinel, and a slider ray would then run off the end of the array
+    somewhere else entirely, so a bad fen has to fail here rather than corrupt the board.
+    Castling rights whose king or rook is not on its home square are dropped, as python-chess
+    drops them, because a phantom right generates no move but does perturb the Zobrist key.
+    """
     fields = fen.split()
+    if len(fields) < 4:
+        raise ValueError(f"fen needs at least four fields, got {len(fields)}: {fen!r}")
     placement, turn, castling, ep = fields[0], fields[1], fields[2], fields[3]
-    sq = 21
-    for char in placement:
-        if char == "/":
-            sq += 2
-        elif char.isdigit():
-            sq += int(char)
-        else:
-            board[sq] = PIECE_CHARS.index(char)
-            sq += 1
+    if turn not in ("w", "b"):
+        raise ValueError(f"side to move must be w or b, got {turn!r}")
+
+    board, st, undo = new_state()
+    ranks = placement.split("/")
+    if len(ranks) != 8:
+        raise ValueError(f"fen needs eight ranks, got {len(ranks)}: {placement!r}")
+    for index, row in enumerate(ranks):
+        sq = 21 + 10 * index
+        filled = 0
+        for char in row:
+            if char.isdigit():
+                filled += int(char)
+                sq += int(char)
+            elif char in PIECE_CHARS[1:]:
+                board[sq] = PIECE_CHARS.index(char)
+                filled += 1
+                sq += 1
+            else:
+                raise ValueError(f"{char!r} is not a piece or a gap in {placement!r}")
+        if filled != 8:
+            raise ValueError(f"rank {8 - index} holds {filled} squares, not 8: {row!r}")
+
     st[0] = 0 if turn == "w" else 1
-    rights = 0
-    for char, bit in (("K", 1), ("Q", 2), ("k", 4), ("q", 8)):
-        if char in castling:
-            rights |= bit
-    st[1] = rights
     st[3] = int(fields[4]) if len(fields) > 4 else 0
     st[4] = int(fields[5]) if len(fields) > 5 else 1
     for square in range(21, 99):
@@ -467,21 +537,37 @@ def from_fen(fen: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             st[5] = square
         elif board[square] == 12:
             st[6] = square
+    if st[5] == 0 or st[6] == 0:
+        raise ValueError(f"both kings have to be on the board: {placement!r}")
+
+    rights = 0
+    for char, bit, king_sq, king, rook_sq, rook in (
+        ("K", 1, 95, 6, 98, 4),
+        ("Q", 2, 95, 6, 91, 4),
+        ("k", 4, 25, 12, 28, 10),
+        ("q", 8, 25, 12, 21, 10),
+    ):
+        if char in castling and board[king_sq] == king and board[rook_sq] == rook:
+            rights |= bit
+    st[1] = rights
+
     if ep != "-":
+        if len(ep) != 2 or ep[0] not in "abcdefgh" or ep[1] not in "12345678":
+            raise ValueError(f"{ep!r} is not an en passant square")
         target = square_index(ep)
         pushed = target + 10 if st[0] == 0 else target - 10
-        capturer = 1 + 6 * st[0]
-        if board[pushed - 1] == capturer or board[pushed + 1] == capturer:
+        if ep_capture_legal(board, target, pushed, int(st[0]), int(st[5 + st[0]])):
             st[2] = target
     st[7] = compute_key(board, st)
     return board, st, undo
 
 
-def to_fen(board: np.ndarray, st: np.ndarray, undo: np.ndarray) -> str:
+def to_fen(board: np.ndarray, st: np.ndarray) -> str:
     """Serialise the state.
 
-    The ep square is printed only when the capture is genuinely legal, which is what
-    python-chess does, so the two agree character for character.
+    `st[2]` is set only when an en passant capture is legal, which is exactly when python-chess
+    prints the square, so this can print it unconditionally and the two agree character for
+    character.
     """
     rows = []
     for rank_start in range(21, 99, 10):
@@ -500,13 +586,7 @@ def to_fen(board: np.ndarray, st: np.ndarray, undo: np.ndarray) -> str:
     rights = "".join(
         char for char, bit in (("K", 1), ("Q", 2), ("k", 4), ("q", 8)) if st[1] & bit
     )
-    ep = "-"
-    if st[2] != 0:
-        moves = move_buffer()
-        count = gen_legal(board, st, undo, moves)
-        target = int(st[2])
-        if any(int(moves[i] >> 7) & 127 == target and moves[i] & FLAG_EP for i in range(count)):
-            ep = square_name(target)
+    ep = square_name(int(st[2])) if st[2] != 0 else "-"
     turn = "w" if st[0] == 0 else "b"
     return f"{'/'.join(rows)} {turn} {rights or '-'} {ep} {st[3]} {st[4]}"
 

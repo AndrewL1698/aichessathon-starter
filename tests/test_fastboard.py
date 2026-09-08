@@ -142,6 +142,108 @@ def _is_double_push(board: chess.Board, move: chess.Move) -> bool:
     return abs(move.to_square - move.from_square) == 16
 
 
+def check_round_trip(board: np.ndarray, st: np.ndarray, whence: str) -> None:
+    """Re-parsing our own fen must land on the same state, key included.
+
+    This is the assertion that catches a position holding two Zobrist keys. The harness hands
+    the agent a fen every move, so the state a search reached by playing d2d4 and the state
+    parsed back from that fen have to be the same state, or the transposition table and
+    repetition detection index one position twice and neither works.
+
+    `st[8]`, the undo pointer, is deliberately excluded: it is the search's own bookkeeping and
+    counts the moves still on the stack, not anything about the position.
+    """
+    parsed_board, parsed_st, _ = fb.from_fen(fb.to_fen(board, st))
+    if not np.array_equal(parsed_board, board):
+        raise Failure(f"round trip changed the board {whence}")
+    if not np.array_equal(parsed_st[:8], st[:8]):
+        raise Failure(
+            f"round trip changed the state {whence}: {list(st[:8])} became {list(parsed_st[:8])}"
+        )
+    if int(parsed_st[7]) != int(st[7]):
+        raise Failure(f"round trip changed the key {whence}")
+
+
+PINNED_EP = "8/8/8/8/k1p4R/8/3P4/4K3 w - - 0 1"
+UNPINNED_EP = "8/8/8/8/2p4R/k7/3P4/4K3 w - - 0 1"
+
+
+def check_pinned_ep() -> None:
+    """A double push whose only en passant answer is illegal must set no ep square.
+
+    White plays d2d4 beside a black pawn on c4. In `PINNED_EP` the reply c4xd3 would clear both
+    pawns off the fourth rank and expose the black king on a4 to the rook on h4, so there is no
+    legal en passant and python-chess prints none; in `UNPINNED_EP` the king stands on a3 and
+    the capture is legal. Storing the square on mere adjacency gave the first position one key
+    inside the search and a different one after the fen went out to the harness and came back.
+    """
+    for fen, expected in ((PINNED_EP, False), (UNPINNED_EP, True)):
+        board, st, undo = fb.from_fen(fen)
+        fb.make_move(board, st, undo, fb.uci_to_move(board, st, undo, "d2d4"))
+        reference = chess.Board(fen)
+        reference.push(chess.Move.from_uci("d2d4"))
+        if bool(st[2]) is not expected:
+            raise Failure(f"ep square {int(st[2])} after d2d4 from {fen}, expected {expected}")
+        if bool(st[2]) is not reference.has_legal_en_passant():
+            raise Failure(f"ep square disagrees with python-chess after d2d4 from {fen}")
+        if fb.to_fen(board, st) != reference.fen():
+            raise Failure(f"{fb.to_fen(board, st)!r} != {reference.fen()!r}")
+        check_round_trip(board, st, f"after d2d4 from {fen}")
+    print("  a pinned en passant sets no ep square and no ep key; a legal one sets both")
+
+
+def check_guards() -> None:
+    """The malformed input and overflow guards fail loud rather than corrupting the board."""
+    for fen, reason in (
+        ("ppppppppp/8/8/8/8/8/8/4K3 w - - 0 1", "nine entries in a rank"),
+        ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w", "only three fields"),
+        ("8/8/8/8/8/8/8/4K3 w - - 0 1", "no black king"),
+        ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR x KQkq - 0 1", "no side to move"),
+        ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq j9 0 1", "a bogus ep square"),
+    ):
+        try:
+            fb.from_fen(fen)
+        except ValueError:
+            continue
+        raise Failure(f"from_fen accepted {reason}: {fen}")
+
+    phantom = "r3k2r/8/8/8/8/8/8/4K2R w KQkq - 0 1"
+    board, st, _ = fb.from_fen(phantom)
+    if fb.to_fen(board, st) != chess.Board(phantom).fen():
+        raise Failure(f"phantom rights: {fb.to_fen(board, st)!r} != {chess.Board(phantom).fen()!r}")
+
+    board, st, undo = fb.from_fen(fb.START_FEN)
+    st[8] = undo.shape[0]
+    try:
+        fb.make_move(board, st, undo, fb.legal_moves(board, st, undo)[0])
+    except IndexError:
+        pass
+    else:
+        raise Failure("a full undo stack did not raise")
+
+    board, st, undo = fb.from_fen(fb.START_FEN)
+    try:
+        fb.gen_moves(board, st, np.zeros(20, dtype=np.int32))
+    except IndexError:
+        pass
+    else:
+        raise Failure("an undersized move buffer did not raise")
+    print("  malformed fens, a full undo stack and a short move buffer all raise")
+
+
+def check_move_ceiling() -> None:
+    """The widest position anyone has constructed, against MAX_MOVES."""
+    widest = "3Q4/1Q4Q1/4Q3/2Q4R/Q4Q2/3Q4/1Q4Rp/1K1BBNNk w - - 0 1"
+    board, st, undo = fb.from_fen(widest)
+    buffer = fb.move_buffer()
+    pseudo = fb.gen_moves(board, st, buffer)
+    legal = fb.gen_legal(board, st, undo, buffer)
+    reference = len(list(chess.Board(widest).legal_moves))
+    if legal != reference:
+        raise Failure(f"{legal} legal moves, python-chess says {reference}")
+    print(f"  widest known position: {pseudo} pseudo-legal, {legal} legal, buffer {fb.MAX_MOVES}")
+
+
 def check_positions(fens: list[str]) -> dict[str, int]:
     """Every legal move, fen, and Zobrist key of each position, against python-chess."""
     tally = {
@@ -153,7 +255,9 @@ def check_positions(fens: list[str]) -> dict[str, int]:
         "castles": 0,
         "promotions": 0,
         "checks": 0,
+        "widest": 0,
     }
+    scratch = fb.move_buffer()
     for fen in fens:
         reference = chess.Board(fen)
         board, st, undo = fb.from_fen(fen)
@@ -166,11 +270,13 @@ def check_positions(fens: list[str]) -> dict[str, int]:
                 f"\n  only theirs: {sorted(theirs - mine)}"
             )
 
-        if fb.to_fen(board, st, undo) != reference.fen():
-            raise Failure(f"fen {fb.to_fen(board, st, undo)!r} != {reference.fen()!r}")
+        if fb.to_fen(board, st) != reference.fen():
+            raise Failure(f"fen {fb.to_fen(board, st)!r} != {reference.fen()!r}")
         if int(st[7]) != int(fb.compute_key(board, st)):
             raise Failure(f"key out of step at {fen}")
+        check_round_trip(board, st, f"at {fen}")
 
+        tally["widest"] = max(tally["widest"], fb.gen_moves(board, st, scratch))
         tally["positions"] += 1
         tally["ep"] += reference.ep_square is not None
         tally["castling"] += bool(reference.castling_rights)
@@ -188,12 +294,13 @@ def check_positions(fens: list[str]) -> dict[str, int]:
             if int(st[7]) != int(fb.compute_key(board, st)):
                 raise Failure(f"incremental key wrong after {uci} from {fen}")
             reference.push(chess.Move.from_uci(uci))
-            if fb.to_fen(board, st, undo) != reference.fen():
+            if fb.to_fen(board, st) != reference.fen():
                 raise Failure(
                     f"after {uci} from {fen}: "
-                    f"{fb.to_fen(board, st, undo)!r} != {reference.fen()!r}"
+                    f"{fb.to_fen(board, st)!r} != {reference.fen()!r}"
                 )
             reference.pop()
+            check_round_trip(board, st, f"after {uci} from {fen}")
             fb.unmake_move(board, st, undo, move)
 
             if not np.array_equal(board, before_board) or not np.array_equal(st, before_st):
@@ -203,9 +310,13 @@ def check_positions(fens: list[str]) -> dict[str, int]:
     return tally
 
 
-def check_attacks(fens: list[str]) -> int:
-    """`is_square_attacked` on the king must agree with python-chess's `is_check`."""
-    for fen in fens:
+def check_attacks(fens: list[str], squares_for: int) -> int:
+    """`is_square_attacked` against python-chess, on kings and then on every square.
+
+    The king square alone only ever exercised the rays that happen to reach a king, so the
+    first few hundred positions are checked exhaustively: all 64 squares, both colours.
+    """
+    for index, fen in enumerate(fens):
         reference = chess.Board(fen)
         board, st, _ = fb.from_fen(fen)
         side = int(st[0])
@@ -213,6 +324,18 @@ def check_attacks(fens: list[str]) -> int:
             raise Failure(f"attack detection disagrees at {fen}")
         if bool(fb.in_check(board, st)) != reference.is_check():
             raise Failure(f"in_check disagrees at {fen}")
+        if index >= squares_for:
+            continue
+        for square in chess.SQUARES:
+            mailbox = fb.square_index(chess.square_name(square))
+            for colour in (0, 1):
+                mine = bool(fb.is_square_attacked(board, mailbox, colour))
+                theirs = reference.is_attacked_by(colour == 0, square)
+                if mine != theirs:
+                    raise Failure(
+                        f"{chess.square_name(square)} attacked by "
+                        f"{'white' if colour == 0 else 'black'}: {mine} != {theirs} at {fen}"
+                    )
     return len(fens)
 
 
@@ -267,6 +390,10 @@ def main() -> None:
     arguments = parser.parse_args()
 
     check_perft(arguments.full)
+    print("\nregressions")
+    check_pinned_ep()
+    check_guards()
+    check_move_ceiling()
 
     rng = random.Random(20260908)
     wanted = 12_000 if arguments.full else 3_000
@@ -276,11 +403,16 @@ def main() -> None:
     tally = check_positions(fens)
     print(f"  {tally['positions']:,} positions, {tally['moves']:,} moves checked, "
           f"{time.perf_counter() - start:.1f} s")
+    print(f"    widest      {tally['widest']} pseudo-legal moves, buffer holds {fb.MAX_MOVES}")
     for name in ("ep", "ep captures", "castling", "castles", "promotions", "checks"):
         print(f"    {name:<12} {tally[name]:,}")
 
-    checked = check_attacks(fens[:2000])
-    print(f"  attack detection agrees on {checked:,} positions")
+    squares_for = 500
+    checked = check_attacks(fens[:2000], squares_for)
+    print(
+        f"  attack detection agrees on {checked:,} king squares and "
+        f"every square of the first {squares_for:,} positions, both colours"
+    )
 
     print("\nspeed")
     check_speed()
