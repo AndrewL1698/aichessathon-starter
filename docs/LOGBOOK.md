@@ -523,5 +523,24 @@ peak RSS 266 MB.** The first lower bound in this log above a hundred, let alone 
 games against v2.4, one per colour: both won by checkmate, depth 8.05 and 8.93 over the first
 40 moves against 5.85 and 6.33 on the other side of the board, slowest moves landing inside
 the hard budget with 25 ms the largest overshoot, clock never under 12 s, peak RSS 263 MB, no
-fallback on any move. The gauntlet with Sunfish and minimax and the 45 s proxy follow in
-`docs/BENCH_LOG.md`.
+fallback on any move. Gauntlet: 93.8% against v2.4 (+28 =4 -0), 16-0 against Sunfish (v2.4
+scored 71.9%), 16-0 against minimax, no disqualifiers.
+
+**One thing the gauntlet found, and the fix.** Its slowest move was 1.35 s at a 7.3 s clock,
+inside the bench's quarter-of-the-clock rule but 48% past the 0.91 s hard budget, where every
+python-chess version overshot by one clock-check slice of tens of milliseconds. It
+reproduces on the position (`N1bk3r/pp2bppp/2np4/3qp1B1/8/8/PPP1BPPP/R2QK2R w KQ - 2 14`,
+clock 7259: 1191 ms against hard 907, deterministic). The cause is the design: the node budget
+for a root move is set from the node rate measured so far in the move, and this crushing
+position's last subtree ran at 2.1M nps where the earlier iterations had run much faster, so
+the budget was too generous. The python-chess engine could not do this because it read the
+wall clock every 1024 nodes. The fix keeps the node budget as the ordinary stop and adds a
+backstop: a timer thread that sleeps until the hard deadline and then zeroes the node budget,
+so the compiled search stops at its next node whatever the estimate said; `negamax` and
+`quiescence` release the interpreter lock (`nogil`) so the thread can run while the search is
+in compiled code, and the timer is cancelled once the move is chosen. It does no computation.
+The same position now takes 918 ms; with the node budget disabled, a 0.5 s and a 1.5 s timer
+stopped a depth-12 search at 0.510 s and 1.510 s. This departs from the brief's "node count,
+not the clock" only in adding the clock as a guard; the node budget still decides nearly every
+stop. Because it changes the shipped code after the 200-game gate, the games are re-run on the
+final code below.
