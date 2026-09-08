@@ -180,3 +180,11 @@ Same eight opening positions, one move each at a 75 s clock: v2.3 mean depth 5.2
 50k nps, prod 5.38 at 62k nps. 120 s self-play: 51 moves, clean, peak RSS 243 MB, clock 17 to
 21 s at the end. Regression suite 3 of 12 (v2.2 also 3 of 12, a different three). Built as
 `submission-v2.4.zip`; the 45 s proxy match follows.
+
+Proxy control, 24 games vs v2.3:
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| prod-eval-proxy45 | baseline | 45s+0.2s | 24 | +17 =3 -4 | 77.1% | +211 | +81 to +441 | 0 / 0 / 0 / 0 | 5.65s | 247 MB |
+
+The gain holds at platform-like depth. v2.4 is the bench baseline from here.

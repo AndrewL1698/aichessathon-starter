@@ -7,7 +7,7 @@ the bench plays against, and a row here saying what changed and why. Candidates 
 shipped keep their branch names; they are listed at the bottom and explained in
 `docs/LOGBOOK.md` Part 2, rejections included.
 
-The current baseline for the bench is the newest shipped version.
+The current baseline for the bench is the newest shipped version (v2.4 as of 2026-09-08 18:00).
 
 ## Shipped
 

@@ -40,7 +40,7 @@ PEAK_RSS = re.compile(r"peakrss (\d+)MB")
 # The gauntlet, most games against the frozen baseline because that is the real signal. The
 # baseline is the shipped build, frozen under its version name; see docs/VERSIONS.md.
 GAUNTLET: tuple[tuple[str, Path, int], ...] = (
-    ("baseline", ROOT / "local-opponents" / "v2.3", 32),
+    ("baseline", ROOT / "local-opponents" / "v2.4", 32),
     ("sunfish", ROOT / "local-opponents" / "sunfish", 16),
     ("minimax", ROOT / "baselines" / "minimax", 16),
 )
