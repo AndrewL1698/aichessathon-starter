@@ -1,8 +1,9 @@
 # Bench log
 
-Every improvement cycle appends here. The frozen reference is `local-opponents/baseline`, a
-byte-identical copy of `agent.py` at `a6c1fa6` (tag `build-20260908-a6c1fa6`), the build that
-went to the rated round on 2026-09-08. Never edit it; freeze a new directory instead.
+Every improvement cycle appends here. The frozen reference is the shipped build under its version
+name (`docs/VERSIONS.md`): `local-opponents/v2.2` (a6c1fa6) for cycles 1 and 2, the build that
+played rounds 73 and 74; `local-opponents/v2.3` (8cc4670) from the 17:00 upload on. Never edit
+a frozen copy; freeze the next version beside it.
 
 ## How a run is scored
 
@@ -116,3 +117,103 @@ TABLE_MAX_ENTRIES 1M. 20 plies clean. Full game 130 moves, draw by repetition, 0
 0 illegal, slowest 10.5 s vs hard 11.9 s, 22 moves 3 to 49 ms over hard (clock-check slice),
 peak RSS 514 MB at 996k table entries. Clock: 12.8 s after move 47, 8.7 s after move 60,
 4.4 s minimum. Failed the 10 s floor; not tagged, not shipped. The bench now reports peak RSS.
+
+## Cycle 2, 2026-09-08, time management. v2.3 shipped from `time/gate-hard`.
+
+Baseline is v2.2 (a6c1fa6) throughout this cycle. Three candidates off `prod`, one change
+each: `time/gate-hard` (8cc4670, gate on the hard budget, became **v2.3**), `time/growth-cap`
+(7a5d60d, projection growth cap 8 to 4), `time/reserve-floor` (ace9ebc, soft budget from
+clock minus 10 s). Fast gauntlet 64 games each; from-scratch re-runs of 56 games; the 45 s +
+0.2 s rows are the platform proxy (the match machine runs at 0.38x our speed, so 45 s here is
+120 s there in nodes per game). Peak RSS is now reported.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| gate-hard | baseline | 10s+0.1s | 32 | +12 =10 -10 | 53.1% | +22 | -81 to +128 | 0 / 0 / 0 / 0 | 1.27s | 83 MB |
+| gate-hard | sunfish | 10s+0.1s | 16 | +5 =5 -6 | 46.9% | -22 | -182 to +129 | 0 / 0 / 0 / 0 | 1.26s | 73 MB |
+| gate-hard | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.25s | 49 MB |
+| growth-cap | baseline | 10s+0.1s | 32 | +9 =9 -14 | 42.2% | -55 | -168 to +48 | 0 / 0 / 0 / 0 | 1.28s | 82 MB |
+| growth-cap | sunfish | 10s+0.1s | 16 | +6 =7 -3 | 59.4% | +66 | -63 to +217 | 0 / 0 / 0 / 0 | 1.27s | 74 MB |
+| growth-cap | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.28s | 47 MB |
+| reserve-floor | baseline | 10s+0.1s | 32 | +13 =13 -6 | 60.9% | +77 | -14 to +181 | 0 / 0 / 0 / 0 | 1.26s | 140 MB |
+| reserve-floor | sunfish | 10s+0.1s | 16 | +3 =7 -6 | 40.6% | -66 | -217 to +63 | 0 / 0 / 0 / 0 | 1.27s | 94 MB |
+| reserve-floor | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.16s | 49 MB |
+| gate-hard-rerun | baseline | 10s+0.1s | 56 | +18 =22 -16 | 51.8% | +12 | -60 to +86 | 0 / 0 / 0 / 0 | 1.27s | 115 MB |
+| gate-hard-proxy45 | baseline | 45s+0.2s | 24 | +7 =12 -5 | 54.2% | +29 | -72 to +135 | 0 / 0 / 0 / 0 | 5.64s | 277 MB |
+| growth-cap-proxy45 | baseline | 45s+0.2s | 24 | +11 =7 -6 | 60.4% | +73 | -44 to +211 | 0 / 0 / 0 / 0 | 5.64s | 256 MB |
+
+120 s + 0.5 s games against v2.2, one per colour, first 40 moves: gate-hard spent 131 to 136%
+of its soft budget at depth 6.33 / 5.83 vs v2.2's 6.00 / 5.55 on the other side of the same
+boards (1 loss, 1 draw); growth-cap 100 to 120% at 5.47 / 6.08 vs 5.78 / 5.92 (1 win, 1 draw);
+reserve-floor 84 to 86% at 5.30 / 5.47 vs 5.80 / 4.97 (1 win, 1 loss). Clock floors in long
+games: gate-hard 5.1 s (v2.2 4.8 s on the same board), reserve-floor 7.0 s (v2.2 4.7 s). No
+exceptions, illegal moves or flags in any of the six games; the largest hard-budget overshoot
+was 32 ms, the clock-check slice.
+
+**Shipped v2.3 (gate-hard) on the depth evidence, not on Elo**: three runs vs v2.2 at 53.1%,
+51.8% and 54.2% all point the same way and none clears zero on the lower bound. Growth-cap's
+proxy result (60.4%) is above v2.3's (54.2%) with overlapping intervals; a 100+ game match
+between them at the proxy control is the cycle 3 tie-break. Reserve-floor does not add depth
+and is the v2.4 companion; its re-run row follows.
+
+Reserve-floor re-run from scratch:
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| reserve-floor-rerun | baseline | 10s+0.1s | 56 | +14 =22 -20 | 44.6% | -37 | -112 to +34 | 0 / 0 / 0 / 0 | 1.27s | 101 MB |
+
+The 60.9% did not reproduce: 44.6% over 56 games. Best-of-three selection at 32 games is worth
+about a hundred Elo of optimism, which is why the re-run step exists. Cycle 2 closed.
+
+## Cycle 3 opening, 2026-09-08: the merged prod (v2.3 + PR #5 evaluation) against v2.3
+
+Prod moved under cycle 2: a teammate merged the evaluation PR on top of v2.3. Benched before
+anything else; baseline v2.3.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| prod-eval | baseline | 10s+0.1s | 32 | +25 =3 -4 | 82.8% | +273 | +153 to +510 | 0 / 0 / 0 / 0 | 1.27s | 74 MB |
+| prod-eval | sunfish | 10s+0.1s | 16 | +10 =3 -3 | 71.9% | +163 | +13 to +420 | 0 / 0 / 0 / 0 | 1.27s | 59 MB |
+| prod-eval | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.26s | 42 MB |
+
+Same eight opening positions, one move each at a 75 s clock: v2.3 mean depth 5.25 at median
+50k nps, prod 5.38 at 62k nps. 120 s self-play: 51 moves, clean, peak RSS 243 MB, clock 17 to
+21 s at the end. Regression suite 3 of 12 (v2.2 also 3 of 12, a different three). Built as
+`submission-v2.4.zip`; the 45 s proxy match follows.
+
+Proxy control, 24 games vs v2.3:
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| prod-eval-proxy45 | baseline | 45s+0.2s | 24 | +17 =3 -4 | 77.1% | +211 | +81 to +441 | 0 / 0 / 0 / 0 | 5.65s | 247 MB |
+
+The gain holds at platform-like depth. v2.4 is the bench baseline from here.
+
+## Cycle 3, 2026-09-08, dynamic time and checks in quiescence. Nothing shipped.
+
+Baseline v2.4 (1077652). Three candidates off `prod`, one change each: `time/unstable-extend`
+(de956ad), `time/growth-cap-4` (e27abf8), `search/qs-checks` (bb0690e). Fast gauntlet 64
+games each; 45 s + 0.2 s platform proxy for the two timing candidates; two 120 s games each
+against v2.4 for the timing candidates; regression suite for all three (3 of 12 each, run
+before round 75's positions were added).
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-qs-checks | baseline | 10s+0.1s | 32 | +11 =4 -17 | 40.6% | -66 | -196 to +47 | 0 / 0 / 0 / 0 | 1.29s | 46 MB |
+| search-qs-checks | sunfish | 10s+0.1s | 16 | +11 =2 -3 | 75.0% | +191 | +35 to +512 | 0 / 0 / 0 / 0 | 1.29s | 46 MB |
+| search-qs-checks | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.28s | 31 MB |
+| time-unstable-extend | baseline | 10s+0.1s | 32 | +14 =5 -13 | 51.6% | +11 | -104 to +129 | 0 / 0 / 0 / 0 | 1.27s | 54 MB |
+| time-unstable-extend | sunfish | 10s+0.1s | 16 | +8 =6 -2 | 68.8% | +137 | +8 to +321 | 0 / 0 / 0 / 0 | 1.26s | 68 MB |
+| time-unstable-extend | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.26s | 39 MB |
+| time-growth-cap-4 | baseline | 10s+0.1s | 32 | +13 =5 -14 | 48.4% | -11 | -129 to +104 | 0 / 0 / 0 / 0 | 1.27s | 92 MB |
+| time-growth-cap-4 | sunfish | 10s+0.1s | 16 | +5 =7 -4 | 53.1% | +22 | -114 to +164 | 0 / 0 / 0 / 0 | 1.26s | 60 MB |
+| time-growth-cap-4 | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.26s | 45 MB |
+| time-unstable-extend-proxy45 | baseline | 45s+0.2s | 24 | +11 =2 -11 | 50.0% | +0 | -144 to +144 | 0 / 0 / 0 / 0 | 5.64s | 177 MB |
+| time-growth-cap-4-proxy45 | baseline | 45s+0.2s | 24 | +10 =5 -9 | 52.1% | +14 | -116 to +149 | 0 / 0 / 0 / 0 | 5.64s | 192 MB |
+
+120 s games, first 40 moves, candidate vs v2.4 on the other side of the same board:
+unstable-extend depth 5.00 / 5.95 vs 5.90 / 4.95 (the colour swap accounts for the whole
+difference), spend 81 s / 96 s vs 98 s / 82 s, 1 loss 1 win; growth-cap-4 depth 5.43 / 5.92 vs
+5.96 / 6.05, spend 109 s / 130 s vs 104 s / 123 s, minimum clock 9.3 s, 2 wins. No
+disqualifiers anywhere. No re-run: the best baseline-column score is 51.6%, nothing to
+reproduce. Cycle 3 closed.

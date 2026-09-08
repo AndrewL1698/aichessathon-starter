@@ -1,7 +1,7 @@
 # Logbook
 
-Two parts. Part 1 explains the engine that won round 73, build `a6c1fa6` (tag
-`build-20260908-a6c1fa6`), as a story of one move. Part 2 is the running record of every change
+Two parts. Part 1 explains the engine that won round 73, v2.2 (commit `a6c1fa6`, tag `v2.2`;
+see `docs/VERSIONS.md` for the numbering), as a story of one move. Part 2 is the running record of every change
 we tried afterwards, including the ones we threw away.
 
 Everything the platform runs is in `agent.py`. `fastboard.py` is also in the zip, a numba board
@@ -346,12 +346,19 @@ baseline: 60.9%, Elo +77, interval -14 to +181, the best of the three, but at a 
 the reserve makes it play a flat 400 ms budget, so its edge there is holding more clock into
 the endgame, not the platform's regime. 120 s: spent 84 to 86% of soft (it spends slightly
 less, by design), floor 7.0 s in a 144-move game where the baseline sank to 4.7 s, 1 win 1
-loss. **Not a fix for depth; the right companion to gate-hard once that has shipped.** A
-from-scratch re-run is queued.
+loss. Re-run from scratch: **44.6%**, Elo -37, interval -112 to +34 over 56 games. The
+60.9% was selection noise. **Rejected as a strength change**; still the natural way to put a
+floor under the clock, but it has to be measured as a safety change at 120 s, not sold on Elo.
 
-Still running as this was written: gate-hard's 56-game re-run, 24 games each for gate-hard
-and growth-cap at 45 s + 0.2 s (the platform's 120 s in nodes per game), and reserve-floor's
-re-run. Results go into PR #7 and here.
+Closing numbers. Gate-hard (now **v2.3**) re-run from scratch: 51.8%, Elo +12, interval -60 to
++86 over 56 games. At the 45 s + 0.2 s platform proxy (0.38x speed makes it the platform's 120 s
+in nodes per game): v2.3 54.2% (Elo +29, -72 to +135) and growth-cap 60.4% (Elo +73, -44 to
++211), 24 games each, overlapping intervals. v2.3 was uploaded for round 75 at about 17:00 on
+the depth evidence and the two rated games, and every run of it was clean on the
+disqualifiers. **Blunders per game so far: v2.2 played 8 (round 73) and 4 (round 74); v2.3's
+first rated game will be the first data point for it.** Cycle 3's first job is a 100+ game
+match of v2.3 against growth-cap at the proxy control, then a dynamic time extension and
+checks in quiescence as candidates.
 
 **On dynamic allocation** (asked this cycle): standard engines do vary time by position,
 and it works: spend less when the move is forced or the table's move has held across
@@ -360,3 +367,73 @@ It is a good strategy, but it is the second fix, not the first. Right now the en
 depth it has time for on nearly every move; a dynamic rule sitting on top of a gate that
 refuses iterations would still be refused. Gate first, measure, then "extend when unstable"
 as a cycle 3 candidate.
+
+### 2026-09-08, cycle 3 opening: the evaluation merge is v2.4. Shipped on the numbers.
+
+While cycle 2 was closing, a teammate merged PR #5 into `prod` on top of v2.3: a tapered
+evaluation (separate middlegame and endgame piece-square tables blended by how much material
+is left), mop-up terms that drive a won ending to mate, passed, isolated and doubled pawn
+terms, and a king shield. Standard techniques all; "tapered evaluation" and "mop-up" are the
+names to look up. It had not been benchmarked against v2.3 when it landed.
+
+Benched first: **82.8% against v2.3** (+25 =3 -4 over 32 games), Elo +273, interval +153 to
++510, the first lower bound above zero in this log by a wide margin; 71.9% against Sunfish;
+no illegal moves, exceptions, timeouts or over-budget moves; peak RSS 243 MB in a 120 s game.
+On the same eight positions it searches to the same depth (5.38 vs 5.25) at higher speed
+(62k vs 50k nps), so the gain is evaluation quality, not depth. The regression suite stays at
+3 of 12: those positions are tactical and this change is positional. Built as
+`submission-v2.4.zip` from 1077652 and handed over for the next round; the 45 s platform
+proxy match is running and goes into the bench log when done.
+
+Blunders per game: still 8 and 4 from v2.2's two rated games; v2.3 and v2.4 have not played
+a rated game yet as this is written.
+
+### 2026-09-08, round 75: v2.3's first rated game. Won vs Brokefish in 82 moves.
+
+The time change did what it was for: 149 s of 161 s used (7% unspent, against 28% in round
+73 and 57% in round 74), average spend 89% of the soft budget (was 66% and 68%), slowest move
+9.3 s against a 9.3 s hard budget (the abort path, as designed), and still 12 s on the clock
+at the end of an 82-move game. Depth 4 to 6 as before: the platform's 27k nps median is what
+bounds depth now, not the gate. Peak RSS 119 MB. 62 of 82 move lines survive; 2.4 KB of the
+middle is gone and nothing is inferred from it.
+
+Stockfish 19 at depth 18: ACPL 72, **5 real blunders and 4 cosmetic** (the cosmetic four are
+in an ending we were winning by a queen; the tool separates them as asked). All five real
+ones are in the middlegame, moves 23 to 34, and three of them are the same missed idea
+(Ba4+ with the bishop). They are in `tests/positions`, which now holds 17.
+
+**Blunders per game, real only: 8 (v2.2, r73), 4 (v2.2, r74), 5 (v2.3, r75).** Same order of
+magnitude; the one game is not evidence either way on v2.3's blunder rate, but it is
+evidence that the unspent-clock problem is gone.
+
+### 2026-09-08, cycle 3: dynamic time and checks in quiescence. Nothing shipped.
+
+Baseline v2.4. Three candidates, one change each, 64 fast games each plus the 45 s platform
+proxy and two 120 s games for the timing ones. No disqualifiers.
+
+**Extend when unstable** (`time/unstable-extend`, de956ad). Theory: when a finished depth
+changes the best move or drops the score by 50 cp, the root is unsettled, so give that move
+half as much soft budget again, within the hard budget; the standard "best-move stability"
+extension. Fast: 51.6% vs v2.4 (Elo +11, -104 to +129). Proxy: exactly 50.0% (-144 to +144).
+120 s: same depth and spend as v2.4 on the other side of the same board. **Rejected**: no
+effect at any control. Now that v2.3 already spends the budget, there is little left for an
+extension to add; instability at depth 5 is also common enough that "extend once" is close
+to "always extend".
+
+**Growth cap 4 on the hard gate** (`time/growth-cap-4`, e27abf8). Theory: cycle 2's tie-break.
+Fast: 48.4% (-11, -129 to +104). Proxy: 52.1% (+14, -116 to +149). 120 s: 5% more time for
+equal depth and a 9.3 s clock minimum. **Rejected**: it spends more for nothing measurable
+and pushes the clock lower.
+
+**Checks in quiescence** (`search/qs-checks`, bb0690e). Theory: the leaves cannot see checks,
+which is where tactical blunders live, so search quiet checking moves at the first
+quiescence ply. Fast: 40.6% vs v2.4 (Elo -66, -196 to +47); 75% vs Sunfish. On the tactical
+test position it ran at a third of v2.4's speed, because filtering every legal move for
+checks at every leaf is expensive in python-chess. Suite unchanged at 3 of 12. **Rejected**:
+it gets sharper and weaker at once, the textbook case of why the decision is made on Elo.
+Worth revisiting on the compiled board, where a check test costs nothing.
+
+**What cycle 3 says.** With v2.3 spending the clock and v2.4 evaluating well, the remaining
+Elo in the python-chess engine is small change; three sensible candidates measured within
+noise of zero. The blunders left are depth, and depth is speed. Next is v3.0 (the search on
+`fastboard.py`), described in `docs/BRIEF.md` section 8.
