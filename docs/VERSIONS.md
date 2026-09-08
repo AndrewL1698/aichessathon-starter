@@ -30,6 +30,9 @@ The current baseline for the bench is the newest shipped version (v2.4 as of 202
 | `phase0/spend-the-clock` | b12c8f0 | Soft divisor 25 to 16 and table cap 1M | Ran the clock to 4.4 s in a 130-move game; the formula has no floor. Table cap part is fine (514 MB at 1M entries). |
 | `time/growth-cap` | 7a5d60d | Projection growth cap 8 to 4 | 42.2% vs v2.2 at the fast control, 60.4% at the 45 s platform proxy (v2.3: 54.2%), 24 games each, overlapping intervals. v2.3 reached deeper at 120 s; a 100+ game tie-break at the proxy control is cycle 3's first job. |
 | `time/reserve-floor` | ace9ebc | Soft budget from clock minus 10 s | 60.9% vs v2.2 on 32 games did not reproduce: 44.6% on 56. Does not add depth. Floors the clock at 7 s where v2.2 sinks to 4.7 s, so still a safety candidate for v2.4, measured at 120 s rather than on Elo. |
+| `time/unstable-extend` | de956ad | Extend the soft budget once when the root is unstable | 51.6% vs v2.4 fast, 50.0% at the proxy, same depth at 120 s. No effect. |
+| `time/growth-cap-4` | e27abf8 | Growth cap 4 on top of v2.3's gate | 48.4% fast, 52.1% proxy; 5% more time for equal depth, clock to 9.3 s. |
+| `search/qs-checks` | bb0690e | Quiet checks at the first quiescence ply | 40.6% vs v2.4: a third of the speed on tactical positions, sharper and weaker. Revisit on the compiled board. |
 
 ## Planned numbering
 

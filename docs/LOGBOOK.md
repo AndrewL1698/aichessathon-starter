@@ -405,3 +405,35 @@ ones are in the middlegame, moves 23 to 34, and three of them are the same misse
 **Blunders per game, real only: 8 (v2.2, r73), 4 (v2.2, r74), 5 (v2.3, r75).** Same order of
 magnitude; the one game is not evidence either way on v2.3's blunder rate, but it is
 evidence that the unspent-clock problem is gone.
+
+### 2026-09-08, cycle 3: dynamic time and checks in quiescence. Nothing shipped.
+
+Baseline v2.4. Three candidates, one change each, 64 fast games each plus the 45 s platform
+proxy and two 120 s games for the timing ones. No disqualifiers.
+
+**Extend when unstable** (`time/unstable-extend`, de956ad). Theory: when a finished depth
+changes the best move or drops the score by 50 cp, the root is unsettled, so give that move
+half as much soft budget again, within the hard budget; the standard "best-move stability"
+extension. Fast: 51.6% vs v2.4 (Elo +11, -104 to +129). Proxy: exactly 50.0% (-144 to +144).
+120 s: same depth and spend as v2.4 on the other side of the same board. **Rejected**: no
+effect at any control. Now that v2.3 already spends the budget, there is little left for an
+extension to add; instability at depth 5 is also common enough that "extend once" is close
+to "always extend".
+
+**Growth cap 4 on the hard gate** (`time/growth-cap-4`, e27abf8). Theory: cycle 2's tie-break.
+Fast: 48.4% (-11, -129 to +104). Proxy: 52.1% (+14, -116 to +149). 120 s: 5% more time for
+equal depth and a 9.3 s clock minimum. **Rejected**: it spends more for nothing measurable
+and pushes the clock lower.
+
+**Checks in quiescence** (`search/qs-checks`, bb0690e). Theory: the leaves cannot see checks,
+which is where tactical blunders live, so search quiet checking moves at the first
+quiescence ply. Fast: 40.6% vs v2.4 (Elo -66, -196 to +47); 75% vs Sunfish. On the tactical
+test position it ran at a third of v2.4's speed, because filtering every legal move for
+checks at every leaf is expensive in python-chess. Suite unchanged at 3 of 12. **Rejected**:
+it gets sharper and weaker at once, the textbook case of why the decision is made on Elo.
+Worth revisiting on the compiled board, where a check test costs nothing.
+
+**What cycle 3 says.** With v2.3 spending the clock and v2.4 evaluating well, the remaining
+Elo in the python-chess engine is small change; three sensible candidates measured within
+noise of zero. The blunders left are depth, and depth is speed. Next is v3.0 (the search on
+`fastboard.py`), described in `docs/BRIEF.md` section 8.
