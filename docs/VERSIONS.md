@@ -28,7 +28,7 @@ The current baseline for the bench is the newest shipped version.
 | `cand/futility` | 4d8f361 | Frontier futility pruning | 50.0% vs v2.2. No effect at 32 games. |
 | `phase0/spend-the-clock` | b12c8f0 | Soft divisor 25 to 16 and table cap 1M | Ran the clock to 4.4 s in a 130-move game; the formula has no floor. Table cap part is fine (514 MB at 1M entries). |
 | `time/growth-cap` | 7a5d60d | Projection growth cap 8 to 4 | 42.2% vs v2.2 at the fast control; v2.3 reaches deeper. |
-| `time/reserve-floor` | ace9ebc | Soft budget from clock minus 10 s | 60.9% vs v2.2 at the fast control but it does not add depth; floors the clock at 7 s where v2.2 sinks to 4.7 s. The natural v2.4 companion to v2.3. |
+| `time/reserve-floor` | ace9ebc | Soft budget from clock minus 10 s | 60.9% vs v2.2 on 32 games did not reproduce: 44.6% on 56. Does not add depth. Floors the clock at 7 s where v2.2 sinks to 4.7 s, so still a safety candidate for v2.4, measured at 120 s rather than on Elo. |
 
 ## Planned numbering
 

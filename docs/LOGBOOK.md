@@ -346,12 +346,19 @@ baseline: 60.9%, Elo +77, interval -14 to +181, the best of the three, but at a 
 the reserve makes it play a flat 400 ms budget, so its edge there is holding more clock into
 the endgame, not the platform's regime. 120 s: spent 84 to 86% of soft (it spends slightly
 less, by design), floor 7.0 s in a 144-move game where the baseline sank to 4.7 s, 1 win 1
-loss. **Not a fix for depth; the right companion to gate-hard once that has shipped.** A
-from-scratch re-run is queued.
+loss. Re-run from scratch: **44.6%**, Elo -37, interval -112 to +34 over 56 games. The
+60.9% was selection noise. **Rejected as a strength change**; still the natural way to put a
+floor under the clock, but it has to be measured as a safety change at 120 s, not sold on Elo.
 
-Still running as this was written: gate-hard's 56-game re-run, 24 games each for gate-hard
-and growth-cap at 45 s + 0.2 s (the platform's 120 s in nodes per game), and reserve-floor's
-re-run. Results go into PR #7 and here.
+Closing numbers. Gate-hard (now **v2.3**) re-run from scratch: 51.8%, Elo +12, interval -60 to
++86 over 56 games. At the 45 s + 0.2 s platform proxy (0.38x speed makes it the platform's 120 s
+in nodes per game): v2.3 54.2% (Elo +29, -72 to +135) and growth-cap 60.4% (Elo +73, -44 to
++211), 24 games each, overlapping intervals. v2.3 was uploaded for round 75 at about 17:00 on
+the depth evidence and the two rated games, and every run of it was clean on the
+disqualifiers. **Blunders per game so far: v2.2 played 8 (round 73) and 4 (round 74); v2.3's
+first rated game will be the first data point for it.** Cycle 3's first job is a 100+ game
+match of v2.3 against growth-cap at the proxy control, then a dynamic time extension and
+checks in quiescence as candidates.
 
 **On dynamic allocation** (asked this cycle): standard engines do vary time by position,
 and it works: spend less when the move is forced or the table's move has held across
