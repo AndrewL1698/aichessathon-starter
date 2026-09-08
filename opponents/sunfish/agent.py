@@ -25,11 +25,21 @@ except ImportError as error:  # pragma: no cover - a missing download, not a cod
 A1 = sunfish.A1
 BORDER = " " * 9 + "\n"
 
-# What one move may spend, and the floor under it when the clock is nearly gone.
+# What one move may spend. The bonus has to shrink with the clock: a flat one never falls under
+# the increment, so every move costs more than it earns and the clock ratchets down to a flag.
+# Shrinking it means the budget crosses the increment somewhere and the clock parks there
+# instead, at about 1.9 s under a 100 ms increment and 9.4 s under the platform's 500 ms.
 BUDGET_DIVISOR = 30
-BUDGET_BONUS_MS = 300
-RESERVE_MS = 500
-MIN_BUDGET_MS = 100
+BONUS_DIVISOR = 50
+BONUS_CAP_MS = 300
+RESERVE_MS = 1000
+MIN_BUDGET_MS = 20
+
+# Sunfish looks at its deadline every 2048 nodes, so it always runs a little past. Hand it a
+# deadline that much earlier than the budget. The overrun is bounded by what 2048 nodes cost,
+# so on a short budget it is a fraction of the budget rather than the full allowance.
+OVERSHOOT_MS = 100
+OVERSHOOT_SHARE = 4
 
 
 def square_index(square: int) -> int:
@@ -77,11 +87,18 @@ def to_position(board: chess.Board) -> "sunfish.Position":
     return position.rotate() if board.turn == chess.BLACK else position
 
 
-def budget_s(time_left_ms: int) -> float:
-    """Return the wall time this move may spend, always leaving the clock a reserve."""
-    wanted = time_left_ms / BUDGET_DIVISOR + BUDGET_BONUS_MS
+def budget_ms(time_left_ms: int) -> float:
+    """Return what this move may cost end to end, always leaving the clock a reserve."""
+    bonus = min(BONUS_CAP_MS, time_left_ms / BONUS_DIVISOR)
+    wanted = time_left_ms / BUDGET_DIVISOR + bonus
     ceiling = max(time_left_ms - RESERVE_MS, MIN_BUDGET_MS)
-    return min(wanted, ceiling) / 1000.0
+    return max(min(wanted, ceiling), MIN_BUDGET_MS)
+
+
+def think_s(time_left_ms: int) -> float:
+    """Return how long Sunfish may search, which is the budget less its own overrun."""
+    budget = budget_ms(time_left_ms)
+    return (budget - min(OVERSHOOT_MS, budget / OVERSHOOT_SHARE)) / 1000.0
 
 
 def best_move(position: "sunfish.Position", deadline: float) -> "sunfish.Move | None":
@@ -116,7 +133,7 @@ def to_uci(move: "sunfish.Move", black_to_move: bool) -> str:
 
 def get_move(fen: str, time_left_ms: int) -> str:
     board = chess.Board(fen)
-    deadline = time.time() + budget_s(time_left_ms)
+    deadline = time.time() + think_s(time_left_ms)
     move = best_move(to_position(board), deadline)
     if move is not None:
         uci = to_uci(move, board.turn == chess.BLACK)

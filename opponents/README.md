@@ -64,13 +64,27 @@ Arena raises on a failed termination for whichever side is `--agent`, so run the
 checking there. Run arena jobs one at a time: games that share a machine stop measuring time
 management, which is half of what the real control is for.
 
+## Time management
+
+Sunfish gets `time_left / 30` plus a bonus of `time_left / 50` capped at 300 ms, never more than
+`time_left - 1000`, and its deadline is set 100 ms (or a quarter of a short budget) before that
+to absorb the overrun from checking the clock only every 2048 nodes.
+
+The bonus shrinks with the clock on purpose. A flat bonus never drops under the increment, so
+every move costs more than it earns, the clock ratchets down, and Sunfish flags in the endgame at
+a fast control. A shrinking one crosses the increment and the clock parks there: about 1.9 s
+under a 100 ms increment, about 9.4 s under the platform's 500 ms. The first move at 120 s + 0.5 s
+is still budgeted 4.3 s, so strength at the real control is unchanged.
+
 ## Measured
 
-Sunfish's budget is `time_left_ms / 30 + 300` ms, hard stopped and never past
-`time_left_ms - 500`, so its slowest move at 120 s + 0.5 s is the first one at about 4.4 s.
+All of these are after that change. Terminations are per game and no run flagged.
 
-| Matchup | Games | Time control | Score |
-|---|---|---|---|
-| sunfish vs random | 8 | 5 s + 0.1 s | 100% (+8 =0 -0) |
-| sunfish vs minimax | 16 | 10 s + 0.1 s | 96.9% +- 6.1% (+15 =1 -0) |
-| sunfish vs prod | 16 | 10 s + 0.1 s | 100% (+16 =0 -0) |
+| Matchup | Games | Time control | Score | Terminations |
+|---|---|---|---|---|
+| sunfish vs minimax | 16 | 10 s + 0.1 s | 96.9% +- 6.1% (+15 =1 -0) | checkmate 15, threefold 1 |
+| sunfish vs random | 16 | 2 s + 0.1 s | 100% (+16 =0 -0) | checkmate 16 |
+| sunfish vs prod | 16 | 10 s + 0.1 s | 100% (+16 =0 -0) | checkmate 16 |
+
+The prod row was measured before the budget change and has not been rerun; prod loses every game
+at either budget, so the number is the same either way.
