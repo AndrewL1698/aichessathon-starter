@@ -61,6 +61,8 @@ from fastboard import (
     FLAG_EP,
     MAX_MOVES,
     UNDO_SIZE,
+    ZOB_EP,
+    ZOB_SIDE,
     gen_moves,
     is_square_attacked,
     make_move,
@@ -116,6 +118,27 @@ CONTEMPT_THRESHOLD = 150
 FIFTY_MOVE_PLIES = 100
 
 # --------------------------------------------------------------------------------------
+# Null-move pruning, the one thing here that `agent.py` does not do. Give the opponent two
+# moves in a row and search the result shallowly: if they still cannot reach beta, the real
+# move list will not either, and the whole node is cut without generating it. It is unsound
+# in exactly one place, zugzwang, where passing is better than any legal move, so it is
+# switched off when the side to move has nothing but pawns and a king.
+#
+# This is the only reason the search is not score-identical to `agent.py`, which is why it is
+# a flag rather than a fact: `stats[NULL_ENABLED]` turns it off, `tests/test_fastsearch.py`
+# runs the score-equality test with it off, and the bench measures both settings.
+# --------------------------------------------------------------------------------------
+
+NULL_MOVE_PRUNING = True
+# Two plies shallower plus the ply the null move itself costs.
+NULL_MOVE_REDUCTION = 2
+# Below this there is nothing left to save: the reduced search would be a quiescence call.
+NULL_MOVE_MIN_DEPTH = 3
+# Written into the captured-piece slot of a null move's undo record, where a real move can
+# only ever write 0 to 12, so the next node can tell it was reached by a pass.
+NULL_MARKER = -1
+
+# --------------------------------------------------------------------------------------
 # The transposition table's packing. A move occupies bits 0..19 (`fastboard` puts its
 # highest flag at bit 19), the depth is stored one higher than it is so that an all-zero
 # entry reads as empty, and the score is shifted by INFINITY so it is never negative.
@@ -137,6 +160,7 @@ TT_SCORE_MASK = (1 << 22) - 1
 NODES, CUTOFFS, DRAWS, ABORTED = 0, 1, 2, 3
 CONTEMPT_AT, CHECK_MASK, BEST_MOVE, ROOT_BEST = 4, 5, 6, 7
 TT_PROBES, TT_HITS, TT_STORES, GAME_COUNT = 8, 9, 10, 11
+NULL_ENABLED, NULL_CUTOFFS = 12, 13
 STATS_SIZE = 16
 
 # Read-only, so numba can hold it as a global constant.
@@ -295,6 +319,73 @@ def count_legal(
             out[kept] = move
             kept += 1
     return kept
+
+
+@njit(nbt.boolean(_BOARD_T, nbt.int64), cache=False)
+def has_non_pawn_material(board: np.ndarray, side: int) -> bool:
+    """Has `side` a knight, bishop, rook or queen? The zugzwang guard on the null move.
+
+    A king and pawns is where passing can be better than moving, and it is the only place
+    null-move pruning is actually unsound, so it is the only place it is refused. Scanned from
+    that side's own end of the board, so a middlegame answers in a few loads.
+    """
+    low = 2 + 6 * side
+    high = low + 3
+    if side == 0:
+        start, stop, step = 98, 20, -1
+    else:
+        start, stop, step = 21, 99, 1
+    for square in range(start, stop, step):
+        piece = board[square]
+        if low <= piece <= high:
+            return True
+    return False
+
+
+@njit(nbt.void(_ST_T, _UNDO_T), cache=False)
+def make_null(st: np.ndarray, undo: np.ndarray) -> None:
+    """Pass the move to the opponent, keeping the key and the undo stack honest.
+
+    `fastboard` has no null move because no legal game contains one; it is built here out of
+    the same undo record `make_move` writes, so `unmake_null` restores the state exactly and
+    the two can be interleaved on one stack.
+    """
+    sp = st[8]
+    if sp >= undo.shape[0]:
+        raise IndexError("fastsearch: undo stack overflow on a null move")
+    undo[sp, 0] = 0
+    undo[sp, 1] = st[2]
+    undo[sp, 2] = st[1]
+    undo[sp, 3] = st[3]
+    undo[sp, 4] = st[7]
+    undo[sp, 5] = st[4]
+    st[8] = sp + 1
+
+    key = st[7]
+    if st[2] != 0:
+        key ^= ZOB_EP[(st[2] - 21) % 10]
+    key ^= ZOB_SIDE
+    st[2] = 0
+    # A pass is a ply like any other for the fifty move count, and counting it can only
+    # shorten the repetition lookback, never lengthen it wrongly.
+    st[3] += 1
+    if st[0] == 1:
+        st[4] += 1
+    st[0] = 1 - st[0]
+    st[7] = key
+
+
+@njit(nbt.void(_ST_T, _UNDO_T), cache=False)
+def unmake_null(st: np.ndarray, undo: np.ndarray) -> None:
+    """Take the pass back."""
+    sp = st[8] - 1
+    st[8] = sp
+    st[2] = undo[sp, 1]
+    st[1] = undo[sp, 2]
+    st[3] = undo[sp, 3]
+    st[7] = undo[sp, 4]
+    st[4] = undo[sp, 5]
+    st[0] = 1 - st[0]
 
 
 @njit(nbt.int64(_STATS_T, nbt.int64), cache=False)
@@ -693,9 +784,42 @@ def negamax(
             ):
                 return score
 
+    checked = is_square_attacked(board, st[5 + side], other)
+    path[ply] = key
+
+    # Null-move pruning. Pass, and search the reply two plies shallower against a window one
+    # wide at beta. If passing still does not reach beta, no real move will, and the node is
+    # cut before a single move is generated. Refused in check (passing out of check is not a
+    # position at all), with a mate score in the window (a mate proof cannot come from a
+    # pruned line), with only pawns left (zugzwang), and after a pass, since two passes in a
+    # row is just a shallower search of the same position.
+    if (
+        stats[NULL_ENABLED] != 0
+        and depth >= NULL_MOVE_MIN_DEPTH
+        and not checked
+        and beta < MATE_FOUND
+        and alpha > -MATE_FOUND
+        and undo[st[8] - 1, 0] != NULL_MARKER
+        and has_non_pawn_material(board, side)
+    ):
+        make_null(st, undo)
+        undo[st[8] - 1, 0] = NULL_MARKER
+        score = -negamax(
+            board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
+            deadline, depth - 1 - NULL_MOVE_REDUCTION, ply + 1, -beta, -beta + 1,
+        )
+        unmake_null(st, undo)
+        if stats[ABORTED] != 0:
+            return 0
+        if score >= beta:
+            stats[NULL_CUTOFFS] += 1
+            # Fail-soft, but never claim a mate off a line that contains a move nobody can
+            # play: a mate score here would be stored and believed at the root.
+            return beta if score > MATE_FOUND else score
+
     count = count_legal(board, st, undo, bufs, ply)
     if count == 0:
-        if is_square_attacked(board, st[5 + side], other):
+        if checked:
             return -MATE + ply
         return draw_score(stats, ply)
 
@@ -704,7 +828,6 @@ def negamax(
     window_alpha = alpha
     best = -INFINITY
     best_move = out[0]
-    path[ply] = key
     score_moves(board, st, bufs, scores, killers, history, ply, count, table_move)
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
@@ -942,8 +1065,11 @@ def think(fen: str, time_left_ms: int) -> str:
 
     observe(int(st[7]))
     soft_ms, hard_ms = budgets(time_left_ms)
-    for counter in (NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES):
+    for counter in (
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS
+    ):
         STATS[counter] = 0
+    STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
     # reading it off the previous iteration's score feeds back on itself.
@@ -1012,7 +1138,7 @@ def think(fen: str, time_left_ms: int) -> str:
         f"{depth_text} {move_text} nodes {STATS[NODES]} "
         f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {hit_rate} cut {STATS[CUTOFFS]} "
-        f"contempt {STATS[CONTEMPT_AT]:+d}",
+        f"null {STATS[NULL_CUTOFFS]} contempt {STATS[CONTEMPT_AT]:+d}",
         flush=True,
     )
 
@@ -1026,19 +1152,33 @@ def think(fen: str, time_left_ms: int) -> str:
 
 
 def search_fixed(
-    fen: str, depth: int, fresh: bool = True, contempt: int = 0
+    fen: str,
+    depth: int,
+    fresh: bool = True,
+    contempt: int = 0,
+    deadline: float | None = None,
+    first: int = 0,
+    null_move: bool | None = None,
 ) -> tuple[str, int, int]:
-    """Search one position to a fixed depth with no deadline. For tests and benchmarks.
+    """Search one position to a fixed depth. For tests, benchmarks and the position suite.
 
     `fresh` clears the table and the game history first, so a measurement is not quietly
     helped by whatever the previous call left behind; passing False keeps a game history a
-    caller has set up by hand, which is how the repetition tests reach this path.
+    caller has set up by hand, which is how the repetition tests reach this path. `deadline`
+    is a `time.perf_counter()` value, and with none given the search runs to the depth however
+    long it takes. `first` is the move to try first, as the iteration loop passes the previous
+    depth's answer. `null_move` overrides `NULL_MOVE_PRUNING`, which is what lets the
+    score-equality test measure the search `agent.py` describes rather than this one. The
+    abort flag is left in `STATS[ABORTED]` for the caller to read.
     """
     if fresh:
         reset()
     board, st, undo = fb.from_fen(fen)
-    for counter in (NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES):
+    for counter in (
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS
+    ):
         STATS[counter] = 0
+    STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
     STATS[CHECK_MASK] = NODE_CHECK_MASK
     STATS[CONTEMPT_AT] = contempt
     KILLERS.fill(0)
@@ -1046,7 +1186,7 @@ def search_fixed(
     score = int(
         search_root(
             board, st, undo, TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS,
-            time.perf_counter() + 86_400.0, depth, 0,
+            time.perf_counter() + 86_400.0 if deadline is None else deadline, depth, first,
         )
     )
     return fb.move_to_uci(int(STATS[BEST_MOVE])), score, int(STATS[NODES])
@@ -1067,6 +1207,9 @@ def warm() -> None:
     insufficient_material(board)
     men_at_most(board, 0, STALEMATE_PIECE_LIMIT)
     count_legal(board, st, undo, BUFS, 0)
+    has_non_pawn_material(board, 0)
+    make_null(st, undo)
+    unmake_null(st, undo)
     draw_score(STATS, 0)
     repeated(st, PATH, GAME_KEYS, STATS, 1)
     to_table(0, 0)

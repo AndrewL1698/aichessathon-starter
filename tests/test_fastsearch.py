@@ -80,11 +80,17 @@ def reference_root(reference: ModuleType, fen: str, depth: int) -> tuple[str, in
 def check_against_reference(reference: ModuleType, fens: list[str], depths: tuple[int, ...]) -> (
     dict[str, int]
 ):
-    """The root score of the port must equal the root score of the engine it came from."""
+    """The root score of the port must equal the root score of the engine it came from.
+
+    Null-move pruning is switched off here, and only here. It is the one thing this search
+    does that `agent.py`'s does not, and it is deliberately unsound: it is allowed to miss a
+    line, which is the trade that buys the depth. With it off the two searches are the same
+    algorithm and the scores have to agree exactly; `check_null_move` covers it being on.
+    """
     tally = {"searches": 0, "our nodes": 0, "their nodes": 0, "same move": 0}
     for fen in fens:
         for depth in depths:
-            move, score, nodes = fs.search_fixed(fen, depth)
+            move, score, nodes = fs.search_fixed(fen, depth, null_move=False)
             their_move, their_score, their_nodes = reference_root(reference, fen, depth)
             if score != their_score:
                 raise Failure(
@@ -133,6 +139,42 @@ def check_mates() -> tuple[int, int]:
         if move not in [candidate.uci() for candidate in chess.Board(fen).legal_moves]:
             raise Failure(f"mate in two from {fen!r} returned an illegal {move}")
     return len(MATE_IN_ONE), len(MATE_IN_TWO)
+
+
+def check_null_move(fens: list[str], depth: int) -> str:
+    """Null-move pruning must save nodes without losing a mate or returning an illegal move.
+
+    Being unsound about quiet lines is the point of it; being unsound about mates is not, and
+    a null move inside a mate line is how an engine reports a forced win it cannot deliver. So
+    the mate suites are re-run with it on and have to score exactly what they scored with it
+    off, and the saving is reported rather than asserted, because the number is a property of
+    the positions and the bench is what decides whether it is worth having.
+    """
+    for fen, _ in MATE_IN_ONE:
+        _, score, _ = fs.search_fixed(fen, 3)
+        if score != fs.MATE - 1:
+            raise Failure(f"with null move on, mate in one from {fen!r} scored {score:+d}")
+    for fen in MATE_IN_TWO:
+        _, score, _ = fs.search_fixed(fen, 3)
+        if score != fs.MATE - 3:
+            raise Failure(f"with null move on, mate in two from {fen!r} scored {score:+d}")
+    on_nodes = off_nodes = 0
+    agreed = 0
+    for fen in fens:
+        legal = [candidate.uci() for candidate in chess.Board(fen).legal_moves]
+        move_on, _, nodes_on = fs.search_fixed(fen, depth, null_move=True)
+        move_off, _, nodes_off = fs.search_fixed(fen, depth, null_move=False)
+        if move_on not in legal:
+            raise Failure(f"null move on, depth {depth} from {fen!r} returned {move_on}")
+        on_nodes += nodes_on
+        off_nodes += nodes_off
+        agreed += move_on == move_off
+    saved = 1.0 - on_nodes / max(off_nodes, 1)
+    return (
+        f"mates unaffected; over {len(fens)} positions at d{depth} it searched "
+        f"{on_nodes:,} nodes against {off_nodes:,} ({saved:.0%} fewer) and chose the same "
+        f"move {agreed}/{len(fens)} times"
+    )
 
 
 def check_repetition() -> str:
@@ -293,6 +335,7 @@ def main() -> None:
     ones, twos = check_mates()
     print(f"mates at depth three: {ones} mates in one and {twos} mates in two, all found")
 
+    print(f"null move: {check_null_move(sample[:20], 6)}")
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
     print(f"timeouts: {check_timed(sample[:24], reference)}")
