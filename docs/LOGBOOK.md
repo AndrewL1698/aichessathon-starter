@@ -217,6 +217,51 @@ checks in quiescence, no check extensions, no pawn structure or king safety in t
 evaluation, no endgame knowledge, no opening book, no tablebases, and the numba board is not
 wired in. Every one of these is a standard technique with a Chess Programming Wiki page.
 
+### v3.0: the same engine, compiled
+
+Everything above is still true of how the engine thinks; v3.0 changes what it is written in.
+Three files ship. `fastboard.py` is the board: a 10x12 array of piece codes, move generation,
+make and unmake, attack detection and a Zobrist key kept up to date by every move, compiled
+by numba at import. `fastsearch.py` is the evaluation and the search from this file, ported
+term for term and step for step onto that board, also compiled. `agent.py` keeps what both
+engines share and what a judge needs to read: the evaluation's numbers, the time management,
+the game memory, the log line and the safety net, plus the whole python-chess engine, now as
+the fallback.
+
+A move now goes like this. `_think` calls `_think_compiled`, which runs the same deepening
+loop as `_think_python` with the same `_budgets`, the same gate and the same panic rule, but
+each depth is searched by `fastsearch.root`: the root loop in Python, every root move's
+subtree in compiled code. The compiled search cannot read the clock, so it stops on a node
+count instead. Before each root move the wrapper converts what is left of the hard budget
+into nodes at the rate it has measured so far this move (before the first node, at the
+previous move's rate, or the warm-up's), and the search abandons the iteration when it gets
+there. Between root moves the wrapper reads the real clock. The move that comes back is
+checked legal with python-chess before it leaves; if the compiled path raises or returns
+anything illegal, `_think_python` plays on what is left of the clock and the log says so.
+
+Two things changed shape because arrays are not dictionaries. The transposition table is one
+fixed array of two million rows (key, depth, bound, score, move), 84 MB allocated once at
+import and indexed by the low bits of the Zobrist key, replaced on every store rather than
+cleared when full. Repetition detection scans the game's positions and the current line
+backwards, but only as far as the halfmove clock says: a capture or a pawn move changes the
+board for good, so nothing before the last one can recur, and the scan is a handful of
+compares instead of a set lookup over the whole game. Neither changes an answer; the parity
+test in `tests/test_fastsearch.py` proves the compiled evaluation returns v2.4's exact integer
+on ten thousand positions and the compiled search returns v2.4's score at fixed depth on a few
+hundred, with every differing move checked to be a tie.
+
+| Component | Compiled | Wrapper |
+|---|---|---|
+| Board, moves, keys | `fastboard.py` | |
+| Evaluation | `fastsearch.evaluate`, tables packed by `pack_tables`, `pack_weights` | constants in `agent.py`, `_load_compiled` |
+| Alpha-beta, quiescence | `fastsearch.negamax`, `fastsearch.quiescence` | `fastsearch.root` (Python, per depth) |
+| Ordering, killers, history | `rank_moves`, `pick`, `SearchState.killers`, `.history` | |
+| Transposition table | `SearchState.tt`, `TT_SIZE`, `TT_*` columns | `SearchState.table_move` |
+| Repetition, fifty moves | the top of `negamax`, `SearchState.hist`, `path` | `SearchState.remember`, `_observe` |
+| Node budget and abort | `C_MAX_NODES`, `C_ABORT` in `SearchState.ctl` | `budget` in `_think_compiled`, `NODE_BUDGET_SAFETY` |
+| Fallback | | `_think`, `_think_python`, `COMPILED_IMPORT_ERROR` |
+| Warm-up | `fastsearch.warm` | `WARM_UP_DEPTH`, `_load_compiled` |
+
 ## Part 2: improvement log
 
 Every change we try gets an entry: what, why it should help, where, what the bench said, and
@@ -437,3 +482,40 @@ Worth revisiting on the compiled board, where a check test costs nothing.
 Elo in the python-chess engine is small change; three sensible candidates measured within
 noise of zero. The blunders left are depth, and depth is speed. Next is v3.0 (the search on
 `fastboard.py`), described in `docs/BRIEF.md` section 8.
+
+### 2026-09-08, v3.0: the search on the compiled board. In progress.
+
+Branch `v3/compiled-search` off `prod` (c5974d2, v2.4's engine), with `tooling/bench` merged
+in because its gauntlet is what produces the numbers. Baseline v2.4.
+
+**What.** `fastsearch.py`: the v2.4 evaluation and search compiled by numba over
+`fastboard.py`, the board that has shipped unused since v2.2. `agent.py` drives it with v2.3's
+time management unchanged, packs the evaluation's tables for it at import, checks every move
+legal, and keeps the whole python-chess engine as the fallback. Part 1 above has the shape.
+
+**Why.** Cycles 1 to 3 measured the python-chess engine as squeezed: null move, LMR,
+futility, three time changes and checks in quiescence all within noise of zero. The real
+blunders in rounds 73 to 75 were two to four plies past depth 5 to 6, and at 27k nps on the
+platform depth is speed. `fastboard.py` had already shown twenty times python-chess's
+generate-and-make rate.
+
+**How it was built and proved, in order.** Evaluation first: one `@njit` pass over the
+mailbox, pawn structure from per-file bitmasks, no allocation. Gate: exactly `agent.evaluate`'s
+integer on 10,000 positions from `tests/test_fastboard`'s generator plus 45 hand-built endings
+(mop-up, the no-pawn draw rules, shields, passed and doubled pawns). Passed first time. Search
+second: `negamax` and `quiescence` step for step, table, killers, history, repetition, fifty
+moves, insufficient material, mate by ply, a node-count stop. Gate: with the table and killers
+off on both sides, the same score as `agent._root` on 334 positions at depth 3 and 35 at
+depth 4; 25 and 12 of those chose a different move, each verified a tie by scoring the
+compiled move with the Python search. With everything on, no score drift on the same sets.
+Wrapper third, warm-up fourth: import with warm-up 2.4 s locally (fastboard alone was 1.8 s),
+so about 7 s at the platform's speed, against a 90 s budget.
+
+**Measured so far.** Node rate on the eight harness openings: median 2.4M nps compiled
+against 70k for v2.4 in the same process, 34x. One move each at a 75 s clock: v3.0 mean
+depth 7.88 (two of eight partial at the hard budget) against v2.4's 5.50, at 2.42M against
+79k nps. Peak RSS 264 to 282 MB on 120 s moves. Regression suite, 12 positions at 20 s: 2
+solved at depth 7 to 9 (v2.4 solved 3 at depth 5 to 7). Deeper is not automatically sharper
+by Stockfish's lights, which is why the suite does not decide anything. `tests.test_fastboard`
+clean. The 200 fast games against v2.4 are running; the tables are in `docs/BENCH_LOG.md` as
+they land.

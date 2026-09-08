@@ -217,3 +217,32 @@ difference), spend 81 s / 96 s vs 98 s / 82 s, 1 loss 1 win; growth-cap-4 depth 
 5.96 / 6.05, spend 109 s / 130 s vs 104 s / 123 s, minimum clock 9.3 s, 2 wins. No
 disqualifiers anywhere. No re-run: the best baseline-column score is 51.6%, nothing to
 reproduce. Cycle 3 closed.
+
+## v3.0, 2026-09-08: the compiled search (`v3/compiled-search`)
+
+Baseline v2.4 (1077652, `local-opponents/v2.4`). One candidate: `fastsearch.py` and the
+wrapper in `agent.py`, described in `docs/LOGBOOK.md`. The correctness gates before any game
+was played: compiled evaluation equal to `agent.evaluate` on 10,045 positions; compiled search
+equal in score to `agent._root` at depth 3 on 334 positions and depth 4 on 35 with the table
+and killers off, every move difference a verified tie; `tests.test_fastboard` clean.
+
+Speed and depth, one move per harness opening at a 75 s clock (soft 3.4 s, hard 9.4 s), each
+engine in its own process on an idle machine:
+
+| opening | v3.0 depth | v3.0 nps | v3.0 ms | v2.4 depth | v2.4 nps | v2.4 ms |
+|---|---|---|---|---|---|---|
+| English Opening | 8 | 2,684,930 | 3153 | 6 | 75,951 | 4361 |
+| French Winawer | 8 | 2,450,331 | 5682 | 6 | 73,025 | 7034 |
+| Petroff Defence | 8 | 2,525,329 | 2868 | 6 | 84,436 | 4418 |
+| Scotch Game | 8 | 2,536,612 | 5209 | 5 | 96,017 | 2324 |
+| Grunfeld Defence | 8 | 2,069,009 | 8097 | 5 partial | 81,749 | 9382 |
+| French Classical | 7 partial | 2,363,860 | 9374 | 5 partial | 78,616 | 9378 |
+| Sicilian Closed | 8 | 2,391,859 | 5470 | 6 | 74,461 | 7160 |
+| Sicilian Sveshnikov | 8 partial | 2,161,653 | 9289 | 5 | 80,005 | 1430 |
+| **mean / median** | **7.88** | **2,421,095** | 6143 | **5.50** | **79,310** | 5686 |
+
+The same eight in one process through `tests.test_fastsearch --speed`, table on, fresh per
+position: median 2,397k nps at depth 6 against 70k at depth 4, 34x. Import with the warm-up
+search 2.4 s. Peak RSS 264 to 282 MB on 120 s moves.
+
+Games follow as they finish.
