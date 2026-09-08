@@ -73,6 +73,16 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 · **PR #2 merged** to `prod` (merge commit, since #4 is stacked on it) with the audit
+  fixes: soft budget binds (120 s opening spend 15/13/11 s → 2.1/1.7/2.8 s, depth unchanged),
+  sub-310 ms clocks no longer flag, queen-only quiescence promotions. 92.2% vs minimax, 89.1%
+  vs prod, 43.8% vs Sunfish. **First calibration upload built:** `submission-v1-search.zip`
+  (agent.py only, smoke games pass). Upload it, then read init time and slowest move off the
+  validation log and scale budgets by the platform/local ratio.
+- 2026-09-08 · **PR #4 audited**: no critical; HIGH fixed before merge: the table key was
+  `hash()` of the transposition tuple, and CPython folds bits 61–63 of every bitboard onto
+  bits 0–2 (f8/g8/h8 alias a1/b1/c1, ~41 effective bits). Now keyed on the tuple, cap 500k.
+
 - 2026-09-08 · **PR #4 open** `phase0/memory` (stacked on #2): transposition table, killers,
   history, repetition + fifty-move as draws, contempt ±50 past ±150 cp. 96.9% vs prod with
   **zero** threefold draws (was 10/32); 75% vs the #2 search over 64 games; KQvK, KRRvK, KPvK
