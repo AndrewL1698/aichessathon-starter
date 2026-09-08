@@ -12,6 +12,7 @@ safety net.
 
 import resource
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Hashable
@@ -67,7 +68,10 @@ NPS_FLOOR_MS = 5
 # move the wrapper turns what is left of the hard budget into nodes at the rate measured so
 # far this move (and before its first node, at the rate of the previous move, or of the
 # warm-up at import), scaled down a little so a rate that sags mid-iteration lands inside
-# the budget rather than past it. The clock itself is read between root moves.
+# the budget rather than past it. The clock itself is read between root moves, and a timer
+# thread that sleeps until the hard deadline zeroes the node budget if the estimate was
+# wrong; see _think_compiled. In the gauntlet before that timer existed, one move at a 7.3 s
+# clock ran 1.35 s against a 0.91 s hard budget when its rate fell inside a root move.
 NODE_BUDGET_SAFETY = 0.9
 # The warm-up search at import: deep enough to run every compiled path and to measure the
 # machine's node rate, shallow enough to cost a fraction of a second.
@@ -1323,26 +1327,40 @@ def _think_compiled(compiled: _Compiled, fen: str, time_left_ms: int) -> str:
         rate = nodes / elapsed_ms if nodes and elapsed_ms >= NPS_FLOOR_MS else compiled.rate
         return nodes + int(remaining_ms * rate * NODE_BUDGET_SAFETY)
 
+    def expire() -> None:
+        """The backstop. At the hard deadline the node budget becomes zero, whatever the
+        estimate said, and the search stops at its next node. The thread that runs this
+        sleeps until then and does nothing else; it is cancelled once the move is chosen."""
+        state.ctl[fs.C_MAX_NODES] = 0
+
+    backstop = threading.Timer(
+        max(hard_ms - (time.perf_counter() - started) * 1000.0, 0.0) / 1000.0, expire
+    )
+    backstop.daemon = True
+    backstop.start()
     deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
-    for depth in range(1, deepest + 1):
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        if depth > 1 and (
-            elapsed_ms >= soft_ms or elapsed_ms + _projected(last_ms, previous_ms) > hard_ms
-        ):
-            break
-        iteration_started = time.perf_counter()
-        try:
-            best, best_score = fs.root(state, depth, best, budget)
-        except fs.Aborted as aborted:
-            if aborted.root_best:
-                best = aborted.root_best
-                partial = True
-            break
-        previous_ms = last_ms
-        last_ms = (time.perf_counter() - iteration_started) * 1000.0
-        reached = depth
-        if best_score >= MATE_FOUND:
-            break
+    try:
+        for depth in range(1, deepest + 1):
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if depth > 1 and (
+                elapsed_ms >= soft_ms or elapsed_ms + _projected(last_ms, previous_ms) > hard_ms
+            ):
+                break
+            iteration_started = time.perf_counter()
+            try:
+                best, best_score = fs.root(state, depth, best, budget)
+            except fs.Aborted as aborted:
+                if aborted.root_best:
+                    best = aborted.root_best
+                    partial = True
+                break
+            previous_ms = last_ms
+            last_ms = (time.perf_counter() - iteration_started) * 1000.0
+            reached = depth
+            if best_score >= MATE_FOUND:
+                break
+    finally:
+        backstop.cancel()
 
     spent_ms = (time.perf_counter() - started) * 1000.0
     uci = fb.move_to_uci(best)

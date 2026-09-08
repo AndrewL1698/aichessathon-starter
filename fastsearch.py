@@ -400,7 +400,8 @@ TT_COLUMNS = 5
 HIST_SIZE = 1024
 # The control vector: counters the search keeps and switches the caller sets.
 C_NODES = 0  # nodes searched this move
-C_MAX_NODES = 1  # stop when C_NODES reaches this; the caller converts time into nodes
+C_MAX_NODES = 1  # stop when C_NODES reaches this; the caller converts time into nodes, and
+#                  may zero it from another thread to stop the search at its next node
 C_ABORT = 2  # set by the search when it stopped early; its result is then meaningless
 C_CUTOFFS = 3
 C_DRAWS = 4  # repetition and fifty-move draws returned; see negamax
@@ -649,6 +650,7 @@ def gen_noisy(board: np.ndarray, st: np.ndarray, undo: np.ndarray, row: np.ndarr
         nbt.int64,
     ),
     cache=False,
+    nogil=True,
 )
 def quiescence(
     board: np.ndarray,
@@ -736,6 +738,7 @@ def quiescence(
         nbt.int64,
     ),
     cache=False,
+    nogil=True,
 )
 def negamax(
     board: np.ndarray,
@@ -762,7 +765,9 @@ def negamax(
     depth zero, the table probe, move generation, the ordered move loop, and the table store.
     Buffers are per ply (`moves[ply]`, `ranks[ply]`, `killers[ply]`), so a node never touches
     its children's. On abort every frame still unmakes its move, so the board the caller
-    handed in is the board it gets back.
+    handed in is the board it gets back. `nogil` releases the interpreter lock for the whole
+    call, so a Python timer thread can zero `ctl[C_MAX_NODES]` at the wall-clock deadline
+    while this runs; the next node then sets the abort flag.
     """
     ctl[C_NODES] += 1
     if ctl[C_NODES] >= ctl[C_MAX_NODES]:
