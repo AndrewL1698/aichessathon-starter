@@ -223,11 +223,14 @@ def insufficient_material(board: np.ndarray) -> bool:
                 white_bishops += 1
             else:
                 black_bishops += 1
+            # a8 is 21 and h1 is 98, and both are light, so an even file-plus-rank is a
+            # light square. Only "are they all one colour" is asked below, so the two
+            # counters are interchangeable, but a mislabelled one misleads the next reader.
             offset = square - 21
             if ((offset % 10) + (offset // 10)) % 2 == 0:
-                dark += 1
-            else:
                 light += 1
+            else:
+                dark += 1
     knights = white_knights + black_knights
     one_colour = light == 0 or dark == 0
     if white_knights > 0:
@@ -485,6 +488,24 @@ def pick_best(bufs: np.ndarray, scores: np.ndarray, ply: int, first: int, count:
 # Quiescence and negamax.
 # --------------------------------------------------------------------------------------
 
+# Quiescence needs neither the table, the killers, the history nor the repetition arrays: it
+# never stores, never orders on anything but MVV-LVA, and cannot repeat a position, since
+# every move it makes is a capture or a promotion. So it takes a shorter argument list than
+# `negamax`, which is worth having on the recursion that runs at most of the leaves.
+_QUIESCENCE_SIG = (
+    _BOARD_T,
+    _ST_T,
+    _UNDO_T,
+    _BUFS_T,
+    _BUFS_T,
+    _STATS_T,
+    nbt.float64,
+    nbt.int64,
+    nbt.int64,
+    nbt.int64,
+    nbt.int64,
+)
+
 _SEARCH_SIG = (
     _BOARD_T,
     _ST_T,
@@ -505,18 +526,13 @@ _SEARCH_SIG = (
 )
 
 
-@njit(nbt.int64(*_SEARCH_SIG), cache=False)
+@njit(nbt.int64(*_QUIESCENCE_SIG), cache=False)
 def quiescence(
     board: np.ndarray,
     st: np.ndarray,
     undo: np.ndarray,
-    tt: np.ndarray,
     bufs: np.ndarray,
     scores: np.ndarray,
-    killers: np.ndarray,
-    history: np.ndarray,
-    path: np.ndarray,
-    game: np.ndarray,
     stats: np.ndarray,
     deadline: float,
     remaining: int,
@@ -544,7 +560,9 @@ def quiescence(
         if remaining == 0:
             return evaluate(board, st)
         best = -INFINITY
-        score_moves(board, st, bufs, scores, killers, history, ply, count, 0)
+        # MVV-LVA only, with no killers and no history: `agent.py` orders both quiescence
+        # branches with `_order`, and quiescence keeps no killers of its own.
+        score_captures(board, bufs, scores, ply, count)
     else:
         # A stalemate down here would otherwise score as the stand-pat. Proving it costs a
         # full move generation, far too much at every quiet leaf, so it is asked only when the
@@ -583,22 +601,8 @@ def quiescence(
         move = out[index]
         make_move(board, st, undo, move)
         score = -quiescence(
-            board,
-            st,
-            undo,
-            tt,
-            bufs,
-            scores,
-            killers,
-            history,
-            path,
-            game,
-            stats,
-            deadline,
-            remaining - 1,
-            ply + 1,
-            -beta,
-            -alpha,
+            board, st, undo, bufs, scores, stats, deadline, remaining - 1, ply + 1,
+            -beta, -alpha,
         )
         unmake_move(board, st, undo, move)
         if stats[ABORTED] != 0:
@@ -662,22 +666,8 @@ def negamax(
         return draw_score(stats, ply)
     if depth <= 0:
         return quiescence(
-            board,
-            st,
-            undo,
-            tt,
-            bufs,
-            scores,
-            killers,
-            history,
-            path,
-            game,
-            stats,
-            deadline,
-            QUIESCENCE_MAX_PLY,
-            ply,
-            alpha,
-            beta,
+            board, st, undo, bufs, scores, stats, deadline, QUIESCENCE_MAX_PLY, ply,
+            alpha, beta,
         )
 
     table_move = 0
@@ -1080,7 +1070,8 @@ def warm() -> None:
     score_captures(board, BUFS, SCORES, 0, 1)
     pick_best(BUFS, SCORES, 0, 0, 1)
     arrays = (TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS)
-    quiescence(board, st, undo, *arrays, far, QUIESCENCE_MAX_PLY, 0, -INFINITY, INFINITY)
+    quiescence(board, st, undo, BUFS, SCORES, STATS, far, QUIESCENCE_MAX_PLY, 0,
+               -INFINITY, INFINITY)
     negamax(board, st, undo, *arrays, far, 2, 1, -INFINITY, INFINITY)
     search_root(board, st, undo, *arrays, far, 2, 0)
     board, st, undo = fb.from_fen("8/8/8/4k3/8/8/8/R3K3 w - - 0 1")
