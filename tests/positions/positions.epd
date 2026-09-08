@@ -1,0 +1,16 @@
+# Real blunders from rated games, judged by tools/analyse_game.py against Stockfish 19 at depth 18.
+# FEN; bm <the move to find, UCI>; id "<round> <move>"
+# Round 73 vs Castling (we were Black, won by checkmate on their errors). 150 cp threshold.
+r1bqr1k1/ppp2ppp/2n2n2/4p3/2BP4/BQP1PN1P/P4PP1/R3K2R b KQ - 1 11; bm c8e6; id "r73 m11 Qd7 -293"
+r2r2k1/1bpq1np1/1p3n1p/2P5/p2Pp3/B3P2P/PRQ1BPP1/1R4K1 b - - 0 24; bm b6b5; id "r73 m24 Qf5 -307"
+r1r3k1/6p1/1R1B1n1p/3b1qn1/3Pp3/p3P2P/P2QBPP1/1R4K1 b - - 3 30; bm g5f3; id "r73 m30 Ne6 -507"
+r1r3k1/6p1/1R1Bnn1p/1R1b1q2/3Pp3/p3P2P/P2QBPP1/6K1 b - - 5 31; bm e6c7; id "r73 m31 Qg6 -208"
+r1r3k1/3n2p1/2bBn1qp/7R/1R1Pp3/p3P2P/P2QBPP1/6K1 b - - 11 34; bm e6g5; id "r73 m34 Rd8 -638"
+r2r2k1/6p1/2bBnnqR/8/1R1Pp3/p3P2P/P3BPP1/2Q3K1 b - - 0 36; bm g6h6; id "r73 m36 Qe8 -171"
+r2rq1k1/6p1/2b1nn1R/4B3/1R1Pp3/p3P2P/P3BPP1/2Q3K1 b - - 2 37; bm g7h6; id "r73 m37 Nd5 -194"
+r2rq1k1/8/1R2n2p/4B3/1n1Pp3/p3P2P/P3BPP1/2Q3K1 b - - 2 40; bm b4d5; id "r73 m40 Rdc8 -447"
+# Round 74 vs Makina (we were White, lost by checkmate in 19 moves). 150 cp threshold.
+r1bq1rk1/1p2bppp/p2p4/3Pp3/2B3Pn/2N1B3/PPP2P1P/R2Q1RK1 w - - 3 14; bm c4d3; id "r74 m14 Re1 -179"
+2rq1rk1/1p2b1pp/p2p4/3Ppb2/7n/2N1B3/PPP1BP1P/R2QR1K1 w - - 2 17; bm a2a4; id "r74 m17 Qd2 -274"
+2r2rk1/1p2b1pp/p2p2q1/3P1bB1/5p1n/2N5/PPPQB2P/R3R1K1 w - - 0 20; bm e2d3; id "r74 m20 Qxf4 -253"
+2r2rk1/1p4pp/p2p2q1/3P1bb1/5Q1n/2N5/PPP1B2P/R3R1K1 w - - 0 21; bm e2h5; id "r74 m21 Qg3 -mate"
