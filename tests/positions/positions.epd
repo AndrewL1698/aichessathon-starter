@@ -42,3 +42,9 @@ r1bqk2r/p1p2ppp/3b1n2/3p4/8/2N2P2/PPP3PP/R1BQKB1R w KQkq - 0 9; bm f1b5; id "r80
 1r4k1/3q1p2/2p1b3/r2pbP1p/p5p1/P1PB4/1PQ1N2P/1K1R2R1 w - - 0 24; bm f5e6; id "r80 m24 h3 -201"
 r2q1rk1/pbp2ppp/1p2p3/3PP3/4nB2/2P3P1/P1Q1PPBP/R4RK1 b - - 0 13; bm e6d5; id "r81 m13 Qxd5 -412"
 1r3rk1/2Q2p1p/1p2p1pB/4P3/p7/5BP1/q3PP1P/3R2K1 b - - 1 23; bm a2a3; id "r81 m23 b5 -mate"
+# Rounds 82 to 85 (v4.0; won 83, 84, drew 82, 85). Stockfish 19 depth 18, 150 cp threshold, real only.
+3r4/R2Ppp1k/6pp/2p2r2/Q1P4b/3qB2P/5PP1/5RK1 w - - 7 34; bm a4d1; id "r82 m34 Qc6 -305"
+8/3r1pbk/4p1pp/2pq4/5Q2/4B2P/5PP1/2R3K1 w - - 0 42; bm e3c5; id "r82 m42 Rxc5 -324"
+3r2k1/1p3ppp/p7/8/P7/1qP5/1P3PPP/R1B1RK2 b - - 2 23; bm d8d1; id "r84 m23 h5 -494"
+2k1rb1r/pp1n1pp1/2p3n1/3p3N/3P2B1/2P3P1/PP1B1P2/2KR3R b - - 3 20; bm h8g8; id "r85 m20 a5 -175"
+8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b - - 0 56; bm f1e1; id "r85 m56 g1=R -256"

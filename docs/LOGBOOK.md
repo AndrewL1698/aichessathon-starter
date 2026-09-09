@@ -531,3 +531,101 @@ games as having no surviving output. Two tokens of regex; not touched here becau
 **Blunders per game, real only: 8 (v2.2, r73), 4 (v2.2, r74), 5 (v2.3, r75), then v3.1:
 10, 5, 2, 0, 3, 2.** The v3.1 average is 3.7 against 5.7 before it, on games that are also
 shorter. Suite is 38 positions.
+
+### 2026-09-09, rounds 82 to 85: v4.0's first four rated games. Won 2, drew 2. What carried over from v3.1, what is fixed, what is new.
+
+Which build played which round, from the log banners: 73 and 74 v2.2, 75 v2.3 (python-chess
+engine, no banner); 76 to 81 v3.1 (`fasteval + fastsearch`, no `book`, no `fastnnue`); 82 to
+85 v4.0 (`fastnnue 1.5s`, `evaluation nnue h256 qa256 qb1024 qc128 cp400`, `book 24,479`).
+
+| Round | Opponent | Colour | Result | Moves | Clock left | Our ACPL / real blunders | Their ACPL / real blunders |
+|---|---|---|---|---|---|---|---|
+| 82 | Rudra | White | draw, insufficient material | 125 | 8.4 s | 9 / 2 | 9 / 2 |
+| 83 | TheWinners | White | won, mate | 26 | 49.8 s | 20 / 0 | 80 / 4 |
+| 84 | Zugzwang | Black | won, mate | 49 | 15.7 s | 29 / 1 | 59 / 4 |
+| 85 | NajeebA | Black | draw, insufficient material | 73 | 8.4 s | 17 / 2 | 19 / 3 |
+
+Same method as rounds 76 to 81: Stockfish 19 at depth 18, and our printed root score joined
+to Stockfish's evaluation of the same position, 178 moves with a surviving line. Four games
+and five real blunders is a small sample; everything below about v4.0 is provisional.
+
+**Speed and depth.** v4.0 runs at 0.52 to 0.56M nps on the platform against v3.1's 1.16 to
+1.37M, and its median depth is 7 where v3.1's was 8. Locally the same position at depth 7
+runs at 1.56M nps with the net and 2.89M with the hand tables alone, so the network costs
+46% of the node rate here and about 55% on the platform. In BLEND mode `leaf` computes both
+`evaluate` and `infer` at every leaf.
+
+**Strengths.** The evaluation is calibrated where v3.1's was blind: in positions Stockfish
+had within 100 cp of level, our score averaged 5 cp from Stockfish's (120 moves; v3.1: 33
+cp), and the "did not know it was losing" run that decided rounds 77 and 81 does not occur
+(2 such moves in 178, one a forced recapture; v3.1 had 14 in 208). Against the two strong
+opponents (ACPL 9 and 19) v4.0 drew; v3.1 lost all three of its games against opponents of
+that quality. ACPL 9 to 29 against v3.1's 39 to 94. Both mates were found cleanly once the
+position was won. Book moves (10.Be2 in round 82; 7.g4 and 8.Rg1 in round 83) all cost 10 cp
+or less by Stockfish.
+
+**Weaknesses, with where they live.**
+
+1. *Depth, carried over and now worse per node.* The search is v3.1's tree unchanged
+   (`fastsearch.negamax` and `quiescence`: fail-soft alpha-beta with table, killers and
+   history; null move compiled in but off; no PVS, LMR, futility or delta pruning; measured
+   4.5 to 6.5x growth per ply). All four middlegame blunders were depth-6 or depth-7 moves:
+   34.Qc6 in round 82 (depth 6, +319 to +14), 42.Rxc5 in round 82 (-34 to -358, line lost
+   in the log gap), 23...h5 in round 84 (depth 7, +648 to +154), 20...a5 in round 85 (depth
+   7, -62 to -237). On these five positions at 20 s, v4.0 solves 3 and the faster v3.1
+   solves 4: they are not evaluation misses. Blunder rate by depth in v4.0: 1 of 23 at
+   depth 6, 2 of 60 at depth 7, 0 of 32 at depth 8. Size: medium; each technique is 20 to 40
+   lines inside `negamax` plus a 300-game bench. This is search cycle 4 as already planned.
+
+2. *The iteration gate refuses the next ply more often now.* 34.Qc6 was played after 1.5 s of
+   a 2.2 s soft budget with 44 s on the clock, because the table-warmed depth 6 times
+   `GROWTH_MAX` (8) overshot the hard budget (`clock / 8`); depth 7 finds Qd1. Two of the four
+   blunders were gate-refused moves at 70% and 74% of soft. Overall, gate-refused moves
+   blundered 1 in 50, so this is a small effect; with a slower engine every ply costs more
+   and the same cap binds earlier. Location: `fastsearch.think`, `projected`, `budgets`
+   (`SOFT_DIVISOR` 25, `HARD_DIVISOR` 8, `GROWTH_MIN` 2, `GROWTH_MAX` 8). Size: constants,
+   needs a bench; the v2.x runs of the same idea measured nothing.
+
+3. *Bare endgames: the hand tables call a dead draw a win, and contempt then refuses the
+   draw.* New. Round 82 reached king and h-pawn against king with the defending king on g8/h8
+   at move 77 and shuffled for 57 moves, playing 134.h7 with the halfmove clock at 99 to
+   dodge the fifty-move rule. `fasteval.evaluate` scores those positions +182 to +292 (passed
+   pawn plus tables; `DRAWISH_MARGIN` only applies with no pawns and there is no rook-pawn or
+   wrong-corner rule), `fastnnue.bare_endgame` hands the leaf to those tables, and
+   `root_contempt` reads +250 > `CONTEMPT_THRESHOLD` and sets contempt to -50, so every draw
+   scores -50 and any non-repeating move scores better. Cost here: 57 moves and about 30 s of
+   clock (both draws ended at 8.4 s). Risk elsewhere: in a drawn ending where the only way to
+   avoid repetition is a worse move, contempt gives away the half point. Location:
+   `fasteval.py` endgame section (mop-up and drawish scaling) and
+   `fastsearch.root_contempt` / `draw_score`. Size: small and local. Two candidate shapes:
+   contempt 0 whenever `bare_endgame` is true, or a KPvK rook-pawn rule in `fasteval`.
+
+4. *Underestimates its own winning positions.* New, cosmetic so far. Where Stockfish had us
+   between +250 and +500, our score averaged +50 (9 moves); round 83 moves 12 to 19 printed
+   +6 to +60 against +263 to +438, round 84 moves 21 to 33 printed +150 to +475 against +555
+   to +933. Location: `fastsearch.leaf`, BLEND = (hand + net) // 2, which halves the net's
+   scale wherever the tables see less. No half point traced to it. Size: a weighting change,
+   which is a bench candidate, not a code fix.
+
+5. *Root fail-low inside an aborted iteration.* Carried over unchanged
+   (`search_root` and `think`); did not fire in these four games (0 of 10 partial moves
+   blundered) but the code path that produced 23...b5 in round 81 is the same.
+
+6. *Promotion tie-break.* 56...g1=R in round 85 is not an underpromotion error: g1=Q and g1=R
+   score identically (+21, both answered by Rxg1) and locally the engine picks the queen at
+   every depth; the in-game choice was a tie broken by table state. The mistake Stockfish
+   flags is promoting at all rather than ...Re1+ (0 to -256), a depth-12 find. Nothing to fix.
+
+**The half point that was actually lost.** Round 82: +319 at move 34 (Stockfish), two errors
+in eight moves to -358 at move 42, held to a draw because Rudra did not convert either.
+Round 85 was never better than level after move 23 and ended in a drawn rook ending.
+
+**Summary of the comparison.** Fixed by v4.0: the evaluation blindness under attack that lost
+rounds 77 and 81 (on v3.1's 22 blunder positions v3.1 solves 5, v4.0 solves 14). Carried
+over: search depth per node, the gate, the aborted-iteration rule; all in `fastsearch.py`,
+and depth is now half a ply worse because the net costs half the node rate. New: the bare-
+endgame contempt loop (`fasteval` endgame terms plus `root_contempt`), advantage compression
+(`leaf` BLEND), and the per-node cost of the net (`fastnnue.infer` plus the double evaluation
+in BLEND). Nothing here is a wrong design; the search is a correct bare alpha-beta missing its
+standard pruning, and the evaluation's remaining faults are one handover rule and one blend
+weight. The five positions above are in `tests/positions`, which now holds 43.
