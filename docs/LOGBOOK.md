@@ -682,3 +682,37 @@ of a middlegame at depth 6 because the next iteration is projected past the hard
 winning-side compression is here too: our root score read +51 to +93 across moves 11 to 27
 while Stockfish read +158 to +330. The position before 28.bxc4 is in `tests/positions`, which
 now holds 45. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1.
+
+### 2026-09-09, cycle 4, small fixes: three candidates from the rated-game reviews. One merged, one open, one rejected.
+
+The reviews of rounds 76 to 87 named three items small enough for one-change branches; each was
+benched against `local-opponents/v4.0`, 96 games at 10 s + 0.1 s, four at a time, with the
+disqualifier counts and peak RSS, and the rows are in `docs/BENCH_LOG.md`. The regression suite
+(prod's 17 positions, `--engine fast`, depth 11, 20 s) is 9 of 17 for v4.0 and for all three
+candidates: none of them touches the fixed-depth search.
+
+**`eval/kpk-rook-pawn-draw`, PR #17, merged.** King and rook pawn against a bare king scores 0
+when the defender is in front, in both evaluations. 45.8% (-88 to +28), no disqualifiers, and the
+bench cannot see it: the rule fired in 3 of 96 games, all with the candidate defending, all drawn
+as they should be. Judged on `tests.test_fasteval`'s nine rook-pawn positions and on the round 82
+positions it corrects (+182 to +292 with contempt -50 becomes 0 with contempt 0). Merged into
+`prod` the same afternoon.
+
+**`time/hard-divisor-6`, PR #18, open and not proven.** Hard budget a sixth of the clock instead
+of an eighth. 10 s: 42.2% (-120 to +6), which is an artifact of that control: the candidate's
+clock ran under the 1 s panic floor in 19 of 96 games against 0 for v4.0. 45 s proxy: 57.3%,
++51, -25 to +133. 120 s + 0.5 s, 16 games: 53.1%, slowest move 20.25 s on a 20.25 s budget,
+clock minimum 5.5 s against v4.0's 7.4 s, no disqualifiers. The mechanism is on record three
+times (rounds 82, 86, 87: decisive depth-6 moves with 44 to 89 s on the clock); the cost is a
+thinner clock at the end. A 96-game proxy extension is running and decides it on the lower bound.
+
+**`eval/blend-net-heavy`, rejected.** Leaf blend one part hand to three parts net. 37.0%, -93,
+-162 to -30. Clean: the hand half of the blend carries signal the net lacks at these depths, and
+the score compression the change was meant to fix (root scores of +50 where Stockfish had +250 to
++500, and 300 to 430 cp short while losing round 86) is a display problem, not a decision problem.
+The untested direction is the opposite weighting; nobody has measured it.
+
+**One lesson for the bench.** Any candidate that spends more per move looks bad at 10 s + 0.1 s
+because that control sits close to the panic floor; `time/growth-cap` showed the same split last
+cycle. Time and budget changes are decided at 45 s + 0.2 s and 120 s + 0.5 s, reading the clock
+minima out of the PGNs; the fast row is a smoke test for them.
