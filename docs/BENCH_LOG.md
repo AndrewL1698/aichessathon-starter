@@ -688,22 +688,26 @@ needs no attack set built up front and no second pass over the board. The note i
 saying mobility was too expensive to have was written when `agent.py` was the engine; it is
 the fallback now, so the cost that matters is the compiled one.
 
-**What it costs, measured before any game was played.** Depth 7 over eight positions
-(start, four middlegames, two endgames, one en-passant position):
+**What it costs.** Depth 7 over eight positions (start, four middlegames, two endgames, one
+en-passant position), both builds re-taken on an otherwise idle machine:
 
 | build | nodes | time | nps |
 |---|---|---|---|
-| `prod` df8f1fb | 34,188,380 | 24.73 s | 1.382M |
-| `eval/mobility` | 31,767,020 | 29.52 s | 1.076M |
+| `prod` df8f1fb | 34,188,380 | 23.35 s | 1.464M |
+| `eval/mobility` | 31,767,020 | 24.61 s | 1.291M |
 
-**22% off the node rate against a 7% smaller tree, so 19% more time to the same depth**, about
-a quarter of a ply. Both runs were taken while another session's 200-game arena had the
-machine, so the absolute figures are depressed; the two sides carried the same load, so the
-ratio is the number to read and it wants re-taking on a quiet machine.
+**12% off the node rate against a 7% smaller tree, so 5% more time to the same depth** — about
+a tenth of a ply, not the quarter ply the first measurement suggested.
 
-That cost is the whole question for this row. The shipped leaf is `(hand + net) // 2`, so the
-term enters at half weight and is paid for at full price, and the search cycle that just
-finished was buying plies rather than selling them.
+**That first measurement is worth recording as a lesson about this machine.** Taken while
+another session's 200-game arena was running, the same two builds read 1.382M and 1.076M, a
+22% gap and 19% more time to depth. Both sides carried the same load, so the ratio looked
+safe to quote and it was wrong by a factor of two: contention does not tax two builds equally
+when one of them does more work per node. The benchmarking rule about running arena jobs one
+at a time applies to node-rate measurements as well, and this row is the evidence.
+
+The cost still frames the question. The shipped leaf is `(hand + net) // 2`, so the term
+enters at half weight and is paid for at full price.
 
 **Correctness.** `tests/test_fasteval.py` is the instrument that matters here: the two
 evaluations are held to the same integer, and mobility is the first term where the mailbox
@@ -714,9 +718,27 @@ they are now 47 checked constants rather than 44. `ruff check` and `uv run mypy`
 
 | run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
 |---|---|---|---|---|---|---|---|---|
-| mobility | `prod` df8f1fb | 10s+0.1s | 64 | pending | pending | pending | pending | pending |
+| mobility | `prod` df8f1fb | 10s+0.1s | 64 | +27 =14 -23 | 53.1% | +22 | -54 to +100 | 0 / 0 / 0 / 0 |
 
-**The row is not filled in yet and the term is not proven.** The 64-game run is queued behind
-the `eval/half-net` arena, because concurrent games break the time measurement for both. Until
-it lands this is a correctness result and a cost measurement, nothing more: a 22% node rate is
-a real price and the games decide whether the term pays it.
+By colour, 32 games each: **59.4% as White** (+17 =4 -11) and **46.9% as Black** (+10 =10 -12).
+Terminations 50 checkmate, 7 threefold, 4 insufficient material, 3 fifty-move; no illegal move,
+no exception, no flag, no over-budget move on either side.
+
+**Right sign, not proven: the interval includes zero and the rule is that it must not.** 53.1%
+over 64 games is what a small positive effect and no effect look like alike. Two things bound
+how much a longer run at this control can settle it: the harness replays 8 openings by 2
+colours, so 64 games is 32 unique pairings played twice and the sample is narrower than the
+count suggests, and at a +22 central estimate the interval would have to shrink by a factor of
+four, which is roughly a thousand games. The 45 s + 0.2 s proxy is the cheaper second opinion
+and is running; `docs/TEAM.md`'s rule is to add a control rather than repeat one.
+
+What can be said without the games: the term is exactly what it claims to be on 10,000
+positions, it costs a tenth of a ply, and it does not break anything. What cannot be said is
+that it is worth shipping.
+
+**Gates, all on the quiet machine after the run.** `tests.test_fastsearch` green: the tree is
+still `agent.py`'s tree, 24 timed searches with a worst overrun of 1 ms, 6 depth-40 backstop
+searches all stopping within 5 ms, node rate at depth 7 on the hand path 2.79M on the start
+position and 2.14M on Kiwipete against prod's 3.85M and 2.59M. `tests.test_nnue` green, 1.48M
+nodes/s mean with the network on, import 4.4 s, 218 MB peak. `make gate` and `make zip` both
+pass; the packaged build plays a 120 s game to depth 8 at 254 MB.

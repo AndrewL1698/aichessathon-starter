@@ -83,11 +83,17 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   symmetry intact, 47 constants checked (was 44); ruff and mypy clean. The note in `_pieces`
   saying mobility was deliberately absent because python-chess movegen is too expensive was
   written when `agent.py` was the engine and is now removed: `fasteval.py` is what plays.
-  **The cost is the open question:** 22% off the node rate at depth 7 (1.382M to 1.076M) for a
-  7% smaller tree, so 19% more time to the same depth, about a quarter of a ply, and the
-  shipped leaf being `(hand + net) // 2` means the term enters at half weight for full price.
-  The 64-game row against `prod` df8f1fb is **queued behind the `eval/half-net` arena** and the
-  bench log's table is deliberately empty until it lands. Not proven, do not promote.
+  **Benched: 53.1% over 64 games vs `prod` df8f1fb at 10 s + 0.1 s, Elo +22, interval -54 to
+  +100, 0/0/0/0 disqualifiers.** 59.4% as White and 46.9% as Black over 32 games each. Right
+  sign, lower bound below zero, so **not proven and not for promotion**. The cost is smaller
+  than first reported: 12% of the node rate at depth 7 (1.464M to 1.291M) against a 7% smaller
+  tree, so 5% more time to the same depth, about a tenth of a ply. The earlier 22% figure was
+  measured under another session's arena and was wrong by a factor of two — **contention does
+  not tax two builds equally when one does more work per node, so the one-job-at-a-time rule
+  covers node-rate measurements too, not only games.** `tests.test_fastsearch`,
+  `tests.test_nnue`, `make gate` and `make zip` all green. A 32-game run at the 45 s + 0.2 s
+  proxy is running as the second control; repeating the fast control cannot settle it, because
+  8 openings by 2 colours makes 64 games 32 unique pairings played twice.
   Also in this push, not part of the PR: `search/null-move-v4` (PR #16) and
   `time/hard-divisor-6` (PR #18) merged up to `prod` df8f1fb, which they were 12 and 3 commits
   behind. Both conflicted only in `docs/BENCH_LOG.md` and `docs/VERSIONS.md`, where each side
