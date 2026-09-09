@@ -283,7 +283,9 @@ def build_lichess(arguments: argparse.Namespace) -> None:
         except (ValueError, KeyError):
             skipped += 1
             continue
-        if board.is_check():
+        # The database holds analysis-board positions too, some of them impossible (eight
+        # queens a side, pawns on the back rank). More than 32 men overflows the feature row.
+        if not board.is_valid() or board.is_check():
             skipped += 1
             continue
         if arguments.pov == "white" and board.turn == chess.BLACK:
