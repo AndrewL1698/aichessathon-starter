@@ -6,3 +6,6 @@ submission.zip
 *.pgn
 local-opponents/sunfish/sunfish.py
 !logs/*.pgn
+tools/nnue/data/
+tools/nnue/checkpoints/
+weights/*.npz
