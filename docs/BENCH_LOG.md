@@ -492,28 +492,43 @@ not close either.
 
 ### Gauntlet
 
-Two runs, both against `local-opponents/v3.1` at 10 s + 0.1 s. The evaluation is the only
-difference between candidate and baseline in both: this branch had not yet merged v3.2, so
-neither side has an opening book. Weights are `nnue.npz`, h128, the 21M-position net from
-`nnue/weights-v1` — **not** the smoke net; the smoke net was only ever used while the mechanics
-were being written and no number here comes from it.
+Every 64-game row is at 10 s + 0.1 s, **one game at a time**, so the worst move time is a real
+measurement rather than a figure taken under load. The h128 rows are against
+`local-opponents/v3.1` from before v3.2 merged, so neither side has an opening book; the h256
+row is against `local-opponents/v3.2`, book against book. In every row the evaluation is the
+only difference between candidate and baseline. Weights come from `nnue/weights-v1`; the smoke
+net was used only while the mechanics were being written and no number here comes from it.
 
-| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
-|---|---|---|---|---|---|---|---|---|---|---|
-| nnue-h128-disq | v3.1 | 10s+0.1s | 16 | +8 =1 -7 | 53.1% | +22 | -158 to +216 | 0 / 0 / 0 / 0 | 1.25s | 247 MB |
-| nnue-h128 | v3.1 | 10s+0.1s | 64 | +20 =5 -39 | **35.2%** | **-106** | -201 to -25 | 0 / 0 / 0 / 0 | 1.25s | 257 MB |
+| run | net | val loss | opponent | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| nnue-h128-disq | h128, 21M | 0.01654 | v3.1 | 16 | +8 =1 -7 | 53.1% | +22 | -158 to +216 | 0 / 0 / 0 / 0 | 1.25s | 247 MB |
+| nnue-h128 | h128, 21M | 0.01654 | v3.1 | 64 | +20 =5 -39 | **35.2%** | **-106** | -201 to -25 | 0 / 0 / 0 / 0 | 1.25s | 257 MB |
+| nnue-h256-e87 | h256, 21M e87 | 0.01541 | v3.2 | 64 | +26 =3 -35 | **43.0%** | **-49** | -139 to +34 | 0 / 0 / 0 / 0 | 1.26s | 257 MB |
 
-The 16-game row is the disqualifier check and its interval is 24 points wide, so its 53.1% says
-nothing about strength. The 64-game row does: **the network is about 106 Elo weaker than the
-hand evaluation, and the interval does not include zero.** Run one game at a time, so the worst
-move time is a real measurement: 1.25 s against the engine's 1.25 s hard budget at a 10 s clock,
-which is the same figure v3.1 posts.
+The 16-game row is the disqualifier check; its interval is 24 points wide and it says nothing
+about strength. The 64-game rows say this: **nothing has beaten the hand evaluation yet, and the
+trend across nets is the useful result.** h128 loses 106 Elo with an interval that excludes zero.
+The h256 net trained to epoch 87, 7% better on validation loss, loses 49 with an interval that
+includes it. Validation loss and board strength are moving together, which is worth knowing
+before the next training run: the offline metric's ordering is real, and the gap left to close is
+about 50 Elo, not about 100.
 
-**The mechanics are not the problem and the numbers above are the evidence for that.** The
-runtime is exact against the specification on 6,000 positions across three weight files at three
-different scale combinations, the accumulators are exact over 30,000 make/unmake sequences, and
-there were no illegal moves, no exceptions (which is also the fallback count), no flag falls and
-no over-budget moves in 80 games. What is 106 Elo weaker is the network.
+Across 144 benched games and four networks parity-tested there were **zero illegal moves, zero
+exceptions, zero flag falls and zero over-budget moves**, and the worst move was 1.25-1.26 s
+against a 1.25 s hard budget at a 10 s clock, which is what v3.2 itself posts. `exceptions` is
+also the fallback count, since `_think_fast` raises on any move python-chess will not accept, so
+the numba engine never once handed out a move the board did not believe in.
+
+A fourth net, `nnue-h256-52m` (52M positions, val 0.01489), was benched to 27 of 64 games before
+the machine became too contended for the timing to mean anything (load average 22, per-game wall
+time up from 33 s to 2.7 min) and the run is not reported: at that point it stood +9 =1 -17,
+which is inside the e87 interval and is a partial from mid-pairing, so it is not a number to act
+on. **`nnue-h256-52m-e60` (val 0.01460) has not been benched.** Both are parity-tested.
+
+**The mechanics are not what is 106 Elo weaker.** The runtime is exact against the specification
+on 2,000 positions per weight file across four files at three different scale combinations, the
+accumulators are exact over 10,000 make/unmake sequences per file, and no game had a
+disqualifier. What is weaker is the network.
 
 ### Why, as far as this branch can tell
 
@@ -542,3 +557,25 @@ term in it.
 
 The 23% node-rate cost is not the explanation. Three quarters of the nodes is about a third of a
 ply, which is worth tens of Elo at these depths, not a hundred.
+
+### The side-to-move offset, and the one line that read it
+
+The 52M-position nets carry a tempo bonus: they score a dead-equal position at **+46 cp for
+whoever is to move** — the same +46 with either side to move, in the start position and in bare
+kings alike, against the hand evaluation's 0. That is not a bug in the export and not a
+perspective error; the mirror identity still holds exactly, which is what the parity test
+proves. It is a term the network learned, and a moderate one is normal in an engine.
+
+It cancels in negamax at even depths and does not cancel where a centipawn figure is compared
+against a constant. There is exactly one such place, and it was found by looking rather than by
+losing games to it: `contempt_for`'s `CONTEMPT_THRESHOLD`, 150 cp, calibrated against
+`fasteval`. Over 760 root positions, feeding the network's score to it fired contempt in **69%**
+of them against the hand evaluation's **58%**, agreeing on the sign only **62%** of the time.
+What that buys is a draw refused in positions that are not actually won.
+
+So contempt reads the hand evaluation whatever scores the leaves (`fastsearch.root_contempt`).
+Nothing else in the draw handling reads an evaluation at all — repetition, the fifty-move rule
+and insufficient material return `draw_score` directly — and the `fastnnue.bare_endgame`
+handover is a count of men on the board, not a score, so a cp offset cannot move it either. The
+h128 and h256-e87 rows above were measured *before* that change, with the network feeding
+contempt; the fix can only have helped, and it is one line if it needs re-measuring.

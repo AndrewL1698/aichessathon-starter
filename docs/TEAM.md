@@ -97,17 +97,25 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   optional `nnue` extra (`uv sync --extra nnue`); nothing that ships imports it.
   **Weights are not committed on this branch** — `weights/*.npz` is gitignored with a comment
   saying why, and the orchestrator brings `nnue/weights-v1` in at merge time.
-  **The mechanics work and the network is not ready: 64 games vs v3.1 at 10 s + 0.1 s came back
-  +20 =5 -39, 35.2%, Elo -106 with an interval of -201 to -25**, so the regression is real and
-  not noise. Zero illegal, zero exceptions, zero timeouts, zero over-budget in 80 games, worst
-  move 1.25 s against a 1.25 s hard budget. `docs/BENCH_LOG.md` has the rows and the diagnostic:
-  the net knows piece values (pawn +76 cp, rook +483, queen +857 from the start position) but
-  tracks material at r = 0.706 against the hand evaluation's 0.983 and disagrees with it by
-  288 cp on average, which is positional opinion the size of two pawns riding on every leaf.
-  **Recommendation: merge this for the runtime and keep `USE_NNUE` on only once a net beats the
-  hand evaluation in 64 games.** Flipping the switch off, or shipping without a weight file, is
-  exactly v3.2 and is one line either way. The next move is on the training side, not here:
-  more data, a wider net, or a loss that does not flatten lopsided positions.
+  **The mechanics work and no network has beaten the hand evaluation yet.** 64 games at
+  10 s + 0.1 s, one game at a time: h128 (21M, val 0.01654) vs v3.1 **35.2%, Elo -106, interval
+  -201 to -25**; h256-e87 (21M, val 0.01541) vs v3.2 **43.0%, Elo -49, interval -139 to +34**.
+  Validation loss and board strength are moving together, so the offline metric's ordering is
+  real and the gap left is about 50 Elo, not 100. Zero illegal, zero exceptions, zero timeouts,
+  zero over-budget across 144 games; worst move 1.25-1.26 s against a 1.25 s hard budget, which
+  is v3.2's own figure. `nnue-h256-52m` reached 27 of 64 games (+9 =1 -17) before the machine
+  became too contended for the timing to mean anything and is not reported; `nnue-h256-52m-e60`
+  is parity-tested and un-benched.
+  **Recommendation: merge this for the runtime and turn `USE_NNUE` on only once a net beats the
+  hand evaluation over 64 games.** With it off, or with no weight file at all, this is exactly
+  v3.2, and it is one line either way. The next move is on the training side.
+  `docs/BENCH_LOG.md` has the rows, the material-correlation diagnostic, and **the side-to-move
+  offset**: the 52M nets read a dead-equal position as +46 cp for whoever is to move, which
+  cancels in negamax and does not cancel against `CONTEMPT_THRESHOLD`. Feeding the net to
+  `contempt_for` fired contempt in 69% of 760 root positions against the hand evaluation's 58%,
+  agreeing on the sign 62% of the time, so contempt now reads the hand evaluation whatever
+  scores the leaves. The `bare_endgame` handover is a count of men, not a score, so no cp offset
+  can move it, and repetition, fifty-move and insufficient material never read an evaluation.
 - 2026-09-09 · **In review** `book/opening` (PR: opening book): `weights/book.bin`, a 24,479
   entry polyglot book (391,664 bytes) read by `chess.polyglot` before the search up to ply 20,
   weighted by master game counts, legality-checked, and committed to both engines' history
