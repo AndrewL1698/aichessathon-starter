@@ -99,7 +99,7 @@ from fastboard import (
 
 # `PIECE_VALUES` is the evaluation's, read here only for MVV-LVA ordering.
 from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate
-from fastnnue import NET, bare_endgame, infer, push, push_null, refresh
+from fastnnue import NET, Net, bare_endgame, infer, push, push_null, refresh
 
 # Spans this module's own compilation; `fasteval` has already recorded its own by here.
 _STARTED = time.perf_counter()
@@ -552,7 +552,7 @@ def leaf(
     acc: np.ndarray,
     ply: int,
     stats: np.ndarray,
-    net: tuple,  # type: ignore[type-arg]
+    net: Net,
 ) -> int:
     """Score a leaf with whichever evaluation is switched on.
 
@@ -729,7 +729,7 @@ def quiescence(
     scores: np.ndarray,
     stats: np.ndarray,
     acc: np.ndarray,
-    net: tuple,  # type: ignore[type-arg]
+    net: Net,
     deadline: float,
     remaining: int,
     ply: int,
@@ -828,7 +828,7 @@ def negamax(
     game: np.ndarray,
     stats: np.ndarray,
     acc: np.ndarray,
-    net: tuple,  # type: ignore[type-arg]
+    net: Net,
     deadline: float,
     depth: int,
     ply: int,
@@ -1036,7 +1036,7 @@ def search_root(
     game: np.ndarray,
     stats: np.ndarray,
     acc: np.ndarray,
-    net: tuple,  # type: ignore[type-arg]
+    net: Net,
     deadline: float,
     depth: int,
     first: int,

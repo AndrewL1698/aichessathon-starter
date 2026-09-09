@@ -73,6 +73,31 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-09 · **In progress** `nnue/runtime`: `fastnnue.py`, the shipped half of the learned
+  evaluation. numba inference of the exported integer weights, exact against
+  `tools/nnue/nnue_ref.py` on 2,000 positions for all three weight files on `nnue/weights-v1`
+  (h128 at qa512/qb512, h256 at qa512/qb512, h256-e87 at qa256/qb1024 — every scale and the
+  hidden size are read from the file, none is hardcoded). Two perspective accumulators per ply,
+  `push` before every `make_move` and nothing on the way back, checked against a from-scratch
+  build over 10,000 make/unmake sequences including castling, en passant, promotions and null
+  moves: zero mismatches. `uv run python -m tests.test_nnue [--full]`.
+  **One deviation from the brief, on measurement.** The policy was to be "net plus `fasteval`'s
+  mop-up term in mop-up positions". Played out that way, KRRvK drew by repetition and KPvK never
+  promoted: the net scores every move in those within a few centipawns of every other (they all
+  leave the same men on the board) and the mop-up term is worth at most 120 cp. So leaves past
+  `fastnnue.bare_endgame` — either side down to a king and at most two other men, `fasteval`'s
+  own bound — are scored by the hand tables outright, mop-up, drawish scaling and bare-minor
+  zero included. All five bare endgames now convert and the playouts are byte-identical with the
+  network on and off, which is the test.
+  1.85M nodes/s at depth 7 against the hand evaluation's 2.41M, import 5.2 s with warm-up,
+  peak RSS 251 MB. `USE_NNUE` switches evaluations, and with it off `tests.test_fastsearch`'s
+  score equality against `agent.py` still holds exactly, so this PR changed the evaluation and
+  nothing else. Missing or malformed weights fall back to v3.1's hand evaluation and the init
+  log line names whichever is active. `torch` moved from `[project] dependencies` to an
+  optional `nnue` extra (`uv sync --extra nnue`); nothing that ships imports it.
+  **Weights are not committed on this branch** — `weights/*.npz` is gitignored with a comment
+  saying why, and the orchestrator brings `nnue/weights-v1` in at merge time.
+
 - 2026-09-08 late · **v3.1** `search/clock-backstop`: the timer-thread backstop from PR #11 on
   top of v3.0, with `STATS[EXPIRED]` read at every node, `nogil` on the three search functions,
   and the thread joined on exit (the PR #11 audit found `Timer.cancel()` cannot stop a callback

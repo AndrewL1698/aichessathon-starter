@@ -251,7 +251,7 @@ def push_null(acc: np.ndarray, ply: int, net: Net) -> None:
     """A null move moves no men, so both perspectives carry over unchanged.
 
     The side to move changes, but neither accumulator depends on that; which of the two
-    `evaluate` reads does, and that is decided at the leaf.
+    `infer` reads does, and that is decided at the leaf.
     """
     hidden = net[1].shape[0]
     for perspective in range(2):
@@ -262,7 +262,7 @@ def push_null(acc: np.ndarray, ply: int, net: Net) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# Inference and the mop-up term.
+# Inference, and the one position class it refuses.
 # --------------------------------------------------------------------------------------
 
 
@@ -279,12 +279,14 @@ def infer(acc: np.ndarray, ply: int, side: int, net: Net) -> int:
 
     Three details in that loop are worth 4.6x and are not stylistic. The accumulation is
     int32, not int64, because an int16 by int16 product summed into int32 is one SIMD
-    instruction and summing into int64 is a widening no vector unit does for free -- the
-    values are the same either way, `z2` peaks near 1.4e6 and `nnue_ref` accumulates in int32
-    too. The clip is `min`/`max` rather than a pair of `if`s, because a branch in the inner
-    loop stops the vectoriser dead. And it is recomputed once per output rather than hoisted
-    into a scratch row: measured, hoisting it saved 29 of 610 nanoseconds, which is not worth
-    another array threaded through every frame of the search.
+    instruction and summing into int64 is a widening no vector unit does for free. int32 is
+    also the width `nnue_ref` accumulates in, which is the stronger reason: at the shipped
+    scales `z2` peaks around 1.4e6 and neither can overflow, and if a future net's did, both
+    would wrap identically and the parity test would still hold rather than quietly stop
+    describing the runtime. The clip is `min`/`max` rather than a pair of `if`s, because a
+    branch in the inner loop stops the vectoriser dead. And it is recomputed once per output
+    rather than hoisted into a scratch row: measured, hoisting it saved 29 of 610 nanoseconds,
+    which is not worth another array threaded through every frame of the search.
     """
     l1_bias = net[1]
     l2_weight = net[2]
