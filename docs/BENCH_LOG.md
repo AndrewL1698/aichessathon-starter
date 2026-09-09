@@ -678,6 +678,8 @@ in both engines; the soft budget is unchanged.
 | hard-divisor-6 | baseline | 10s+0.1s | 96 | +30 =21 -45 | 42.2% | -55 | -120 to +6 | 0 / 0 / 0 / 0 | 1.70s | 254 MB |
 | hard-divisor-6-proxy45 | baseline | 45s+0.2s | 48 | +18 =19 -11 | 57.3% | +51 | -25 to +133 | 0 / 0 / 0 / 0 | 7.60s | 254 MB |
 | hard-divisor-6-120s | baseline | 120s+0.5s | 16 | +6 =5 -5 | 53.1% | +22 | -129 to +182 | 0 / 0 / 0 / 0 | 20.25s | 252 MB |
+| hard-divisor-6-proxy45-ext | baseline | 45s+0.2s | 96 | +34 =34 -28 | 53.1% | +22 | -34 to +79 | 0 / 0 / 0 / 0 | 7.57s | 256 MB |
+| hard-divisor-6-proxy45-pooled | baseline | 45s+0.2s | 144 | +52 =53 -39 | 54.5% | +31 | -13 to +77 | 0 / 0 / 0 / 0 | 7.60s | 256 MB |
 
 **The fast control measures an artifact here, and the PGN clocks show which.** At 10 s + 0.1 s
 the hard budget is 1.67 s instead of 1.25 s, the gate starts bigger iterations from the first
@@ -711,3 +713,11 @@ bound at -25, 120 s +22 on a sample too small to read. The mechanism it targets 
 three rated games (34.Qc6 in round 82, 16...Bg7 in round 86, 28.bxc4 in round 87: decisive depth-6
 moves with 44 to 89 s on the clock), and the cost is a thinner clock at the end. What settles it is
 the proxy at 144 games or more; the 96-game extension is queued and its row goes below.
+
+**The extension: 53.1%, +22, -34 to +79; pooled over 144 proxy games, 54.5%, +31, -13 to +77.**
+The sign held on a fresh 96-game sample from different openings and the lower bound did not clear
+zero. Clock minima in the extension: candidate median 2.5 s, lowest 1.6 s, 18 games under 2 s, none
+under 1 s; v4.0 median 4.1 s, lowest 2.5 s. **Verdict: not proven; not shipped on these numbers.** A
+one-constant change with the right sign at every platform-like control and a cost that is visible
+in the clock is a reasonable thing for the team to take on the mechanism evidence, and an
+unreasonable thing to call measured. The PR stays open for that decision; the branch is complete.
