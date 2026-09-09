@@ -37,9 +37,10 @@ TRACEBACK = "Traceback (most recent call last)"
 # The agent prints its peak resident set on every move; the largest one in the log is the peak.
 PEAK_RSS = re.compile(r"peakrss (\d+)MB")
 
-# The gauntlet, most games against the frozen baseline because that is the real signal.
+# The gauntlet, most games against the frozen baseline because that is the real signal. The
+# baseline is the shipped build, frozen under its version name; see docs/VERSIONS.md.
 GAUNTLET: tuple[tuple[str, Path, int], ...] = (
-    ("baseline", ROOT / "local-opponents" / "baseline", 32),
+    ("baseline", ROOT / "local-opponents" / "v2.4", 32),
     ("sunfish", ROOT / "local-opponents" / "sunfish", 16),
     ("minimax", ROOT / "baselines" / "minimax", 16),
 )
@@ -330,7 +331,7 @@ def main() -> None:
     total = len(schedule)
     print(
         f"{label}: {total} games, {arguments.base_ms} ms + {arguments.increment_ms} ms, "
-        f"{arguments.jobs} at a time"
+        f"{arguments.jobs} at a time, baseline {arguments.baseline_dir.resolve().name}"
     )
     started = time.monotonic()
     played: dict[str, list[Played]] = {name: [] for name, _, _ in GAUNTLET}
