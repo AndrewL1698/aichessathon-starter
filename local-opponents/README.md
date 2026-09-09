@@ -25,8 +25,9 @@ local Minimax Three, so scores against it have to come from the ladder itself.
 | Minimax Three | 1153 | none | three plies; ladder only |
 | Sunfish | 1465 | `local-opponents/sunfish` | Sunfish, wrapped in the agent contract |
 
-`local-opponents/prod` has no ladder counterpart: it is our own submission frozen at prod
-`29e6dc1`. Prod has since moved to `1151aa3`, which only rewrote docstrings and added a `.vscode`
+`local-opponents/v1.0` has no ladder counterpart: it is our own v1.0, frozen at prod
+`29e6dc1`. `v2.2` and `v2.3` are the later shipped builds, frozen the same way; `docs/VERSIONS.md`
+says what each is. Prod has since moved to `1151aa3`, which only rewrote docstrings and added a `.vscode`
 file, so the frozen copy still plays the identical game. Keep freezing versions here: "better
 than my last one" is the comparison that decides whether a change was worth shipping.
 
@@ -53,7 +54,7 @@ not there. The harness puts the agent directory first on `sys.path`, so the wrap
 
 ```
 uv run python -m harness.arena --opponent local-opponents/sunfish --games 32 --increment-ms 100
-uv run python -m harness.arena --opponent local-opponents/prod --games 32 --increment-ms 100
+uv run python -m harness.arena --opponent local-opponents/v2.2 --games 32 --increment-ms 100
 uv run python -m harness.play --white . --black local-opponents/sunfish
 ```
 
@@ -66,7 +67,7 @@ To measure the opponents against each other rather than against our agent, pass 
 ```
 uv run python -m harness.arena --agent local-opponents/sunfish --opponent baselines/minimax \
   --games 16 --increment-ms 100
-uv run python -m harness.arena --agent local-opponents/sunfish --opponent local-opponents/prod \
+uv run python -m harness.arena --agent local-opponents/sunfish --opponent local-opponents/v1.0 \
   --games 16 --increment-ms 100
 ```
 

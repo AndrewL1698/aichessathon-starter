@@ -25,7 +25,7 @@ mkdir -p ../pgn
 
 Until PR #1 merges, `local-opponents/` lives on branch `tooling/local-opponents`:
 `git worktree add ../opponents-tooling tooling/local-opponents` and run the fetch script there.
-The frozen 2-ply agent is `local-opponents/prod` (29e6dc1; 1151aa3 on `prod` changed docstrings
+The frozen 2-ply agent is `local-opponents/v1.0` (29e6dc1; 1151aa3 on `prod` changed docstrings
 only). One worktree per branch being worked on; branch names are the PR list below.
 
 The directory is hyphenated on purpose: `harness/package.py` zips any root directory a root-level
@@ -63,7 +63,7 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 - Ladder anchors (Round 60, 2026-09-08): house Random 802, Greedy 939, Minimax Two
   (= `baselines/minimax`) 1064, Sunfish 1465 (rank 241 of 377). Rank 50 cutoff ~1983,
   median 1576. Local scores against these convert to ladder Elo.
-- Reference opponents by path from any worktree: `local-opponents/prod`, the previous version's
+- Reference opponents by path from any worktree: `local-opponents/v1.0`, `local-opponents/v2.2`, `local-opponents/v2.3`, the previous version's
   worktree, `local-opponents/sunfish` (or `../opponents-tooling/local-opponents/sunfish` before
   PR #1 merges), `baselines/minimax`, `baselines/random`.
 - A laptop core is ~1.5–2× faster than the platform's EPYC core. Budgets are clock-relative;
