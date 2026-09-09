@@ -270,6 +270,10 @@ def build_lichess(arguments: argparse.Namespace) -> None:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
+            if read == 0:
+                # A range download that starts mid-file begins on a cut line; skip it.
+                print("note: skipped a partial first JSON line (expected on a mid-file range)")
+                continue
             # The last line of a truncated prefix download is usually cut in half.
             print("note: stopped at a partial JSON line (expected on a prefix download)")
             break
