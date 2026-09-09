@@ -88,7 +88,7 @@ INT16_MAX = 32767
 # a file that declares itself absolute it selects the configuration that was measured.
 # --------------------------------------------------------------------------------------
 
-USE_NNUE = False
+USE_NNUE = True
 
 # How a leaf is scored. `HAND` is `fasteval` alone, and it is also what every position past
 # `bare_endgame` gets whatever else is set.
