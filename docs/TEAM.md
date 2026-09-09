@@ -32,8 +32,25 @@ The directory is hyphenated on purpose: `harness/package.py` zips any root direc
 module imports by name, and no `import` statement can name `local-opponents`, so the GPL engine
 can never reach `submission.zip`. `local-opponents/` is outside the mypy gate.
 
-Branches: `prod` is what the platform plays; `main` is the untouched starter. The remote is a
-fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
+Branches: `prod` is what the platform plays and where day-to-day work lands; `main` holds
+finalized versions only. A version reaches `main` when it is **proven significantly better than
+the one before it** — a bench win on the Elo lower bound over a re-run sample, no disqualifiers,
+and rated games on the ladder that back it up. In-progress work, candidates and unproven builds
+stay off `main`. Promotion is a fast-forward, never a force-push:
+
+```
+git fetch origin
+git log --oneline origin/prod..origin/main    # must be empty, or it is not a fast-forward
+git push origin origin/prod:main
+```
+
+The empty output is the safety check: it means `main` holds nothing `prod` lacks, so moving the
+label forward cannot lose work. Pushing the refspec instead of checking `main` out leaves the
+working tree alone, so untracked and ignored files cannot be clobbered by the switch. v4.0 was
+promoted this way on 2026-09-09 (80.2% vs v3.2 over 96 games, +243 Elo; rated rounds 82-85
+won 83 and 84, drew 82 and 85, no disqualifiers).
+
+The remote is a fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 `-R AndrewL1698/aichessathon-starter --base prod` or it opens PRs upstream.
 
 ## Workflow
