@@ -86,6 +86,8 @@ def export(arguments: argparse.Namespace) -> Path:
     checkpoint = torch.load(arguments.checkpoint, map_location="cpu", weights_only=True)
     hidden = int(checkpoint["hidden"])
     cp_scale = round(float(checkpoint["cp_scale"]))
+    # "cp": the output is the evaluation. "residual": the output is added to the hand evaluation.
+    target = str(checkpoint.get("target", "cp"))
     model = Nnue(hidden)
     model.load_state_dict(checkpoint["model"])
     model.eval()
@@ -119,6 +121,7 @@ def export(arguments: argparse.Namespace) -> Path:
         qb=np.int32(qb),
         qc=np.int32(QC),
         cp_scale=np.int32(cp_scale),
+        target=np.array(target),
         l1_weight=l1_weight,
         l1_bias=l1_bias,
         l2_weight=l2_weight,
@@ -129,7 +132,7 @@ def export(arguments: argparse.Namespace) -> Path:
     size = out.stat().st_size
     print(
         f"wrote {out} ({size:,} bytes, {size / 1e6:.2f} MB) "
-        f"hidden={hidden} qa={qa} qb={qb} qc={QC} cp_scale={cp_scale} "
+        f"hidden={hidden} qa={qa} qb={qb} qc={QC} cp_scale={cp_scale} target={target} "
         f"scheme_version={SCHEME_VERSION}"
     )
     if size > 40_000_000:

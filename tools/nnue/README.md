@@ -89,6 +89,32 @@ useful augmentation here, even though it is the one that first comes to mind. Th
 already built into the feature scheme, so it produces a byte-identical feature vector and exactly
 zero new information. `test_export.py` asserts that identity rather than assuming it.
 
+## Residual target: the net as a correction to the hand evaluation
+
+`train.py --target residual` fits `sigmoid((hand + net) / cp_scale)` to the same target as
+before, where `hand` is `fasteval.evaluate` for the position. The net then learns only what the
+hand evaluation gets wrong, and material sanity is the hand evaluation's by construction. The
+loss is the same MSE in WDL space, so a residual run's validation loss is directly comparable
+to a plain run's, and `train.py` prints two baselines at the start: the mean predictor and the
+hand evaluation alone (net = 0). The sanity table for a residual net prints the *correction* in
+centipawns, so expect numbers near zero.
+
+The hand evaluation is added to the shards by `tools.nnue.hand`, which rebuilds each position
+from its feature row (the shards hold no fen) and evaluates it with the modules in
+`--engine-dir`. That rebuild is exact because the evaluation is colour-symmetric and reads
+nothing the row lacks; `--verify` proves it on real records and refuses to run otherwise.
+
+```bash
+uv run python -m tools.nnue.hand --data tools/nnue/data/lichess --out tools/nnue/data/lichess-hand \
+  --engine-dir . --verify lichess_db_eval.jsonl.zst
+uv run python -m tools.nnue.train --data tools/nnue/data/lichess-hand --target residual \
+  --hidden 256 --l1-clip 3.8
+```
+
+The exported file records `target` (`cp` or `residual`) so the runtime knows whether to add
+the hand evaluation to the net's output. `--l1-clip 3.8` keeps every epoch exportable at
+qa=256 (1.9 for qa=512); without it the layer-1 weights outgrow the int16 proof.
+
 ## Feature scheme
 
 768 inputs = 12 piece planes × 64 squares, from the **side to move's** perspective. The index
