@@ -27,6 +27,17 @@ run while they do; `clock()` takes the lock back for its 340 nanoseconds and rel
 two stops are independent: the node-counted read is the one that fires in nearly every game,
 and the thread is there for the move where it does not.
 
+**Principal variation search.** Every node searches its first move at the window it was
+given and every later move at a window one wide, re-searching a move that beats the window
+only when the real window is wider than one. It is not a pruning and it gives nothing up: a
+node whose value lies inside its window still returns that value exactly, because the move
+that carries the value is always searched at a window that contains it -- the first move at
+the full window, and a later move at the full window again as soon as the one-wide search
+says it beat the bound. So the score equality against `agent.py` in
+`tests/test_fastsearch.py` covers it, and it has no off-switch to cover it with instead.
+What it buys is cheaper refutations: proving a move is not better than the best one is a
+much shallower question than scoring it, and most moves in most nodes are not better.
+
 **Aborting.** A timeout cannot unwind through a `raise` here, so `stats[ABORTED]` is set and
 every frame returns as soon as it sees it, *after* unmaking its move. The board, the undo stack
 and the ply-indexed buffers are all consistent when the abort reaches Python, unlike
@@ -173,7 +184,8 @@ RSS_DIVISOR = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
 # in exactly one place, zugzwang, where passing is better than any legal move, so it is
 # switched off when the side to move has nothing but pawns and a king.
 #
-# This is the only reason the search is not score-identical to `agent.py`, which is why it is
+# This is the only reason the search is not score-identical to `agent.py` -- the principal
+# variation search above it changes the cost of a node and not its value -- which is why it is
 # a flag rather than a fact: `stats[NULL_ENABLED]` turns it off, `tests/test_fastsearch.py`
 # runs the score-equality test with it off, and the bench measures both settings.
 # --------------------------------------------------------------------------------------
@@ -979,26 +991,29 @@ def negamax(
         if stats[NNUE_POLICY] != HAND:
             push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
-        score = -negamax(
-            board,
-            st,
-            undo,
-            tt,
-            bufs,
-            scores,
-            killers,
-            history,
-            path,
-            game,
-            stats,
-            acc,
-            net,
-            deadline,
-            depth - 1,
-            ply + 1,
-            -beta,
-            -alpha,
-        )
+        if index == 0:
+            # The first move of a well-ordered node is the one that is probably best, so it
+            # is the only one worth the full window.
+            score = -negamax(
+                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
+                net, deadline, depth - 1, ply + 1, -beta, -alpha,
+            )
+        else:
+            # Every later move is asked the cheaper question first: is it better than what we
+            # already have? A window one wide cuts far sooner than the real one, and the
+            # answer is almost always no. When it is yes the null window has only proven a
+            # bound, so the move is searched again for its real score -- unless the window we
+            # were given is already one wide, in which case the bound *is* the answer and the
+            # re-search would repeat the search we just did.
+            score = -negamax(
+                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
+                net, deadline, depth - 1, ply + 1, -alpha - 1, -alpha,
+            )
+            if stats[ABORTED] == 0 and score > alpha and beta - alpha > 1:
+                score = -negamax(
+                    board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
+                    acc, net, deadline, depth - 1, ply + 1, -beta, -alpha,
+                )
         unmake_move(board, st, undo, move)
         if stats[ABORTED] != 0:
             return 0
@@ -1099,26 +1114,25 @@ def search_root(
         if stats[NNUE_POLICY] != HAND:
             push(board, st[0], acc, 0, move, net)
         make_move(board, st, undo, move)
-        score = -negamax(
-            board,
-            st,
-            undo,
-            tt,
-            bufs,
-            scores,
-            killers,
-            history,
-            path,
-            game,
-            stats,
-            acc,
-            net,
-            deadline,
-            depth - 1,
-            1,
-            -INFINITY,
-            -best_score,
-        )
+        if index == 0:
+            score = -negamax(
+                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
+                net, deadline, depth - 1, 1, -INFINITY, -best_score,
+            )
+        else:
+            # The same trade as `negamax` makes, and the root is where it saves the most: the
+            # previous iteration's best move is searched first, and every other root move only
+            # has to be shown not to beat it. `best_score` is a real score by here, because
+            # the first move is searched at the full window and no search returns -INFINITY.
+            score = -negamax(
+                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
+                net, deadline, depth - 1, 1, -best_score - 1, -best_score,
+            )
+            if stats[ABORTED] == 0 and score > best_score:
+                score = -negamax(
+                    board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
+                    acc, net, deadline, depth - 1, 1, -INFINITY, -best_score,
+                )
         unmake_move(board, st, undo, move)
         if stats[ABORTED] != 0:
             stats[BEST_MOVE] = best_move

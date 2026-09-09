@@ -107,6 +107,13 @@ def check_against_reference(reference: ModuleType, fens: list[str], depths: tupl
     does that `agent.py`'s does not, and it is deliberately unsound: it is allowed to miss a
     line, which is the trade that buys the depth. With it off the two searches are the same
     algorithm and the scores have to agree exactly; `check_null_move` covers it being on.
+
+    The principal variation search is *not* switched off, and this is the test that covers
+    it. `agent.py` searches every move at the full window; `fastsearch` searches all but the
+    first at a window one wide and re-searches whatever beats it. That is a claim about cost,
+    not about value, and the claim is exactly what these scores being equal proves. It has no
+    off-switch on purpose: an off-switch here would mean the equality was never measuring the
+    search that plays.
     """
     tally = {"searches": 0, "our nodes": 0, "their nodes": 0, "same move": 0}
     for fen in fens:
