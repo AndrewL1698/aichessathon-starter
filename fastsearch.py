@@ -49,7 +49,10 @@ path, where depth-preferred costs a load and a compare on every store.
 
 **The evaluation.** A leaf is scored by `fastnnue`, the learned evaluation, when there is a
 weight file and `fastnnue.USE_NNUE` is set, and by `fasteval`, the hand tables, when there is
-not. The choice is `stats[NNUE_ENABLED]`, read per node rather than compiled in, because numba
+not -- and by `fasteval` regardless once either side is down to a king and two men, which is
+where the net has no training data and the hand endgame terms do the work. See `leaf`.
+
+The choice is `stats[NNUE_ENABLED]`, read per node rather than compiled in, because numba
 freezes a module global into a compiled function as a constant and a switch that only takes
 effect at the next import is no switch at all. With it off this file searches exactly the tree
 v3.1 searched, which is what `tests/test_fastsearch.py`'s equality against `agent.py` needs.
@@ -81,6 +84,7 @@ from numba import njit, objmode
 from numba import types as nbt
 
 import fastboard as fb
+import fastnnue
 from fastboard import (
     FLAG_EP,
     MAX_MOVES,
@@ -93,11 +97,9 @@ from fastboard import (
     unmake_move,
 )
 
-import fastnnue
-from fastnnue import NET, evaluate_nnue, push, push_null, refresh
-
 # `PIECE_VALUES` is the evaluation's, read here only for MVV-LVA ordering.
 from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate
+from fastnnue import NET, bare_endgame, infer, push, push_null, refresh
 
 # Spans this module's own compilation; `fasteval` has already recorded its own by here.
 _STARTED = time.perf_counter()
@@ -557,9 +559,14 @@ def leaf(
     The branch is a read of `stats[NNUE_ENABLED]`, one int64 load and a compare against the
     thousands of operations on either side of it, and it is read per node so that the switch
     is a switch: numba would freeze a module-level flag into the compiled function.
+
+    `bare_endgame` is the second half of the policy and it is not an optimisation: a position
+    where either side is down to a king and two men is scored by the hand tables whatever the
+    switch says. `fastnnue.bare_endgame` has the measurements. It is a dozen loads on a full
+    board, which is what makes it affordable at every leaf.
     """
-    if stats[NNUE_ENABLED] != 0:
-        return evaluate_nnue(board, st, acc, ply, net)
+    if stats[NNUE_ENABLED] != 0 and not bare_endgame(board):
+        return infer(acc, ply, st[0], net)
     return evaluate(board, st)
 
 
@@ -1127,7 +1134,7 @@ def static_eval(board: np.ndarray, st: np.ndarray) -> int:
     """
     if fastnnue.active():
         refresh(board, ACC, 0, NET)
-        return int(evaluate_nnue(board, st, ACC, 0, NET))
+        return int(leaf(board, st, ACC, 0, STATS, NET))
     return int(evaluate(board, st))
 
 

@@ -14,6 +14,12 @@ because ordering is allowed to differ and the score is not.
 The rest is what a wrong search still passes the score test by doing: playing an illegal move,
 failing to see a mate it is one ply from, walking into a repetition while a queen up, or
 leaving the board corrupted after a timeout. Each of those has cost a game somewhere.
+
+This file runs with the learned evaluation switched **off**, throughout. That is not it being
+avoided: the score equality above is a claim about the *search*, and it is only a claim at all
+while both engines read the same evaluation. `tests/test_nnue.py` runs these same legality,
+timeout and backstop checks with the network on, and the node rate below is the hand
+evaluation's, which is the number the network's is worth comparing against.
 """
 
 import argparse
@@ -27,6 +33,7 @@ import chess
 
 import agent
 import fastboard as fb
+import fastnnue
 import fastsearch as fs
 from tests.test_fastboard import STRESS_SEEDS, positions
 from tests.test_fasteval import load_reference
@@ -457,6 +464,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--full", action="store_true", help="more positions and more depth")
     arguments = parser.parse_args()
+
+    # One variable at a time: this file measures the search over `fasteval`, which is the
+    # search `agent.py` describes. Leaving the network on would make every score comparison
+    # below a comparison between two different engines.
+    fastnnue.USE_NNUE = False
 
     rng = random.Random(0x5EA2)
     sample = positions(rng, 200 if arguments.full else 60)

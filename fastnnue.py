@@ -33,12 +33,11 @@ needs no work at all, because `acc[ply]` was never written. A null move moves no
 is the copy alone. `refresh` builds a perspective pair from the board, and the root does that
 once per search; every node below it is incremental.
 
-**Mop-up.** The net is a static evaluation trained on positions with men on the board, and it
-has no idea that in KRvK the only thing left to score is geometry: push their king to a corner
-and walk ours up. Every move there ties on material and the game is drawn by the fifty-move
-rule. So `mop_up` is `fasteval`'s own mop-up term, over the same constants, added on top of
-the net's centipawns in exactly the positions `fasteval` fires it in. It reads `fasteval`'s
-numbers rather than restating them, so there is one source of truth for the weights.
+**Where the net stops.** `bare_endgame` is the one position class this evaluation refuses, and
+`fastsearch.leaf` scores it with the hand tables instead. A network trained on positions games
+reach has effectively never seen KRvK or KPvK, and it shows: it scores every legal move in
+KRRvK within a few centipawns of every other, because every one of them leaves the same men on
+the board. That function has the measurements and the reasoning.
 
 **Missing or broken weights.** `weights/nnue.npz` arrives by a separate PR and is not in the
 tree here. If it is absent, unreadable, or fails the shape and scale checks, `LOADED` is False
@@ -55,22 +54,7 @@ from numba import njit
 from numba import types as nbt
 
 from fastboard import FLAG_CASTLE, FLAG_EP
-from fasteval import (
-    CENTRE_DISTANCE,
-    FILE_OF,
-    MOP_UP_BARE_PIECES,
-    MOP_UP_CLOSE,
-    MOP_UP_CMD,
-    MOP_UP_LOOSE_CLOSE,
-    MOP_UP_LOOSE_CMD,
-    MOP_UP_MAX_WEAK_PIECES,
-    MOP_UP_MIN_ADVANTAGE,
-    PHASE_MAX,
-    PHASE_QUEEN,
-    PHASE_ROOK,
-    PIECE_VALUE_BY_KIND,
-    RANK_OF,
-)
+from fasteval import FILE_OF, MOP_UP_MAX_WEAK_PIECES, RANK_OF
 
 # Spans this module's own compilation, like `fasteval` and `fastsearch` do.
 _STARTED = time.perf_counter()
@@ -131,7 +115,7 @@ ACC_T = nbt.int16[:, :, ::1]
 # as a read-only constant, so weights that arrive after import have to be passed in; bundling
 # them keeps the search's already-long argument lists readable. `l2_weight` is stored
 # transposed to [32, hidden] so the second layer walks contiguous memory.
-NET_T = nbt.Tuple(
+NET_T = nbt.Tuple(  # type: ignore[no-untyped-call]
     (
         nbt.int16[:, ::1],  # l1_weight [768, hidden]
         nbt.int16[::1],  # l1_bias   [hidden]
@@ -156,12 +140,30 @@ Net = tuple[
 # --------------------------------------------------------------------------------------
 
 
+@njit(nbt.int64(nbt.int64, nbt.int64), cache=False)
+def divide(numerator: int, denominator: int) -> int:
+    """`numerator // denominator` as the jitted code above computes it.
+
+    Exposed only so `tests/test_nnue.py` can assert on negative numerators that numba's
+    integer `//` floors, which is what `nnue_ref` does and what the final rescale needs. It is
+    not called from anything hot; the divisions in `infer` are written out there.
+    """
+    return numerator // denominator
+
+
 @njit(nbt.void(_BOARD_T, ACC_T, nbt.int64, NET_T), cache=False)
 def refresh(board: np.ndarray, acc: np.ndarray, ply: int, net: Net) -> None:
-    """Build both perspectives at `ply` from the board. The root does this once per search."""
+    """Build both perspectives at `ply` from the board. The root does this once per search.
+
+    Once per search is also cheap enough to check that the stack is the right width for the
+    net, which nothing on the incremental path can afford to. Getting that wrong writes past
+    the end of a perspective row, and numba does not bounds-check.
+    """
     l1_weight = net[0]
     l1_bias = net[1]
     hidden = l1_bias.shape[0]
+    if acc.shape[2] != hidden:
+        raise ValueError("fastnnue: the accumulator stack is not this net's hidden width")
     for perspective in range(2):
         target = acc[ply, perspective]
         for unit in range(hidden):
@@ -304,11 +306,9 @@ def infer(acc: np.ndarray, ply: int, side: int, net: Net) -> int:
         for unit in range(hidden):
             value = min(max(accumulator[unit], floor), ceiling)
             total += np.int32(value) * np.int32(row[unit])
-        second = np.int64(total) // qb
-        if second < 0:
-            second = 0
-        elif second > qa:
-            second = qa
+        # `min`/`max` rather than two `if`s, so mypy sees one type here and numba emits the
+        # same saturating pair either way. Outside the hot loop, so it costs nothing.
+        second = min(max(np.int64(total) // qb, np.int64(0)), np.int64(qa))
         third += second * l3_weight[index]
     return (third * cp_scale) // (qa * qc)
 
@@ -318,9 +318,9 @@ def _men_at_most(board: np.ndarray, side: int, limit: int) -> bool:
     """Has `side` at most `limit` men? Counted from that side's own end of the board.
 
     `fastsearch.men_at_most` is this same test, written out again here because `fastsearch`
-    imports this module and not the other way round. It is what keeps `mop_up` off the
-    middlegame path: the count stops at the limit and the scan starts where that side's men
-    are, so a full board answers after a dozen loads instead of walking all 78 squares.
+    imports this module and not the other way round. The count stops at the limit and the
+    scan starts where that side's men are, so a full board answers after a dozen loads
+    instead of walking all 78 squares, which is what keeps `bare_endgame` free.
     """
     low = 1 + 6 * side
     high = low + 5
@@ -338,113 +338,37 @@ def _men_at_most(board: np.ndarray, side: int, limit: int) -> bool:
     return True
 
 
-@njit(nbt.int64(_BOARD_T, _ST_T), cache=False)
-def mop_up(board: np.ndarray, st: np.ndarray) -> int:
-    """`fasteval`'s mop-up term alone, tapered and side-to-move relative.
+@njit(nbt.boolean(_BOARD_T), cache=False)
+def bare_endgame(board: np.ndarray) -> bool:
+    """Has either side been reduced to a king and at most two other men?
 
-    The net cannot learn this. It is a static evaluation of the men on the board, and in KRvK
-    or KQvK every move leaves the same men on the board, so the net ties every move and the
-    fifty-move rule ends the game. This is the same geometry `fasteval` scores -- their king
-    towards a corner, ours towards theirs -- over the same constants, and it fires in exactly
-    the positions `fasteval` fires it in.
+    This is the line the learned evaluation is not allowed across, and `fastsearch.leaf`
+    scores everything past it with the hand tables instead. Two reasons, one measured:
 
-    The two scalings that sit around it in `fasteval` are deliberately not reproduced, because
-    they cannot both apply: the bare-minor zero and the drawish halving need the material
-    advantage inside a minor piece and within `DRAWISH_MARGIN`, and mop-up needs it at
-    `MOP_UP_MIN_ADVANTAGE` or more, which is twice that. The two conditions are disjoint.
+    The network has no idea what to do here. Its training set is positions a real game
+    reached, and KRvK, KRRvK and KPvK are a vanishing fraction of those, so its output in
+    them is close to arbitrary -- it scores every legal move in KRRvK within a few centipawns
+    of every other, because every one of them leaves the same men on the board. Played out
+    with the network scoring the leaves and `fasteval`'s mop-up term added on top, KRRvK drew
+    by repetition and KPvK never promoted; `fasteval` alone mates in nine plies from the same
+    KRRvK. Adding the mop-up term to the network was the first policy tried and it is not
+    enough, because the term is worth at most 120 centipawns and the network's own variation
+    across these positions is larger than that.
+
+    And there is nothing to gain. Everything a learned evaluation knows -- pawn structure,
+    king safety, piece coordination -- is about positions with men on the board. What decides
+    a bare endgame is geometry and the fifty-move clock, which is exactly what `fasteval`'s
+    mop-up, drawish scaling and bare-minor zero were written for and tested on.
+
+    `MOP_UP_MAX_WEAK_PIECES` is `fasteval`'s own bound, three men including the king, so the
+    line is drawn where the hand evaluation's endgame terms start firing rather than at a
+    number of this file's own choosing. The material-advantage half of `fasteval`'s mop-up
+    condition is deliberately *not* applied: KPvK is a pawn ahead, not four hundred
+    centipawns ahead, and it is one of the positions that needs this.
     """
-    if not (
-        _men_at_most(board, 0, MOP_UP_MAX_WEAK_PIECES)
-        or _men_at_most(board, 1, MOP_UP_MAX_WEAK_PIECES)
-    ):
-        return 0
-
-    white_men = 0
-    black_men = 0
-    white_material = 0
-    black_material = 0
-    # A side's pawns, rooks and queens together: zero is "cannot make progress".
-    white_heavy = 0
-    black_heavy = 0
-    minors = 0
-    rooks = 0
-    queens = 0
-    for square in range(21, 99):
-        piece = board[square]
-        if piece == 0 or piece == 13:
-            continue
-        white = piece <= 6
-        kind = piece if white else piece - 6
-        value = PIECE_VALUE_BY_KIND[kind - 1]
-        if white:
-            white_men += 1
-            white_material += value
-        else:
-            black_men += 1
-            black_material += value
-        if kind == 1:
-            if white:
-                white_heavy += 1
-            else:
-                black_heavy += 1
-        elif kind == 2 or kind == 3:
-            minors += 1
-        elif kind == 4:
-            rooks += 1
-            if white:
-                white_heavy += 1
-            else:
-                black_heavy += 1
-        elif kind == 5:
-            queens += 1
-            if white:
-                white_heavy += 1
-            else:
-                black_heavy += 1
-
-    advantage = white_material - black_material
-    sign = 0
-    weak_king = st[5]
-    weak_count = white_men
-    weak_heavy = white_heavy
-    if advantage >= MOP_UP_MIN_ADVANTAGE:
-        sign = 1
-        weak_king = st[6]
-        weak_count = black_men
-        weak_heavy = black_heavy
-    elif advantage <= -MOP_UP_MIN_ADVANTAGE:
-        sign = -1
-    # The gate above only proved one of the two sides is small. If the small one is the side
-    # that is ahead, there is nothing to mop up: the other side still has an army.
-    if sign == 0 or weak_count > MOP_UP_MAX_WEAK_PIECES:
-        return 0
-    if weak_count <= MOP_UP_BARE_PIECES and weak_heavy == 0:
-        centre_weight = MOP_UP_CMD
-        close_weight = MOP_UP_CLOSE
-    else:
-        centre_weight = MOP_UP_LOOSE_CMD
-        close_weight = MOP_UP_LOOSE_CLOSE
-    separation = abs(FILE_OF[st[5]] - FILE_OF[st[6]]) + abs(RANK_OF[st[5]] - RANK_OF[st[6]])
-    endgame = sign * (
-        centre_weight * CENTRE_DISTANCE[weak_king] + close_weight * (14 - separation)
+    return _men_at_most(board, 0, MOP_UP_MAX_WEAK_PIECES) or _men_at_most(
+        board, 1, MOP_UP_MAX_WEAK_PIECES
     )
-
-    phase = minors + PHASE_ROOK * rooks + PHASE_QUEEN * queens
-    if phase > PHASE_MAX:
-        phase = PHASE_MAX
-    # Tapered as `fasteval` tapers it: an endgame-only term, truncated toward zero so that
-    # mirroring the board negates the score exactly.
-    total = endgame * (PHASE_MAX - phase)
-    score = total // PHASE_MAX if total >= 0 else -((-total) // PHASE_MAX)
-    return score if st[0] == 0 else -score
-
-
-@njit(nbt.int64(_BOARD_T, _ST_T, ACC_T, nbt.int64, NET_T), cache=False)
-def evaluate_nnue(
-    board: np.ndarray, st: np.ndarray, acc: np.ndarray, ply: int, net: Net
-) -> int:
-    """The learned evaluation as the search reads it: the net's centipawns plus mop-up."""
-    return infer(acc, ply, st[0], net) + mop_up(board, st)
 
 
 # --------------------------------------------------------------------------------------
@@ -461,7 +385,7 @@ def _check(condition: bool, message: str) -> None:
         raise WeightError(message)
 
 
-def _load(path: Path) -> Net:
+def load(path: Path) -> Net:
     """Read and validate `weights/nnue.npz`, or raise `WeightError` saying what is wrong.
 
     Every shape, dtype and scale is checked rather than assumed. A file from a different
@@ -558,7 +482,7 @@ def _stand_in(hidden: int = 128) -> Net:
 LOADED = False
 STATUS = ""
 try:
-    NET = _load(WEIGHTS_PATH)
+    NET = load(WEIGHTS_PATH)
     LOADED = True
     STATUS = (
         f"nnue h{NET[1].shape[0]} qa{NET[6]} qb{NET[7]} qc{NET[8]} cp{NET[9]} "
@@ -580,9 +504,16 @@ def active() -> bool:
     return USE_NNUE and LOADED
 
 
-def accumulators(plies: int) -> np.ndarray:
-    """The accumulator stack for a search `plies` deep: `acc[ply, perspective, hidden]`."""
-    return np.zeros((plies, 2, HIDDEN), dtype=np.int16)
+def accumulators(plies: int, hidden: int = HIDDEN) -> np.ndarray:
+    """The accumulator stack for a search `plies` deep: `acc[ply, perspective, hidden]`.
+
+    `hidden` defaults to the width of the net that loaded, which is what the search wants. It
+    is an argument because a caller can hold a net this module did not load -- the tests
+    evaluate every weight file in `weights/` -- and a stack sized for the wrong width is not a
+    wrong answer, it is a write past the end of a row into the next perspective's memory.
+    `refresh` refuses that outright rather than leaving it to be found as a wrong evaluation.
+    """
+    return np.zeros((plies, 2, hidden), dtype=np.int16)
 
 
 def warm() -> None:
@@ -599,8 +530,7 @@ def warm() -> None:
     board, st, undo = from_fen(START_FEN)
     refresh(board, acc, 0, NET)
     infer(acc, 0, 0, NET)
-    mop_up(board, st)
-    evaluate_nnue(board, st, acc, 0, NET)
+    bare_endgame(board)
     push_null(acc, 0, NET)
     first = legal_moves(board, st, undo)[0]
     push(board, int(st[0]), acc, 0, first, NET)
