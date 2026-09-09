@@ -801,3 +801,32 @@ no check extension; that is the standard remedy for exactly this class (a forced
 checks then costs little depth and reaches its repetition), it is cheap on the compiled board,
 and it is the same class as the 23...b5 mate horizon of round 81. A candidate for cycle 4,
 benched like the rest.
+
+### 2026-09-09, cycle 5: the review's two candidates. Neither proven; one is a correctness fix.
+
+Off `prod` at 2354ff5, one change each, benched against v4.1. Rows in `docs/BENCH_LOG.md`.
+
+**Check extension** (`search/check-extension`, 4b6d580). Theory: a node in check is searched one
+ply deeper, so a forced sequence of checks costs the checking side no depth and runs on to its
+repetition or its mate; the standard remedy for round 90's class, where every check cost a full
+ply and the drawing perpetual never repeated inside the horizon. Measured: at move 69 the drawing
+check is chosen from depth 8 instead of 12, at move 70 from depth 6 instead of 9, and it never
+scores as a draw at any depth to 12 either way, because White can always vary the king's route
+past the horizon; what the extension buys is that the checks are searched to their replies. Fast:
+55.7% (+40, -21 to +103); proxy: 57.3% (+51, -28 to +136); re-run from scratch: 49.0% (-7, -69
+to +54); pooled 240 games 53.3% (+23, -14 to +61). Suite 26/47 against 27/47: two new solves
+(the round 74 mate horizon, the round 90 perpetual), three lost at the depth it no longer reaches
+in 20 s, mean depth 7.89 against 8.40. **Not proven.** The first run was selection noise, as
+reserve-floor's was in cycle 2; the branch is pushed with the numbers for the team.
+
+**Contempt through quiescence** (`eval/contempt-quiescence`, f05f0dd). Theory: contempt read the
+raw static evaluation, which is a piece off with a recapture pending; resolving it through
+quiescence with the hand tables removes the 22 draw-seeking level moves the review found without
+touching the threshold's scale. Fast: 50.5% (+4, -61 to +69), no disqualifiers, and the bench
+cannot see it, like PR #17: over 24,127 bench positions contempt changes on 8.4%, almost all of
+it the pending-capture case. Suite unchanged. **A correctness fix, judged on the mechanism**;
+pushed for a PR.
+
+**What the cycle says.** The cross-game review's finding stands: nothing here changes how often
+the engine wins from a won position, because that is decided by depth-6 middlegame moves, which
+is cycle 4's pruning work, in flight elsewhere. No rated game has been played by either branch.

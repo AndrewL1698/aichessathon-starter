@@ -696,3 +696,55 @@ A disqualifier run, not a strength claim: the change fires only on a promotion t
 interval is v4.0 against itself plus noise. `uv run ruff check .`, `uv run mypy`,
 `tests.test_fastsearch` (with the new `promotion tie-break` check) and `tests.test_nnue` all
 green on the rebased branch.
+
+## Cycle 5, 2026-09-09 night: the two candidates from the rounds 73 to 90 review
+
+Two branches off `prod` at 2354ff5 (v4.1 plus the cross-game review), one change each, against
+`local-opponents/v4.1`, 96 games at 10 s + 0.1 s four at a time with nothing else running; the
+check extension also at the 45 s + 0.2 s proxy and re-run from scratch. Regression suite: prod's
+47 positions, `--engine fast`, depth 11, 20 s. `ruff`, `mypy` and `tests.test_fastsearch` (plus
+`tests.test_nnue` for the contempt branch) green on both.
+
+### `search/check-extension`: a node in check is searched one ply deeper
+
+Round 90's ending, a rook against two rooks and a pawn, was drawn by perpetual as long as the
+checks came from the h-file; the engine played the f-file check at moves 69 and 70 and was mated,
+because every check cost a full ply and the perpetual never repeated inside the horizon. With the
+extension the drawing `Rh8+` is chosen from depth 8 instead of 12 at move 69 and `Rh7+` from
+depth 6 instead of 9 at move 70, still scored as a rook down at every depth to 12 either way:
+what changes is that the checks are searched to their replies. Cost: 4.6 to 7.4x the nodes in
+those endings, about 6% of all nodes extended in a middlegame, and half a ply of nominal depth in
+20 s on the suite (7.89 against 8.40).
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-check-extension | v4.1 | 10s+0.1s | 96 | +42 =23 -31 | 55.7% | +40 | -21 to +103 | 0 / 0 / 0 / 0 | 1.28s | 257 MB |
+| search-check-extension | v4.1 | 45s+0.2s | 48 | +19 =17 -12 | 57.3% | +51 | -28 to +136 | 0 / 0 / 0 / 0 | 5.65s | 253 MB |
+| search-check-extension, re-run from scratch | v4.1 | 10s+0.1s | 96 | +35 =24 -37 | 49.0% | -7 | -69 to +54 | 0 / 0 / 0 / 0 | 1.29s | 256 MB |
+| pooled, all three | v4.1 | both | 240 | +96 =64 -80 | 53.3% | +23 | -14 to +61 | 0 / 0 / 0 / 0 | | |
+
+Suite 26/47 against v4.1's 27/47: solves `r74 m21` (a mate horizon) and `r90 m69`, which v4.1
+misses, and misses `r77 m14`, `r78 m16` and `r84 m23`, which v4.1 solved at exactly the depth the
+extension no longer reaches in 20 s; nine other positions are solved at a lower nominal depth
+(`r90 m39` at d6 against d9). Clock minimum at the proxy 2.5 s on both sides. **Not proven**: the
+first run's +40 did not reproduce from scratch, the pool's lower bound is -14, and the suite says
+it buys one class at the price of half a ply everywhere else. Branch pushed for a PR.
+
+### `eval/contempt-quiescence`: contempt from the hand evaluation resolved through quiescence
+
+`root_contempt` fed the raw static evaluation to the threshold, so a pending recapture read a
+piece down and set contempt to +50 (a draw worth half a pawn to us) in level positions: round 90's
+11...Nxa6, 19...Qxe4 and 20...Rxe4 read -359, -381 and -947 against a search score of -35, and
+v4.0's rated games did that on 22 level moves. The hand evaluation is now read through
+`quiescence` with the leaf policy forced to `HAND`: same threshold, same scale, one quiescence
+search per move.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| eval-contempt-quiescence | v4.1 | 10s+0.1s | 96 | +41 =15 -40 | 50.5% | +4 | -61 to +69 | 0 / 0 / 0 / 0 | 1.29s | 258 MB |
+
+A disqualifier run, like PR #17's: the change only matters when a draw is on offer with a
+capture pending. Measured directly over the 24,127 positions of two benches: contempt changes on
+8.4%, draw-seeking dropped on 1,313 (5.4%), draw-averse dropped on 58, and 713 positions where we
+are about to win material now refuse a draw. Suite unchanged at 27/47. Branch pushed for a PR, to
+be judged on the mechanism.
