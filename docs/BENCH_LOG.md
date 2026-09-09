@@ -676,6 +676,7 @@ in both engines; the soft budget is unchanged.
 | run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
 |---|---|---|---|---|---|---|---|---|---|---|
 | hard-divisor-6 | baseline | 10s+0.1s | 96 | +30 =21 -45 | 42.2% | -55 | -120 to +6 | 0 / 0 / 0 / 0 | 1.70s | 254 MB |
+| hard-divisor-6-proxy45 | baseline | 45s+0.2s | 48 | +18 =19 -11 | 57.3% | +51 | -25 to +133 | 0 / 0 / 0 / 0 | 7.60s | 254 MB |
 
 **The fast control measures an artifact here, and the PGN clocks show which.** At 10 s + 0.1 s
 the hard budget is 1.67 s instead of 1.25 s, the gate starts bigger iterations from the first
@@ -688,3 +689,11 @@ playing one-ply moves at the end of a 10 s game, a regime a 120 s + 0.5 s game d
 `time/growth-cap` (42.2% fast, 60.4% at the 45 s proxy). The rows that decide this candidate are
 the 45 s + 0.2 s proxy (48 games) and 120 s + 0.5 s (16 games), below when they land; the fast
 row stands as measured.
+
+**The 45 s proxy: 57.3%, +51, -25 to +133, no disqualifiers.** The slowest move, 7.60 s with 45.6 s
+on the clock, is the new hard budget to the millisecond, so the deadline binds where it should.
+The cost shows in the PGN clocks: the candidate's lowest clock per game had a median of 2.6 s
+(lowest 1.4 s, 9 games under 2 s) against v4.0's 4.1 s (lowest 2.0 s, none under 2 s), over games
+of a median 66 moves. It spends what it is given and arrives at the ending with less; at 45 s that
+stayed above the 1 s panic floor in every game. The 120 s + 0.5 s row below is the one that says
+whether the same holds at the platform's control, where v4.0's rated games ended with 8 to 50 s.
