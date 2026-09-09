@@ -660,3 +660,25 @@ is right, the size is not.
 clearest example; the blend candidate (`eval/blend-net-heavy`) gets the losing-side half of its
 evidence. The position before 16...Bg7 is in `tests/positions`, which now holds 44. Blunders
 per game, real only, v4.0: 2, 0, 1, 2, 2.
+
+### 2026-09-09, round 87: v4.0 drew OnlyBlunder by perpetual check as White, from +372.
+
+Banner: v4.0 (before PR #17 merged). Stockfish 19 at depth 18: our ACPL 27, one real blunder;
+OnlyBlunder's ACPL 26 / 2 real blunders. 122.8 s used, 18.7 s left. **Twenty of our 43 moves
+were searched to depth 6 and ten to depth 7**, at 0.42 to 0.68M nps; the whole middlegame from
+move 17 to move 38 ran at depth 6 with 30 to 75 s on the clock.
+
+**Where the win went.** Stockfish had +372 before move 28. 28.bxc4 (depth 6, 1.6 s of a 2.3 s
+soft budget with 48 s on the clock; Stockfish wants b4) dropped it to +129, then 29.Qd4 (-76)
+and 30.Rb4 (-81), both depth 6, left +30 by move 30 and the position was level from move 31 on.
+The perpetual itself was not the mistake: from 41.d7 onward Stockfish scores every alternative
+0 at depth 30, and the only way out of the checks, 43.Rd2, loses a rook. Our own root score of
++189 and +280 at moves 41 and 42 was a horizon reading, and the -50 from move 43 on was the
+search correctly finding that every king move repeats.
+
+**What it adds.** The third game in a row whose decisive slips were depth-6 moves with plenty of
+clock (34.Qc6 in round 82, 16...Bg7 in round 86, 28.bxc4 here); v4.0 at 0.5M nps spends most
+of a middlegame at depth 6 because the next iteration is projected past the hard budget. The
+winning-side compression is here too: our root score read +51 to +93 across moves 11 to 27
+while Stockfish read +158 to +330. The position before 28.bxc4 is in `tests/positions`, which
+now holds 45. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1.
