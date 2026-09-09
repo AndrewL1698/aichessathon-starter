@@ -73,6 +73,27 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-09 afternoon · **In review** `eval/mobility` (PR: mobility): the first evaluation
+  *term* added since v2.4. Knight, bishop, rook and queen mobility, counted as the squares a
+  piece attacks that none of our men occupy and no enemy pawn covers, scored against a typical
+  count for that piece so a full board sits near zero rather than paying for owning pieces.
+  In both evaluations, because `tests/test_fasteval.py` holds them to the same integer:
+  `agent.py` uses `attacks_mask` and a popcount, `fasteval.py` walks the generator's rays and
+  reads two mailbox squares per target for the pawn cover. **10,000 positions exact**, mirror
+  symmetry intact, 47 constants checked (was 44); ruff and mypy clean. The note in `_pieces`
+  saying mobility was deliberately absent because python-chess movegen is too expensive was
+  written when `agent.py` was the engine and is now removed: `fasteval.py` is what plays.
+  **The cost is the open question:** 22% off the node rate at depth 7 (1.382M to 1.076M) for a
+  7% smaller tree, so 19% more time to the same depth, about a quarter of a ply, and the
+  shipped leaf being `(hand + net) // 2` means the term enters at half weight for full price.
+  The 64-game row against `prod` df8f1fb is **queued behind the `eval/half-net` arena** and the
+  bench log's table is deliberately empty until it lands. Not proven, do not promote.
+  Also in this push, not part of the PR: `search/null-move-v4` (PR #16) and
+  `time/hard-divisor-6` (PR #18) merged up to `prod` df8f1fb, which they were 12 and 3 commits
+  behind. Both conflicted only in `docs/BENCH_LOG.md` and `docs/VERSIONS.md`, where each side
+  had appended a section in the same place; both sections kept, landed work first. Neither
+  branch's code changed. `docs/branch-model` is still unmerged and merges clean.
+
 - 2026-09-09 morning · **v4.0**: PR #14 (`nnue/runtime`, the compiled learned evaluation, merged with
   the switch off after an independent audit; the one CRITICAL, a damaged weight file failing the
   import, fixed before merge) plus `nnue/v4.0`, which commits `weights/nnue.npz` and sets

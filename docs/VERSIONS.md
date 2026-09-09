@@ -28,6 +28,7 @@ The current baseline for the bench is the newest shipped version (v4.0 as of 202
 
 | Branch | Commit | What | Why not |
 |---|---|---|---|
+| `eval/mobility` | v4.1 candidate, PR open, not proven | Knight, bishop, rook and queen mobility in both evaluations: squares attacked, less our own men and the squares enemy pawns cover, scored against a typical count per piece. | Correct but unpriced. 10,000 positions exact between `agent.py` and `fasteval.py`, and it costs 22% of the node rate (1.382M to 1.076M at depth 7) for a 7% smaller tree, about a quarter of a ply. The 64-game row against `prod` is queued; the term has to pay for that quarter ply to ship. |
 | `eval/kpk-rook-pawn-draw` | PR #17, merged into prod 2026-09-09, part of v4.1 | King and rook pawn against a bare king scores 0 when the defender is in front, in both evaluations. | Not a strength change the bench can see: fired in 3 of 96 games (all drawn, all correctly). 45.8%, -88 to +28, no disqualifiers. Decided on the position tests and the round 82 shuffle it removes. |
 | `cand/null-move` | 132a964 | Null move pruning | 53.6% vs v2.2 over 88 games, lower bound below zero. The only pruning candidate with a consistent positive sign; worth 300+ games. |
 | `cand/lmr` | 5990f59 | Late move reductions | 48.4% vs v2.2. Needs principal variation search underneath it to pay. |

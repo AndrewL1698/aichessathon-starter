@@ -668,3 +668,55 @@ rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / k
 `check_kpk` and the round 82 positions at depth 10: the three game positions score 0 with
 contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
 attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
+
+## Cycle 5, 2026-09-09: mobility in the hand evaluation
+
+Baseline `prod` at df8f1fb, which is v4.0 plus PR #17's rook-pawn rule. One change, on
+`eval/mobility` off `prod`. This is the first evaluation *term* added since v2.4; every cycle
+since has been search, memory, the compiled port or the network.
+
+### `eval/mobility`: knight, bishop, rook and queen mobility
+
+The term counts, per piece, the squares it attacks that no man of ours stands on and no enemy
+pawn covers, and scores the count against a typical one for that piece so a full board sits
+near zero instead of paying a bonus for owning pieces. Weights per square, tapered:
+knight 4/4, bishop 3/4, rook 2/4, queen 1/2, against baselines 4/6/7/13.
+
+`agent.py` counts it with `attacks_mask` and a popcount; `fasteval.py` walks the move
+generator's rays and reads two mailbox squares per target for the enemy pawn cover, which
+needs no attack set built up front and no second pass over the board. The note in `_pieces`
+saying mobility was too expensive to have was written when `agent.py` was the engine; it is
+the fallback now, so the cost that matters is the compiled one.
+
+**What it costs, measured before any game was played.** Depth 7 over eight positions
+(start, four middlegames, two endgames, one en-passant position):
+
+| build | nodes | time | nps |
+|---|---|---|---|
+| `prod` df8f1fb | 34,188,380 | 24.73 s | 1.382M |
+| `eval/mobility` | 31,767,020 | 29.52 s | 1.076M |
+
+**22% off the node rate against a 7% smaller tree, so 19% more time to the same depth**, about
+a quarter of a ply. Both runs were taken while another session's 200-game arena had the
+machine, so the absolute figures are depressed; the two sides carried the same load, so the
+ratio is the number to read and it wants re-taking on a quiet machine.
+
+That cost is the whole question for this row. The shipped leaf is `(hand + net) // 2`, so the
+term enters at half weight and is paid for at full price, and the search cycle that just
+finished was buying plies rather than selling them.
+
+**Correctness.** `tests/test_fasteval.py` is the instrument that matters here: the two
+evaluations are held to the same integer, and mobility is the first term where the mailbox
+walk and the bitboard popcount could plausibly disagree on an edge (a ray stopped by a
+friendly piece, a square only an enemy pawn covers, a knight on the rim). 10,000 positions
+exact, mirror symmetry on 1,000, and the three new weight tuples are in the constants list, so
+they are now 47 checked constants rather than 44. `ruff check` and `uv run mypy` clean.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|
+| mobility | `prod` df8f1fb | 10s+0.1s | 64 | pending | pending | pending | pending | pending |
+
+**The row is not filled in yet and the term is not proven.** The 64-game run is queued behind
+the `eval/half-net` arena, because concurrent games break the time measurement for both. Until
+it lands this is a correctness result and a cost measurement, nothing more: a 22% node rate is
+a real price and the games decide whether the term pays it.
