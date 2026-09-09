@@ -29,7 +29,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from tools.nnue.features import NUM_FEATURES, features
+from tools.nnue.features import MAX_ACTIVE, NUM_FEATURES, features
 
 # Centipawns per unit of network output. 400 is the usual NNUE choice: sigmoid(400/400) = 0.73,
 # so a one-pawn edge is a bit under three quarters of a point.
@@ -78,24 +78,35 @@ def load_shards(
     data_dir: Path, with_hand: bool = False
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Load every shard under ``data_dir`` into RAM: index matrix, cp vector, and, when asked,
-    the ``hand`` vector that ``tools.nnue.hand`` adds (missing it is an error, not a zero)."""
+    the ``hand`` vector that ``tools.nnue.hand`` adds (missing it is an error, not a zero).
+
+    Two passes: the small arrays first to learn the total, then the index rows straight into
+    one preallocated matrix, so the peak is the final size rather than twice it. At 290M rows
+    the difference is 19 GB.
+    """
     paths = sorted(data_dir.glob("*.npz"))
     if not paths:
         raise SystemExit(f"no .npz shards under {data_dir}")
-    index_blocks: list[np.ndarray] = []
     cp_blocks: list[np.ndarray] = []
     hand_blocks: list[np.ndarray] = []
     for path in paths:
         with np.load(path) as shard:
-            index_blocks.append(shard["indices"])
             cp_blocks.append(shard["cp"])
             if with_hand:
                 if "hand" not in shard:
                     raise SystemExit(f"{path} has no hand array; run tools.nnue.hand first")
                 hand_blocks.append(shard["hand"])
-    indices = np.concatenate(index_blocks)
     cp = np.concatenate(cp_blocks)
     hand = np.concatenate(hand_blocks) if with_hand else None
+    indices = np.empty((cp.shape[0], MAX_ACTIVE), dtype=np.int16)
+    filled = 0
+    for path, block in zip(paths, cp_blocks, strict=True):
+        with np.load(path) as shard:
+            rows = shard["indices"]
+        if rows.shape[0] != block.shape[0]:
+            raise SystemExit(f"{path}: {rows.shape[0]} index rows but {block.shape[0]} labels")
+        indices[filled : filled + rows.shape[0]] = rows
+        filled += rows.shape[0]
     megabytes = (indices.nbytes + cp.nbytes + (hand.nbytes if hand is not None else 0)) / 1e6
     print(f"loaded {len(paths)} shard(s), {indices.shape[0]:,} positions, {megabytes:.0f} MB")
     return indices, cp, hand
