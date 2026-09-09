@@ -716,3 +716,15 @@ The untested direction is the opposite weighting; nobody has measured it.
 because that control sits close to the panic floor; `time/growth-cap` showed the same split last
 cycle. Time and budget changes are decided at 45 s + 0.2 s and 120 s + 0.5 s, reading the clock
 minima out of the PGNs; the fast row is a smoke test for them.
+
+### 2026-09-09, round 88: v4.0 drew Phantom by repetition as White. Nothing to fix.
+
+Banner: v4.0 (prod before PR #17 merged, by the finish time). Stockfish 19 at depth 18: our
+ACPL 12 and Phantom's 10, no real blunder on either side, the cleanest of the fourteen reviewed
+games. 99.4 s used, 34.1 s left after 27 moves, depth 6 to 8 at 0.39 to 0.64M nps. Our root
+score sat within 22 cp of Stockfish's on average across the game (mean gap -8), the best
+calibration in any reviewed game: the position was level from move 10 on (Stockfish -57 to +13),
+the two moves that let a small opening edge go were 12.e4 (-66, Bd2 was better) and 16.Bg5
+(-52, Be3), and the repetition from move 30 was taken at 0 against 0. With the hand evaluation
+inside the contempt threshold, a draw scores 0, so accepting it from a position both engines
+read as level is the intended behaviour. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0.
