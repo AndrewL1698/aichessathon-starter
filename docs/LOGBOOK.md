@@ -757,3 +757,12 @@ untested time candidate, and it cuts against `time/hard-divisor-6`, which spends
 harder still. The depth: the stalemate resource needed more than depth 10 to see, and depth 10
 was all half a second bought. The three positions (moves 39, 56, 69) are in `tests/positions`,
 which now holds 48. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0, 5.
+
+*Addendum, measured.* v4.0 at fixed depth on the three positions (40 s each): ...Re6 at move 39
+appears at depth 9; ...Rxg2+ at move 56 and ...Rh8+ at move 69 both appear only at **depth 13**
+(reached depth 15 in 40 s). Depth 13 from the move-69 position is roughly a minute of search at
+v4.0's node rate, so the thin clock did not decide move 69 as the paragraph above implies: no
+budget this engine could have had would have found the stalemate trick there. The correct reading
+is that rounds 87 and 90 lost their half points to depth, and the clock allocation is a second-order
+factor that helps the depth-9 class (move 39, and the depth-6 slips of rounds 82, 86, 87) rather
+than the depth-13 class. Search speed and pruning (cycle 4) are the lever for the latter.
