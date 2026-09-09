@@ -47,6 +47,18 @@ store overwrites whatever shares the slot, which is what `agent.py` effectively 
 the entire dictionary when it fills, which is strictly worse) and costs nothing on the store
 path, where depth-preferred costs a load and a compare on every store.
 
+**The evaluation.** A leaf is scored by `fastnnue`, the learned evaluation, when there is a
+weight file and `fastnnue.USE_NNUE` is set, and by `fasteval`, the hand tables, when there is
+not. The choice is `stats[NNUE_ENABLED]`, read per node rather than compiled in, because numba
+freezes a module global into a compiled function as a constant and a switch that only takes
+effect at the next import is no switch at all. With it off this file searches exactly the tree
+v3.1 searched, which is what `tests/test_fastsearch.py`'s equality against `agent.py` needs.
+
+The net's accumulators are the one piece of state the search has to maintain itself: `acc[ply]`
+holds both perspectives, `push` builds `acc[ply + 1]` from it before each `make_move`, and
+unmaking is free because `acc[ply]` was never touched. `fastnnue`'s docstring has the scheme.
+The root's pair is built from scratch by `static_eval`, once per search.
+
 **Repetition** is the one place the data structure changed the algorithm. `agent.py` keeps a
 set of every position the game has stood in and a set of the current path, and asks both. Here
 they are arrays, and scanning them per node would cost more than the node does. Instead the
@@ -80,6 +92,9 @@ from fastboard import (
     make_move,
     unmake_move,
 )
+
+import fastnnue
+from fastnnue import NET, evaluate_nnue, push, push_null, refresh
 
 # `PIECE_VALUES` is the evaluation's, read here only for MVV-LVA ordering.
 from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate
@@ -187,6 +202,7 @@ CONTEMPT_AT, CHECK_MASK, BEST_MOVE, ROOT_BEST = 4, 5, 6, 7
 TT_PROBES, TT_HITS, TT_STORES, GAME_COUNT = 8, 9, 10, 11
 NULL_ENABLED, NULL_CUTOFFS = 12, 13
 EXPIRED = 14
+NNUE_ENABLED = 15
 STATS_SIZE = 16
 
 # Read-only, so numba can hold it as a global constant.
@@ -201,6 +217,10 @@ _KILLERS_T = nbt.int32[:, ::1]
 _HISTORY_T = nbt.int32[:, :, ::1]
 _KEYS_T = nbt.int64[::1]
 _STATS_T = nbt.int64[::1]
+# The learned evaluation owns both of these types; they are named here so the
+# signatures below read like the rest of the file.
+_ACC_T = fastnnue.ACC_T
+_NET_T = fastnnue.NET_T
 
 
 def state() -> tuple[np.ndarray, ...]:
@@ -208,7 +228,7 @@ def state() -> tuple[np.ndarray, ...]:
 
     Returned as a tuple because every one of these is written from jitted code and so has to
     be an argument rather than a global: `(tt, bufs, scores, killers, history, path, game,
-    stats)`.
+    stats, acc)`.
     """
     return (
         np.zeros((TT_SIZE, 2), dtype=np.int64),
@@ -224,10 +244,13 @@ def state() -> tuple[np.ndarray, ...]:
         # which a 600-ply game cannot overflow.
         np.zeros(UNDO_SIZE, dtype=np.int64),
         np.zeros(STATS_SIZE, dtype=np.int64),
+        # The learned evaluation's accumulators, two perspectives per ply. One deeper than
+        # every other ply-indexed buffer, because `push` at the deepest ply writes ply + 1.
+        fastnnue.accumulators(MAX_SEARCH_PLY + 1),
     )
 
 
-TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS = state()
+TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS, ACC = state()
 
 
 # --------------------------------------------------------------------------------------
@@ -516,6 +539,31 @@ def store(
 
 
 # --------------------------------------------------------------------------------------
+# The leaf evaluation.
+# --------------------------------------------------------------------------------------
+
+
+@njit(nbt.int64(_BOARD_T, _ST_T, _ACC_T, nbt.int64, _STATS_T, _NET_T), cache=False)
+def leaf(
+    board: np.ndarray,
+    st: np.ndarray,
+    acc: np.ndarray,
+    ply: int,
+    stats: np.ndarray,
+    net: tuple,  # type: ignore[type-arg]
+) -> int:
+    """Score a leaf with whichever evaluation is switched on.
+
+    The branch is a read of `stats[NNUE_ENABLED]`, one int64 load and a compare against the
+    thousands of operations on either side of it, and it is read per node so that the switch
+    is a switch: numba would freeze a module-level flag into the compiled function.
+    """
+    if stats[NNUE_ENABLED] != 0:
+        return evaluate_nnue(board, st, acc, ply, net)
+    return evaluate(board, st)
+
+
+# --------------------------------------------------------------------------------------
 # Move ordering.
 # --------------------------------------------------------------------------------------
 
@@ -634,6 +682,8 @@ _QUIESCENCE_SIG = (
     _BUFS_T,
     _BUFS_T,
     _STATS_T,
+    _ACC_T,
+    _NET_T,
     nbt.float64,
     nbt.int64,
     nbt.int64,
@@ -653,6 +703,8 @@ _SEARCH_SIG = (
     _KEYS_T,
     _KEYS_T,
     _STATS_T,
+    _ACC_T,
+    _NET_T,
     nbt.float64,
     nbt.int64,
     nbt.int64,
@@ -669,6 +721,8 @@ def quiescence(
     bufs: np.ndarray,
     scores: np.ndarray,
     stats: np.ndarray,
+    acc: np.ndarray,
+    net: tuple,  # type: ignore[type-arg]
     deadline: float,
     remaining: int,
     ply: int,
@@ -693,7 +747,7 @@ def quiescence(
             # Mate is scored by ply so a shorter mate outranks a longer one.
             return -MATE + ply
         if remaining == 0:
-            return evaluate(board, st)
+            return leaf(board, st, acc, ply, stats, net)
         best = -INFINITY
         # MVV-LVA only, with no killers and no history: `agent.py` orders both quiescence
         # branches with `_order`, and quiescence keeps no killers of its own.
@@ -708,7 +762,7 @@ def quiescence(
         ):
             stats[DRAWS] += 1
             return draw_score(stats, ply)
-        best = evaluate(board, st)
+        best = leaf(board, st, acc, ply, stats, net)
         if best >= beta or remaining == 0:
             return best
         if best > alpha:
@@ -734,9 +788,11 @@ def quiescence(
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
         move = out[index]
+        if stats[NNUE_ENABLED] != 0:
+            push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
         score = -quiescence(
-            board, st, undo, bufs, scores, stats, deadline, remaining - 1, ply + 1,
+            board, st, undo, bufs, scores, stats, acc, net, deadline, remaining - 1, ply + 1,
             -beta, -alpha,
         )
         unmake_move(board, st, undo, move)
@@ -764,6 +820,8 @@ def negamax(
     path: np.ndarray,
     game: np.ndarray,
     stats: np.ndarray,
+    acc: np.ndarray,
+    net: tuple,  # type: ignore[type-arg]
     deadline: float,
     depth: int,
     ply: int,
@@ -801,7 +859,7 @@ def negamax(
         return draw_score(stats, ply)
     if depth <= 0:
         return quiescence(
-            board, st, undo, bufs, scores, stats, deadline, QUIESCENCE_MAX_PLY, ply,
+            board, st, undo, bufs, scores, stats, acc, net, deadline, QUIESCENCE_MAX_PLY, ply,
             alpha, beta,
         )
 
@@ -847,10 +905,12 @@ def negamax(
         and undo[st[8] - 1, 0] != NULL_MARKER
         and has_non_pawn_material(board, side)
     ):
+        if stats[NNUE_ENABLED] != 0:
+            push_null(acc, ply, net)
         make_null(st, undo)
         undo[st[8] - 1, 0] = NULL_MARKER
         score = -negamax(
-            board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
+            board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc, net,
             deadline, depth - 1 - NULL_MOVE_REDUCTION, ply + 1, -beta, -beta + 1,
         )
         unmake_null(st, undo)
@@ -877,6 +937,8 @@ def negamax(
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
         move = out[index]
+        if stats[NNUE_ENABLED] != 0:
+            push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
         score = -negamax(
             board,
@@ -890,6 +952,8 @@ def negamax(
             path,
             game,
             stats,
+            acc,
+            net,
             deadline,
             depth - 1,
             ply + 1,
@@ -943,6 +1007,8 @@ def negamax(
         _KEYS_T,
         _KEYS_T,
         _STATS_T,
+        _ACC_T,
+        _NET_T,
         nbt.float64,
         nbt.int64,
         nbt.int32,
@@ -962,6 +1028,8 @@ def search_root(
     path: np.ndarray,
     game: np.ndarray,
     stats: np.ndarray,
+    acc: np.ndarray,
+    net: tuple,  # type: ignore[type-arg]
     deadline: float,
     depth: int,
     first: int,
@@ -989,6 +1057,8 @@ def search_root(
     for index in range(count):
         pick_best(bufs, scores, 0, index, count)
         move = out[index]
+        if stats[NNUE_ENABLED] != 0:
+            push(board, st[0], acc, 0, move, net)
         make_move(board, st, undo, move)
         score = -negamax(
             board,
@@ -1002,6 +1072,8 @@ def search_root(
             path,
             game,
             stats,
+            acc,
+            net,
             deadline,
             depth - 1,
             1,
@@ -1043,6 +1115,20 @@ def budgets(time_left_ms: int) -> tuple[float, float]:
     soft = time_left_ms / SOFT_DIVISOR + SOFT_BONUS_MS
     hard = max(min(time_left_ms / HARD_DIVISOR, time_left_ms - SAFETY_MARGIN_MS), 0.0)
     return min(soft, hard), hard
+
+
+def static_eval(board: np.ndarray, st: np.ndarray) -> int:
+    """The active evaluation of a root position, and the root accumulator as a side effect.
+
+    Building `ACC[0]` from scratch is the one thing the incremental accumulators cannot do for
+    themselves, and it has to happen once per search before any node below reads `ACC[1]`.
+    Returning the score at the same time is not tidiness: the only caller that wants the
+    number is contempt, and it wants it for exactly the position that was just refreshed.
+    """
+    if fastnnue.active():
+        refresh(board, ACC, 0, NET)
+        return int(evaluate_nnue(board, st, ACC, 0, NET))
+    return int(evaluate(board, st))
 
 
 def contempt_for(root_score: int) -> int:
@@ -1163,10 +1249,13 @@ def think(fen: str, time_left_ms: int) -> str:
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
+    STATS[NNUE_ENABLED] = 1 if fastnnue.active() else 0
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
-    # reading it off the previous iteration's score feeds back on itself.
-    STATS[CONTEMPT_AT] = contempt_for(int(evaluate(board, st)))
+    # reading it off the previous iteration's score feeds back on itself. Whichever evaluation
+    # is active is the one it reads, because the +-150 threshold is in that evaluation's
+    # centipawns; this call is also what builds the root accumulator.
+    STATS[CONTEMPT_AT] = contempt_for(static_eval(board, st))
     KILLERS.fill(0)
     deadline = started + hard_ms / 1000.0
     backstop = _arm_backstop(deadline)
@@ -1204,7 +1293,7 @@ def think(fen: str, time_left_ms: int) -> str:
             score = int(
                 search_root(
                     board, st, undo, TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS,
-                    deadline, depth, best,
+                    ACC, NET, deadline, depth, best,
                 )
             )
             if STATS[ABORTED] != 0:
@@ -1255,6 +1344,7 @@ def search_fixed(
     deadline: float | None = None,
     first: int = 0,
     null_move: bool | None = None,
+    nnue: bool | None = None,
 ) -> tuple[str, int, int]:
     """Search one position to a fixed depth. For tests, benchmarks and the position suite.
 
@@ -1264,8 +1354,9 @@ def search_fixed(
     is a `time.perf_counter()` value, and with none given the search runs to the depth however
     long it takes. `first` is the move to try first, as the iteration loop passes the previous
     depth's answer. `null_move` overrides `NULL_MOVE_PRUNING`, which is what lets the
-    score-equality test measure the search `agent.py` describes rather than this one. The
-    abort flag is left in `STATS[ABORTED]` for the caller to read.
+    score-equality test measure the search `agent.py` describes rather than this one, and
+    `nnue` overrides `fastnnue.USE_NNUE` the same way, so one process can measure both
+    evaluations. The abort flag is left in `STATS[ABORTED]` for the caller to read.
     """
     if fresh:
         reset()
@@ -1275,13 +1366,18 @@ def search_fixed(
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
+    with_nnue = fastnnue.active() if nnue is None else (nnue and fastnnue.LOADED)
+    STATS[NNUE_ENABLED] = int(with_nnue)
     STATS[CHECK_MASK] = NODE_CHECK_MASK
     STATS[CONTEMPT_AT] = contempt
     KILLERS.fill(0)
     remember(int(st[7]))
+    if with_nnue:
+        refresh(board, ACC, 0, NET)
     score = int(
         search_root(
             board, st, undo, TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS,
+            ACC, NET,
             time.perf_counter() + 86_400.0 if deadline is None else deadline, depth, first,
         )
     )
@@ -1295,7 +1391,8 @@ def warm() -> None:
     the two recursive specialisations, which is where a first call on the clock would cost
     the most. The bare-king position at the end runs the mop-up, the quiescence stalemate
     check and the insufficient-material return, so a failure in any of them shows up here
-    rather than in a game.
+    rather than in a game. Both settings of `NNUE_ENABLED` are run, so neither evaluation's
+    path through `leaf` and `push` first executes on the clock.
     """
     far = time.perf_counter() + 3_600.0
     board, st, undo = fb.from_fen(fb.START_FEN)
@@ -1316,13 +1413,19 @@ def warm() -> None:
     score_moves(board, st, BUFS, SCORES, KILLERS, HISTORY, 0, 1, 0)
     score_captures(board, BUFS, SCORES, 0, 1)
     pick_best(BUFS, SCORES, 0, 0, 1)
-    arrays = (TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS)
-    quiescence(board, st, undo, BUFS, SCORES, STATS, far, QUIESCENCE_MAX_PLY, 0,
-               -INFINITY, INFINITY)
-    negamax(board, st, undo, *arrays, far, 2, 1, -INFINITY, INFINITY)
-    search_root(board, st, undo, *arrays, far, 2, 0)
+    arrays = (TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS, ACC)
+    for enabled in (0, 1):
+        STATS[NNUE_ENABLED] = enabled
+        refresh(board, ACC, 0, NET)
+        leaf(board, st, ACC, 0, STATS, NET)
+        quiescence(board, st, undo, BUFS, SCORES, STATS, ACC, NET, far, QUIESCENCE_MAX_PLY, 0,
+                   -INFINITY, INFINITY)
+        negamax(board, st, undo, *arrays, NET, far, 2, 1, -INFINITY, INFINITY)
+        search_root(board, st, undo, *arrays, NET, far, 2, 0)
+    STATS[NNUE_ENABLED] = 1 if fastnnue.active() else 0
     board, st, undo = fb.from_fen("8/8/8/4k3/8/8/8/R3K3 w - - 0 1")
-    search_root(board, st, undo, *arrays, far, 3, 0)
+    refresh(board, ACC, 0, NET)
+    search_root(board, st, undo, *arrays, NET, far, 3, 0)
     reset()
 
 
