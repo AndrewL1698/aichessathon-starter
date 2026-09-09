@@ -96,9 +96,10 @@ HAND = 0
 # The net's centipawns alone. What an absolute net -- one trained to predict the evaluation
 # itself -- is for.
 ABSOLUTE = 1
-# The mean of the two, `(hand + net) // 2`. An experiment rather than a design: if the net is
-# noisy but carries signal the hand evaluation lacks, averaging should beat both, and if it
-# lands between them the net carries nothing new. `docs/BENCH_LOG.md` has the measurement.
+# A weighted blend, `(hand + 3 * net) // 4`. v4.0 shipped the plain mean, `(hand + net) // 2`,
+# which beat the net alone and the residual net; the heavier weight on the net is the v4.1
+# candidate, because the mean halves the net's scale wherever the tables see less than it
+# does. `docs/BENCH_LOG.md` has both measurements.
 BLEND = 2
 # `hand + net`, for a net trained on the *residual* -- Stockfish's centipawns minus
 # `fasteval`'s. Such a file says so itself, with `target='residual'` in the npz, because

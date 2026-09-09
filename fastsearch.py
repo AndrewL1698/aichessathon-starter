@@ -48,13 +48,14 @@ the entire dictionary when it fills, which is strictly worse) and costs nothing 
 path, where depth-preferred costs a load and a compare on every store.
 
 **The evaluation.** A leaf is scored one of four ways -- the hand tables alone, the network
-alone, their mean, or their sum -- and `stats[NNUE_POLICY]` says which. `leaf` has all of it,
-including why a residual net has to declare itself and why a bare endgame is scored by the hand
-tables whatever the policy says. The switch is read per node rather than compiled in, because
-numba freezes a module global into a compiled function as a constant and a switch that only
-takes effect at the next import is no switch at all. Set to `HAND` -- which is the default,
-because no network has beaten the hand evaluation yet -- this file searches exactly the tree
-v3.2 searched, which is what `tests/test_fastsearch.py`'s equality against `agent.py` needs.
+alone, a weighted blend of the two, or their sum -- and `stats[NNUE_POLICY]` says which. `leaf`
+has all of it, including why a residual net has to declare itself and why a bare endgame is
+scored by the hand tables whatever the policy says. The switch is read per node rather than
+compiled in, because numba freezes a module global into a compiled function as a constant and
+a switch that only takes effect at the next import is no switch at all. Set to `HAND` -- which
+is the default, because no network has beaten the hand evaluation yet -- this file searches
+exactly the tree v3.2 searched, which is what `tests/test_fastsearch.py`'s equality against
+`agent.py` needs.
 
 The net's accumulators are the one piece of state the search has to maintain itself: `acc[ply]`
 holds both perspectives, `push` builds `acc[ply + 1]` from it before each `make_move`, and
@@ -575,7 +576,8 @@ def leaf(
     - `HAND`: `fasteval` alone. This is v3.2's evaluation, and with it set the search is
       v3.2's search over v3.2's tree, which `tests/test_fastsearch.py` still proves.
     - `ABSOLUTE`: the net alone, for a net trained to predict the evaluation.
-    - `BLEND`: the mean of the two. An experiment; `docs/BENCH_LOG.md` has the row.
+    - `BLEND`: one part hand to three parts net, `(hand + 3 * net) // 4`. The mean shipped in
+      v4.0; the heavier weight on the net is the v4.1 candidate, see `docs/BENCH_LOG.md`.
     - `RESIDUAL`: the sum, for a net trained on Stockfish's centipawns *minus* `fasteval`'s.
       A weight file declares this itself with `target='residual'`, because scoring a residual
       net as an absolute one is wrong by the whole hand evaluation and still looks plausible.
@@ -593,7 +595,7 @@ def leaf(
         return learned
     hand = evaluate(board, st)
     if policy == BLEND:
-        return (hand + learned) // 2
+        return (hand + 3 * learned) // 4
     return hand + learned
 
 

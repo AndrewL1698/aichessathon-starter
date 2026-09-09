@@ -362,8 +362,8 @@ def check_policies(fens: list[str]) -> str:
     to be true of each of them, not just of the one that shipped first.
 
     `//` on the blend is floor division. Both inputs are side-to-move relative and both are
-    mirror-invariant, so their mean is too, and the search never needs the evaluation to be an
-    odd function; there is nothing for a floor to break here.
+    mirror-invariant, so their weighted blend is too, and the search never needs the
+    evaluation to be an odd function; there is nothing for a floor to break here.
     """
     acc = fn.accumulators(1)
     tally = {"positions": 0, "bare": 0}
@@ -376,7 +376,7 @@ def check_policies(fens: list[str]) -> str:
         wanted = {
             fn.HAND: hand,
             fn.ABSOLUTE: hand if bare else net,
-            fn.BLEND: hand if bare else (hand + net) // 2,
+            fn.BLEND: hand if bare else (hand + 3 * net) // 4,
             fn.RESIDUAL: hand if bare else hand + net,
         }
         for chosen, want in wanted.items():
