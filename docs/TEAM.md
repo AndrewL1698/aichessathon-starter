@@ -101,14 +101,16 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   `(hand + net) // 2` scored **75.0%, Elo +191, interval +109 to +298** over 64 games vs v3.2 at
   10 s + 0.1 s with the book on both sides. The *same weight file used alone* is 48.4%. The
   absolute rows are monotone in validation loss (0.01654 / 0.01541 / 0.01489 giving -106 / -49 /
-  -11 Elo), so the offline metric's ordering is real. **The residual net is a negative result:**
-  best validation loss of any 256-wide file (0.01450) and it played at 47.7%, Elo -16 — parity,
-  200 Elo behind simply averaging. The likely reason is that a residual is added at full weight
-  so the net's noise comes with it, while the blend halves that noise against material; the
-  cheap thing to try is `hand + net // 2`, one more policy and no retraining.
+  -11 Elo), so the offline metric's ordering is real. **The residual nets are a negative result at both
+  widths:** best validation losses measured (0.01450 at h256, **0.01350 at h512**) and they
+  played at 47.7% and **51.6%** — parity, ~180 Elo behind averaging a *worse* net with the hand
+  evaluation. So validation loss orders the absolute nets correctly and does not order policies
+  at all. The likely mechanism is that a residual is added at full weight so the net's noise
+  comes with it, while the blend halves that noise against material; the cheap thing to try is
+  `hand + net // 2`, one more branch in `leaf` and no retraining.
   Zero illegal, zero exceptions, zero timeouts, zero over-budget across 464 games and six weight
-  files. Depth-7 nodes/s by width: h128 1.85M, h256 1.30-1.35M, **h512 0.94M — the first file to
-  miss the 1.0M target**, which is about half a ply.
+  files. Depth-7 nodes/s by width: h128 1.85M, h256 1.30-1.35M, **h512 0.94M — the only file to
+  miss the 1.0M target**, about half a ply, and its row says the width bought nothing.
   **`USE_NNUE` still ships off**, so what plays is v3.2 exactly; flipping it selects the blend,
   which is the configuration that measured +191. Turning it on is the orchestrator's call
   together with which weight file ships. Ignore any 53.1% figure — that is the old 16-game

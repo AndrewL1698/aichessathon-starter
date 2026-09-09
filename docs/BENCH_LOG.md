@@ -509,6 +509,7 @@ evaluation is the only difference between candidate and baseline.
 | nnue-h256-e87 | h256 21M e87 | absolute | 0.01541 | v3.2 | 64 | +26 =3 -35 | 43.0% | -49 | -139 to +34 | 0 / 0 / 0 / 0 |
 | nnue-h256-52m | h256 52M | absolute | 0.01489 | v3.2 | 64 | +28 =6 -30 | 48.4% | -11 | -95 to +72 | 0 / 0 / 0 / 0 |
 | nnue-residual-v32 | h256 52M res | residual | 0.01450 | v3.2 | 64 | +28 =5 -31 | 47.7% | -16 | -101 to +67 | 0 / 0 / 0 / 0 |
+| nnue-h512-res-v32 | h512 52M res | residual | 0.01350 | v3.2 | 64 | +30 =6 -28 | 51.6% | +11 | -72 to +95 | 0 / 0 / 0 / 0 |
 | nnue-blend-e60-v31 | h256 52M e60 | blend | 0.01460 | v3.1 (**book only on our side**) | 64 | +53 =5 -6 | 86.7% | +326 | +231 to +489 | 0 / 0 / 0 / 0 |
 | **nnue-blend-e60-v32** | **h256 52M e60** | **blend** | **0.01460** | **v3.2** | **64** | **+44 =8 -12** | **75.0%** | **+191** | **+109 to +298** | 0 / 0 / 0 / 0 |
 
@@ -535,16 +536,21 @@ between the two is a reasonable estimate of what the book is worth from those op
 -106 / -49 / -11 Elo -- so the offline metric's *ordering* is worth trusting even though its
 level says nothing about board strength.
 
-**The residual net is the surprise, and it is a negative one.** Training the network on
-Stockfish's centipawns *minus* `fasteval`'s, and scoring leaves as `hand + net`, is the
-principled version of the blend and reaches the best validation loss of any 256-wide file
-(0.01450 against the hand evaluation's 0.0329 on the same split). It played at **47.7%, Elo
--16**: parity, indistinguishable from using an absolute net alone, and about 200 Elo behind
-simply averaging. Worth being clear about the mechanism, because it points somewhere: the
-residual is added at *full* weight, so the network's noise arrives at full weight with it,
-while the blend halves the network's noise relative to material. If that reading is right, the
-thing to try is a residual added at half weight -- `hand + net // 2` -- which is one more
-policy and no new training.
+**The residual net is the surprise, and it is a negative one -- at two widths.** Training the
+network on Stockfish's centipawns *minus* `fasteval`'s, and scoring leaves as `hand + net`, is
+the principled version of the blend. It reaches the best validation losses of anything measured
+here -- 0.01450 at 256 wide and **0.01350 at 512**, against the hand evaluation's 0.0329 on the
+same split -- and it played at **47.7%** and **51.6%**. Both are parity. The 512-wide file is
+the best net on paper by a clear margin and it is 180 Elo behind averaging a *worse* net with
+the hand evaluation.
+
+That is the most useful thing on this page, because it says the offline metric stops ordering
+things once the composition changes: within the absolute nets, validation loss ranks them
+correctly; across policies it does not rank them at all. Worth being clear about the mechanism,
+because it points somewhere cheap: the residual is added at *full* weight, so the network's
+noise arrives at full weight with it, while the blend halves that noise relative to material.
+If that reading is right the thing to try is a residual at half weight -- `hand + net // 2` --
+which is one more branch in `leaf` and no new training.
 
 Across 464 benched games and six weight files there were **zero illegal moves, zero exceptions,
 zero flag falls and zero over-budget moves**. `exceptions` is also the fallback count, since
@@ -563,11 +569,10 @@ Depth 7 over the six `tests.test_fastsearch` positions, against the hand evaluat
 | h512 52M res | 512 | residual | **0.94M** | 39% |
 
 The accumulator copy and the second layer both scale with the width, so doubling it costs about
-a third of the node rate. **h512 is the first file to miss the 1.0M target**, at 0.94M. Whether
-that matters is a question for its bench row rather than for this table: 0.94M is still eleven
-times the python-chess engine and the blend bought 200 Elo at 1.30M, so a wider net that
-evaluates better may well be worth a third of the nodes. It is worth knowing before choosing,
-because a third of the node rate is roughly half a ply.
+a third of the node rate -- roughly half a ply. **h512 is the only file to miss the 1.0M
+target**, at 0.94M, and its row above says it did not buy anything with the width: 51.6% at
+0.94M against the blend's 75.0% at 1.30M. So the price is real and, for the residual policy at
+least, it was not worth paying.
 
 ### Why, as far as this branch can tell
 
