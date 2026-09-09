@@ -289,3 +289,16 @@ chose at depth 5 and leaves at depth 9. Both still play the round 74 queen move 
 mate, at depth 9 with a score of -815: the mate is beyond the horizon and the evaluation is
 v2.4's, so deeper search converges on the evaluation's preference, not Stockfish's. The suite
 measures sharpness; the games above decide.
+
+### The final code, with the clock backstop (64885ab)
+
+The 200-game gate again, on the code that ships. Terminations: 184 checkmates, 8 threefold
+repetitions, 7 insufficient material, 1 fifty moves.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3-final-200 | baseline | 10s+0.1s | 200 | +179 =16 -5 | 93.5% | +463 | +396 to +566 | 0 / 0 / 0 / 0 | 1.25s | 266 MB |
+
+Same result inside noise (94.2% became 93.5%), and the worst move is now the hard budget
+itself: 1.25 s at a 10 s clock, where the run without the backstop reached 1.28 s at 9 s and
+the gauntlet 1.35 s at 7.3 s. The 120 s games, the gauntlet and the proxy on this code follow.
