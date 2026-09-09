@@ -704,7 +704,9 @@ clock ran under the 1 s panic floor in 19 of 96 games against 0 for v4.0. 45 s p
 +51, -25 to +133. 120 s + 0.5 s, 16 games: 53.1%, slowest move 20.25 s on a 20.25 s budget,
 clock minimum 5.5 s against v4.0's 7.4 s, no disqualifiers. The mechanism is on record three
 times (rounds 82, 86, 87: decisive depth-6 moves with 44 to 89 s on the clock); the cost is a
-thinner clock at the end. A 96-game proxy extension is running and decides it on the lower bound.
+thinner clock at the end. The 96-game proxy extension came back 53.1% (+22, -34 to +79); pooled over 144 proxy games, 54.5%,
++31, -13 to +77, no game under the 1 s floor. **Not proven, not shipped on the numbers**; PR #18 stays
+open for the team to take or close on the mechanism evidence.
 
 **`eval/blend-net-heavy`, rejected.** Leaf blend one part hand to three parts net. 37.0%, -93,
 -162 to -30. Clean: the hand half of the blend carries signal the net lacks at these depths, and
