@@ -73,6 +73,12 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-09 evening · **v4.1** = v4.0 + PR #17 (KPK rook-pawn draw) + PR #20 (queen-first promotion
+  tie-break, from the M5 session). Frozen at `local-opponents/v4.1`, tag `v4.1`. Bench baseline stays
+  v4.0 for candidates already in flight; new ones use v4.1. Held: PR #16 (null move, proxy says no),
+  PR #18 (hard divisor 6) until `time/platform-spend` reports its proxy rows, then one combined time
+  candidate. In flight: cycle 4 PVS/LMR/futility; the 100M-position net (`nnue-h256-100m-*` on
+  `nnue/weights-v1`), whose epoch-11 file is benching vs v4.0 now.
 - 2026-09-09 morning · **v4.0**: PR #14 (`nnue/runtime`, the compiled learned evaluation, merged with
   the switch off after an independent audit; the one CRITICAL, a damaged weight file failing the
   import, fixed before merge) plus `nnue/v4.0`, which commits `weights/nnue.npz` and sets
