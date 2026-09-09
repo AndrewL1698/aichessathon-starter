@@ -527,8 +527,8 @@ def playout(fen: str, depth: int, enabled: bool, limit: int = 120) -> str:
     fs.reset()
     board = chess.Board(fen)
     for ply in range(1, limit + 1):
-        position, st, _ = fb.from_fen(board.fen())
-        contempt = fs.root_contempt(position, st)
+        position, st, undo = fb.from_fen(board.fen())
+        contempt = fs.root_contempt(position, st, undo)
         uci, _, _ = fs.search_fixed(
             board.fen(), depth, fresh=False, contempt=contempt, nnue=enabled
         )

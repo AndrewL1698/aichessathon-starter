@@ -1166,8 +1166,18 @@ def refresh_root(board: np.ndarray) -> None:
         refresh(board, ACC, 0, NET)
 
 
-def root_contempt(board: np.ndarray, st: np.ndarray) -> int:
-    """What a draw is worth to us here -- from the hand evaluation, whatever scores the leaves.
+def root_contempt(board: np.ndarray, st: np.ndarray, undo: np.ndarray) -> int:
+    """What a draw is worth to us here -- from the hand evaluation, resolved through quiescence.
+
+    The hand evaluation is read through `quiescence` with the leaf policy forced to `HAND`, so
+    the number contempt sees is the hand tables' verdict on the quiet position the captures on
+    the board lead to, not the raw count of what stands on it. The raw count is wrong exactly
+    when a recapture is pending: before 11...Nxa6, 19...Qxe4 and 20...Rxe4 in rated round 90 it
+    read -359, -381 and -947, set contempt to +50 (a draw worth half a pawn to us) in positions
+    the search scored -35, and over v4.0's rated games did that on 22 level moves. That is the
+    one way this engine can steer into a draw from a position it is not losing. The resolved
+    score is on `fasteval`'s scale, which `CONTEMPT_THRESHOLD` was calibrated against, and it
+    costs one quiescence search per move, which is nothing next to the first iteration.
 
     `CONTEMPT_THRESHOLD` is 150 of `fasteval`'s centipawns and was calibrated against them. The
     learned evaluation's are not the same scale: measured over 760 root positions, the
@@ -1182,8 +1192,27 @@ def root_contempt(board: np.ndarray, st: np.ndarray) -> int:
     fifty-move rule and insufficient material return `draw_score` directly, and the
     `fastnnue.bare_endgame` handover is a count of men on the board. So contempt keeps reading
     exactly what it was tuned against, and swapping the leaf evaluation cannot move it.
+
+    The module's own buffers, counters and accumulators are used; nothing else is running when
+    this is called. The quiescence nodes are not counted against the search, contempt is zero
+    while it runs (an insufficient-material leaf inside it would otherwise read the previous
+    move's), and the leaf policy is put back afterwards.
     """
-    return contempt_for(int(evaluate(board, st)))
+    policy = int(STATS[NNUE_POLICY])
+    nodes = int(STATS[NODES])
+    if STATS[CHECK_MASK] == 0:
+        STATS[CHECK_MASK] = NODE_CHECK_MASK
+    STATS[NNUE_POLICY] = HAND
+    STATS[CONTEMPT_AT] = 0
+    resolved = int(
+        quiescence(
+            board, st, undo, BUFS, SCORES, STATS, ACC, NET, time.perf_counter() + 86_400.0,
+            QUIESCENCE_MAX_PLY, 0, -INFINITY, INFINITY,
+        )
+    )
+    STATS[NNUE_POLICY] = policy
+    STATS[NODES] = nodes
+    return contempt_for(resolved)
 
 
 def contempt_for(root_score: int) -> int:
@@ -1328,10 +1357,11 @@ def think(fen: str, time_left_ms: int) -> str:
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
     STATS[NNUE_POLICY] = fastnnue.policy()
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
-    # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
-    # reading it off the previous iteration's score feeds back on itself, and `root_contempt`
-    # for why it is the hand evaluation it reads even when the network scores the leaves.
-    STATS[CONTEMPT_AT] = root_contempt(board, st)
+    # Contempt is set once, from the static evaluation resolved through quiescence, and left
+    # alone; see `_think` for why reading it off the previous iteration's score feeds back on
+    # itself, and `root_contempt` for why it is the hand evaluation it reads even when the
+    # network scores the leaves, and why it is read past the captures on the board.
+    STATS[CONTEMPT_AT] = root_contempt(board, st, undo)
     refresh_root(board)
     KILLERS.fill(0)
     deadline = started + hard_ms / 1000.0
