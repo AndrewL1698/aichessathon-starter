@@ -236,6 +236,15 @@ def train(arguments: argparse.Namespace) -> None:
             checkpoints / f"epoch_{epoch:03d}.pt",
         )
         (checkpoints / "history.json").write_text(json.dumps(history, indent=2))
+        if arguments.patience and epoch > arguments.patience:
+            recent = min(row["val"] for row in history[-arguments.patience :])
+            before = min(row["val"] for row in history[: -arguments.patience])
+            if before - recent < arguments.min_delta:
+                print(
+                    f"stopping: val improved by less than {arguments.min_delta} over the last "
+                    f"{arguments.patience} epochs"
+                )
+                break
 
     best = min(history, key=lambda row: row["val"])
     print(f"best val {best['val']:.6f} at epoch {int(best['epoch'])}")
@@ -265,6 +274,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--val-fraction", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="stop when val has not improved by --min-delta over this many epochs; 0 = never",
+    )
+    parser.add_argument("--min-delta", type=float, default=1e-5)
     parser.add_argument("--device", default="auto", choices=("auto", "mps", "cpu"))
     train(parser.parse_args(argv))
 
