@@ -766,3 +766,38 @@ budget this engine could have had would have found the stalemate trick there. Th
 is that rounds 87 and 90 lost their half points to depth, and the clock allocation is a second-order
 factor that helps the depth-9 class (move 39, and the depth-6 slips of rounds 82, 86, 87) rather
 than the depth-13 class. Search speed and pruning (cycle 4) are the lever for the latter.
+
+### 2026-09-09, rounds 73 to 90 together: where the half points went, and what contempt actually did.
+
+Stockfish 19 at depth 18 over every position of the seventeen rated PGNs, joined to the printed
+root score and contempt of the 721 moves whose search line survives the 4 KB cap.
+
+**Draws from winning positions: one in seventeen.** Games where Stockfish had us at +200 or
+better for a sustained stretch: 73, 75, 76, 79, 80, 83 and 84, all won, and 87, drawn after 24
+plies at +200 to +372. Round 82's +319 lasted one move (34.Qc6 at depth 6 handed it back) and
+that game was otherwise never above +82; rounds 85 and 88 were never ahead; round 90 peaked at
++6. In no game did we repeat a position while Stockfish had us at +100 or better (0 of 17), so
+no half point has gone to accepting a draw. The advantages went at depth 6 to 7 in the
+middlegame (87: 25.Rb1 and 28.bxc4; 82: 34.Qc6), before simplifying was a question.
+
+**Contempt reads the wrong input, in both directions.** `root_contempt` reads the static hand
+evaluation before quiescence. Before a recapture it says we are a piece down: round 90's
+11...Nxa6, 19...Qxe4 and 20...Rxe4 set contempt to +50 (a draw worth half a pawn to us) from
+static scores of -359, -381 and -947 while the search read -35. Over the v4.0 games contempt
+was 0 on 16 of the 17 moves Stockfish had between +150 and +300 and on 28 of 53 above +300,
+so it is off in most positions it exists for; in the level band (-150 to +150) it fired on 53
+of 187 moves, 22 of them draw-seeking. Cost traced so far: none. Risk: a level position with a
+perpetual on offer while contempt says +50. The fix shape is the previous move's root score,
+or a quiescence-resolved static, with the feedback guard `think` already describes.
+
+**Round 90's ending was the horizon, not the weighting.** Contempt was +50 from move 57 to the
+end, the right sign. At fixed depth v4.0 scores the position after 56...Rxg2+ 57.Kxg2 at -576
+to -642 through depth 12, plays 69...Rf7+ at every depth from 6 to 11 at -632 to -679, and
+before move 70 alternates ...Re7, ...Rh7+ and ...Rf8+ at -660 to -683: every check scores as a
+rook down, because the only draw the search knows is a repetition inside its horizon or in the
+game history, and a perpetual against a running king does not repeat inside 11 plies.
+Stockfish's drawing lines there are 12 to 16 plies of forced checks. `fastsearch.negamax` has
+no check extension; that is the standard remedy for exactly this class (a forced sequence of
+checks then costs little depth and reaches its repetition), it is cheap on the compiled board,
+and it is the same class as the 23...b5 mate horizon of round 81. A candidate for cycle 4,
+benched like the rest.
