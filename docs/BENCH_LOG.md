@@ -668,3 +668,31 @@ rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / k
 `check_kpk` and the round 82 positions at depth 10: the three game positions score 0 with
 contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
 attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
+
+## Cycle 4 (M5), 2026-09-09: the round 85 fixes
+
+Two branches off `prod` (v4.0) from the M5, one change each, against `local-opponents/v4.0`.
+A training job (`tools.nnue.train`, one core plus the GPU) was running on the same machine
+throughout both benches; games ran one at a time.
+
+### `search/promo-tiebreak`: an equal-scoring promotion resolves to the queen
+
+Round 85 move 56 (`8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b - - 0 56`): `g2g1q`, `g2g1r` and `f1e1`
+all scored +21 at depth 9 and the engine played the rook. The mechanism is ordering, not
+evaluation: `think` hands the previous iteration's answer to `search_root` as `first`, which is
+ranked `TABLE_BONUS` and searched before everything, and `search_root` improves on it only with
+a strict `>`. A depth-2 iteration returned the rook, every deeper iteration inherited it, and no
+equal score could take it back. `queen_first` swaps an under-promotion out of that slot for the
+queen promotion of the same move when both are legal; the under-promotion stays in the list at
+its own rank, so Saavedra's `c7c8r` is still found (it is strictly better), which the new test
+asserts alongside the round 85 position at four clocks. The search and the evaluation are
+otherwise byte-identical to v4.0; the scores are unchanged, only the tie changes hands.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-promo-tiebreak | v4.0 | 10s+0.1s | 64 | +25 =21 -18 | 55.5% | +38 | -32 to +111 | 0 / 0 / 0 / 0 | 1.26s | 257 MB |
+
+A disqualifier run, not a strength claim: the change fires only on a promotion tie, so the
+interval is v4.0 against itself plus noise. `uv run ruff check .`, `uv run mypy`,
+`tests.test_fastsearch` (with the new `promotion tie-break` check) and `tests.test_nnue` all
+green on the rebased branch.
