@@ -191,6 +191,14 @@ NULL_MOVE_PRUNING = False
 NULL_MOVE_REDUCTION = 2
 # Below this there is nothing left to save: the reduced search would be a quiescence call.
 NULL_MOVE_MIN_DEPTH = 3
+# Check extension. A node whose side to move is in check is searched one ply deeper, so a
+# forced sequence of checks costs the checking side no depth and runs on to its repetition,
+# its mate, or the moment the checks run out. Without it every check costs a full ply, and a
+# perpetual against a running king never repeats inside the horizon: in rated round 90 the
+# engine scored twelve moves of a drawing perpetual as a rook down and let the king out at
+# move 69. Capped by ply so the per-ply arrays cannot overrun, and switched per search like
+# null move so `tests/test_fastsearch.py` can still prove equality with `agent.py`.
+CHECK_EXTENSION = True
 # Written into the captured-piece slot of a null move's undo record, where a real move can
 # only ever write 0 to 12, so the next node can tell it was reached by a pass.
 NULL_MARKER = -1
@@ -221,7 +229,9 @@ NULL_ENABLED, NULL_CUTOFFS = 12, 13
 EXPIRED = 14
 # `fastnnue.HAND`, `ABSOLUTE`, `BLEND` or `RESIDUAL`: how a leaf is scored, see `leaf`.
 NNUE_POLICY = 15
-STATS_SIZE = 16
+# Whether nodes in check are extended this search, and how many were.
+CHECK_EXT_ENABLED, EXTENSIONS = 16, 17
+STATS_SIZE = 18
 
 # Read-only, so numba can hold it as a global constant.
 PIECE_VALUE_BY_KIND = np.array(PIECE_VALUES, dtype=np.int32)
@@ -886,9 +896,9 @@ def negamax(
         return draw_score(stats, ply)
     # The fifty move rule does not rescue a side that is being mated: mate ends the game
     # first, so a position with no escape from check is scored below, not here.
+    checked = is_square_attacked(board, st[5 + side], other)
     if st[3] >= FIFTY_MOVE_PLIES and (
-        not is_square_attacked(board, st[5 + side], other)
-        or count_legal(board, st, undo, bufs, ply) > 0
+        not checked or count_legal(board, st, undo, bufs, ply) > 0
     ):
         stats[DRAWS] += 1
         return draw_score(stats, ply)
@@ -896,6 +906,12 @@ def negamax(
     # instead, and at depth 1 that is every leaf.
     if insufficient_material(board):
         return draw_score(stats, ply)
+    # The check extension, see `CHECK_EXTENSION`. Before the depth test, so a check at the
+    # horizon is searched with its replies instead of being handed to quiescence, and before
+    # the table probe, so the entry is stored at the depth that was actually searched.
+    if checked and stats[CHECK_EXT_ENABLED] != 0 and ply + depth < MAX_DEPTH:
+        depth += 1
+        stats[EXTENSIONS] += 1
     if depth <= 0:
         return quiescence(
             board, st, undo, bufs, scores, stats, acc, net, deadline, QUIESCENCE_MAX_PLY, ply,
@@ -922,7 +938,6 @@ def negamax(
             ):
                 return score
 
-    checked = is_square_attacked(board, st[5 + side], other)
     # The path is what the repetition scan reads, so it may only hold positions the game
     # could really have stood in. A node reached by a null move is not one, and leaving the
     # slot as it was would leave a stale key from a sibling line there, so it is blanked: no
@@ -1322,10 +1337,12 @@ def think(fen: str, time_left_ms: int) -> str:
     observe(int(st[7]))
     soft_ms, hard_ms = budgets(time_left_ms)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED,
+        EXTENSIONS,
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
+    STATS[CHECK_EXT_ENABLED] = 1 if CHECK_EXTENSION else 0
     STATS[NNUE_POLICY] = fastnnue.policy()
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
@@ -1405,7 +1422,7 @@ def think(fen: str, time_left_ms: int) -> str:
         f"{depth_text} {move_text} nodes {STATS[NODES]} "
         f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {hit_rate} cut {STATS[CUTOFFS]} "
-        f"null {STATS[NULL_CUTOFFS]} contempt {STATS[CONTEMPT_AT]:+d} "
+        f"null {STATS[NULL_CUTOFFS]} ext {STATS[EXTENSIONS]} contempt {STATS[CONTEMPT_AT]:+d} "
         f"peakrss {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR:.0f}MB",
         flush=True,
     )
@@ -1426,6 +1443,7 @@ def search_fixed(
     null_move: bool | None = None,
     nnue: bool | None = None,
     policy: int | None = None,
+    check_extension: bool | None = None,
 ) -> tuple[str, int, int]:
     """Search one position to a fixed depth. For tests, benchmarks and the position suite.
 
@@ -1437,17 +1455,22 @@ def search_fixed(
     depth's answer. `null_move` overrides `NULL_MOVE_PRUNING`, which is what lets the
     score-equality test measure the search `agent.py` describes rather than this one, and
     `nnue` overrides `fastnnue.USE_NNUE` the same way and `policy` overrides which of `leaf`'s
-    four ways of scoring a leaf is used, so one process can measure all of them. The abort flag
+    four ways of scoring a leaf is used, so one process can measure all of them.
+    `check_extension` overrides `CHECK_EXTENSION` the same way. The abort flag
     is left in `STATS[ABORTED]` for the caller to read.
     """
     if fresh:
         reset()
     board, st, undo = fb.from_fen(fen)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED,
+        EXTENSIONS,
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
+    STATS[CHECK_EXT_ENABLED] = int(
+        CHECK_EXTENSION if check_extension is None else check_extension
+    )
     with_nnue = fastnnue.active() if nnue is None else (nnue and fastnnue.LOADED)
     chosen = fastnnue.file_policy() if policy is None else policy
     STATS[NNUE_POLICY] = chosen if with_nnue else HAND

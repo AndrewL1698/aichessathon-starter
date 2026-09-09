@@ -103,15 +103,19 @@ def check_against_reference(reference: ModuleType, fens: list[str], depths: tupl
 ):
     """The root score of the port must equal the root score of the engine it came from.
 
-    Null-move pruning is switched off here, and only here. It is the one thing this search
-    does that `agent.py`'s does not, and it is deliberately unsound: it is allowed to miss a
-    line, which is the trade that buys the depth. With it off the two searches are the same
-    algorithm and the scores have to agree exactly; `check_null_move` covers it being on.
+    Null-move pruning and the check extension are switched off here, and only here. They are
+    the two things this search does that `agent.py`'s does not: null move is deliberately
+    unsound, allowed to miss a line, which is the trade that buys the depth, and the extension
+    searches a different, deeper tree in check. With both off the two searches are the same
+    algorithm and the scores have to agree exactly; `check_null_move` and
+    `check_check_extension` cover them being on.
     """
     tally = {"searches": 0, "our nodes": 0, "their nodes": 0, "same move": 0}
     for fen in fens:
         for depth in depths:
-            move, score, nodes = fs.search_fixed(fen, depth, null_move=False)
+            move, score, nodes = fs.search_fixed(
+                fen, depth, null_move=False, check_extension=False
+            )
             their_move, their_score, their_nodes = reference_root(reference, fen, depth)
             if score != their_score:
                 raise Failure(
@@ -189,8 +193,14 @@ def check_promotion_tiebreak() -> str:
     by_uci = {fb.move_to_uci(move): move for move in moves}
     scores = {}
     depth = PROMO_TIEBREAK_DEPTH
+    # The tie is a property of the tree this test was written against; the check extension
+    # searches a different one and the three moves do not tie under it. The mechanism under
+    # test is the root's ordering, which is the same either way, so the tie is measured with
+    # the extension off; `think` below runs the whole engine as shipped.
     for name in ("g2g1q", "g2g1r", "f1e1"):
-        move, score, _ = fs.search_fixed(PROMO_TIEBREAK_FEN, depth, first=by_uci[name])
+        move, score, _ = fs.search_fixed(
+            PROMO_TIEBREAK_FEN, depth, first=by_uci[name], check_extension=False
+        )
         if move != name:
             raise Failure(
                 f"the root at depth {depth} was handed {name} first and returned {move}: "
@@ -225,6 +235,49 @@ def check_promotion_tiebreak() -> str:
         raise Failure("Saavedra: think() no longer plays the winning rook promotion")
     tie = scores["g2g1q"]
     return f"round 85 move 56 ties at {tie:+d}, no under-promotion; Saavedra still c7c8r"
+
+
+# Rated round 90, moves 69 and 70: a rook against two rooks and a pawn, drawn by perpetual
+# check as long as the checks come from the h-file (taking the rook is stalemate). The engine
+# played the f-file check both times and was mated. Every line scores as a rook down at these
+# depths, with or without the extension: what the extension changes is that the checks are
+# searched to their replies, and the h-file check comes out on top four plies earlier.
+PERPETUAL_FENS: tuple[tuple[str, str, str, int], ...] = (
+    ("round 90 move 69", "5r2/7K/6R1/7k/6R1/7P/8/8 b - - 23 69", "f8h8", 9),
+    ("round 90 move 70", "7K/5r2/6R1/7k/6R1/7P/8/8 b - - 25 70", "f7h7", 8),
+)
+
+
+def check_check_extension() -> str:
+    """The extension fires, deepens the tree, and finds the perpetual's check earlier."""
+    found = []
+    for name, fen, wanted, depth in PERPETUAL_FENS:
+        on, _, nodes_on = fs.search_fixed(fen, depth, contempt=fs.CONTEMPT, check_extension=True)
+        extensions = int(fs.STATS[fs.EXTENSIONS])
+        off, _, nodes_off = fs.search_fixed(
+            fen, depth, contempt=fs.CONTEMPT, check_extension=False
+        )
+        if extensions == 0:
+            raise Failure(f"{name}: no node was extended at depth {depth} with the extension on")
+        if nodes_on <= nodes_off:
+            raise Failure(
+                f"{name}: {nodes_on:,} nodes with the extension against {nodes_off:,} without; "
+                f"an extended tree cannot be smaller"
+            )
+        if on != wanted:
+            raise Failure(
+                f"{name} at depth {depth}: {on} with the extension, {wanted} keeps the draw"
+            )
+        if off == wanted:
+            raise Failure(
+                f"{name} at depth {depth}: {wanted} is found without the extension too, so this "
+                f"position no longer shows what the extension buys"
+            )
+        found.append(
+            f"{name} {wanted} at d{depth} ({extensions:,} extensions, "
+            f"{nodes_on / nodes_off:.1f}x nodes)"
+        )
+    return "; ".join(found)
 
 
 def check_null_move(fens: list[str], depth: int) -> str:
@@ -585,6 +638,7 @@ def main() -> None:
 
     print(f"promotion tie-break: {check_promotion_tiebreak()}")
     print(f"null move: {check_null_move(sample[:20], 6)}")
+    print(f"check extension: {check_check_extension()}")
     print(f"fallback: {check_fallback()}")
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
