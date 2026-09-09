@@ -90,15 +90,20 @@ def export(arguments: argparse.Namespace) -> Path:
     model.load_state_dict(checkpoint["model"])
     model.eval()
 
+    # qa is a flag because a net trained without a weight constraint can carry layer-1
+    # weights past 1.0, and then the int16 proof below fails at 1024 on the 32-men bound
+    # even though real positions stay far below it. Halving qa halves the bound; the runtime
+    # reads the scale from the file, so nothing downstream changes.
+    qa = arguments.qa
     with torch.no_grad():
         # torch.nn.Linear stores [out, in]; the runtime wants to gather whole feature rows, so
         # layer 1 is transposed to [768, hidden] and layer 2 to [hidden, 32].
-        l1_weight = _quantise(model.l1.weight.T.numpy(), QA, np.int16)
-        l1_bias = _quantise(model.l1.bias.numpy(), QA, np.int16)
+        l1_weight = _quantise(model.l1.weight.T.numpy(), qa, np.int16)
+        l1_bias = _quantise(model.l1.bias.numpy(), qa, np.int16)
         l2_weight = _quantise(model.l2.weight.T.numpy(), QB, np.int16)
-        l2_bias = _quantise(model.l2.bias.numpy(), QA * QB, np.int32)
+        l2_bias = _quantise(model.l2.bias.numpy(), qa * QB, np.int32)
         l3_weight = _quantise(model.l3.weight.reshape(-1).numpy(), QC, np.int16)
-        l3_bias = _quantise(model.l3.bias.numpy(), QA * QC, np.int32)
+        l3_bias = _quantise(model.l3.bias.numpy(), qa * QC, np.int32)
 
     headroom = _check_accumulator(l1_weight, l1_bias)
     print(f"int16 accumulator headroom: {headroom} of {INT16_MAX} (worst hidden neuron, 32 men)")
@@ -109,7 +114,7 @@ def export(arguments: argparse.Namespace) -> Path:
         out,
         version=np.int32(SCHEME_VERSION),
         hidden=np.int32(hidden),
-        qa=np.int32(QA),
+        qa=np.int32(qa),
         qb=np.int32(QB),
         qc=np.int32(QC),
         cp_scale=np.int32(cp_scale),
@@ -123,7 +128,7 @@ def export(arguments: argparse.Namespace) -> Path:
     size = out.stat().st_size
     print(
         f"wrote {out} ({size:,} bytes, {size / 1e6:.2f} MB) "
-        f"hidden={hidden} qa={QA} qb={QB} qc={QC} cp_scale={cp_scale} "
+        f"hidden={hidden} qa={qa} qb={QB} qc={QC} cp_scale={cp_scale} "
         f"scheme_version={SCHEME_VERSION}"
     )
     if size > 40_000_000:
@@ -135,6 +140,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Quantise a checkpoint to int16 weights.")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--out", default="weights/nnue.npz")
+    parser.add_argument(
+        "--qa", type=int, default=QA, help="layer-1 scale; halve it if the int16 proof fails"
+    )
     export(parser.parse_args(argv))
 
 
