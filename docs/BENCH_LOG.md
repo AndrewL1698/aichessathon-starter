@@ -116,3 +116,61 @@ TABLE_MAX_ENTRIES 1M. 20 plies clean. Full game 130 moves, draw by repetition, 0
 0 illegal, slowest 10.5 s vs hard 11.9 s, 22 moves 3 to 49 ms over hard (clock-check slice),
 peak RSS 514 MB at 996k table entries. Clock: 12.8 s after move 47, 8.7 s after move 60,
 4.4 s minimum. Failed the 10 s floor; not tagged, not shipped. The bench now reports peak RSS.
+
+## Phase 1, 2026-09-08: the numba engine (phase1/search)
+
+`fasteval.py` and `fastsearch.py` are `agent.py`'s evaluation and search compiled by numba over
+the `fastboard` mailbox. `get_move` runs them, validates the move against
+`chess.Board(fen).legal_moves`, and falls back to `_think_python` on any exception or illegal
+move. It is a port, not a redesign, and it is held to that: `tests/test_fasteval.py` proves the
+two evaluations return the same integer on 10,000 positions, and `tests/test_fastsearch.py`
+proves the two searches return the same root score at the same depth on 188 fixed-depth
+searches at depths 2 to 5, at 1.03x the nodes.
+
+Node rate 1.2 to 3.3 M/s against the python-chess engine's 49 to 69 k/s on the same positions,
+25 to 30x, measured under a competing benchmark at load 4 to 6. Depth at 10 s + 0.1 s: median 6,
+range 6 to 7, against the python engine's median 4, range 4 to 5. At 120 s + 0.5 s: median 8,
+range 7 to 8, against median 6, range 4 to 6. Two plies at both controls. Import with warm-up
+3.9 to 4.4 s, RSS after import 216 to 222 MB, peak RSS in a game 226 MB (the table is a fixed
+33 MB, so it does not grow with the game the way the dict did).
+
+Opponents: `../eval-agent` is prod with the evaluation (v2.4), `../memory-agent` is prod before
+it (v2.1). Two games at a time, load 4 to 6 from another benchmark on the same machine.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3.0 shipped | eval-agent v2.4 | 10s+0.1s | 32 | +29 =2 -1 | 93.8% | +470 | +322 to +inf | 0 / 0 / 0 / 0 | 1.25s | 225 MB |
+| v3.0 shipped | sunfish | 10s+0.1s | 16 | +14 =2 -0 | 93.8% | +470 | +307 to +inf | 0 / 0 / 0 / 0 | 1.25s | 225 MB |
+| v3.0 shipped | memory-agent v2.1 | 10s+0.1s | 32 | +30 =0 -2 | 93.8% | +470 | +304 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+| v3.0 null move on | eval-agent v2.4 | 10s+0.1s | 32 | +31 =1 -0 | 98.4% | +720 | +526 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+| v3.0 null move on | sunfish | 10s+0.1s | 16 | +15 =1 -0 | 96.9% | +597 | +397 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+| v3.0 null move on | v3.0 null move off | 10s+0.1s | 32 | +13 =7 -12 | 51.6% | +11 | -100 to +124 | 0 / 0 / 0 / 0 | 1.26s | 225 MB |
+
+| v3.0 shipped | sunfish | 120s+0.5s | 2 | +2 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 13.89s | 224 MB |
+
+Also 16 games at 2 s + 0.1 s and 60 at 3 s + 0.1 s against `baselines/random`: 76 wins, 76 by
+checkmate, no failed terminations.
+
+At the real control the two games against Sunfish, one each colour, were both won with no flag
+and no fallback: `exceptions 0` is the fallback count, since `_think_fast` raises whenever the
+numba engine returns anything `chess.Board(fen).legal_moves` does not contain. The slowest move
+was 13.89 s against a hard budget of 13.89 s at that clock, so the deadline binds to within a
+clock-check slice, which is what reading the real clock through `objmode` every 1024 nodes
+buys over estimating a node budget.
+
+**Null-move pruning is off in what ships, and the two gauntlet rows above are why it is a close
+call rather than a decision.** Head to head against exactly this engine with it on, which is the
+sensitive comparison because everything else is identical, 32 games came back 51.6%, Elo +11,
+interval -100 to +124. The gauntlet rows differ by one loss and one draw out of 32, which is
+inside that interval. It also solved 2 of the 12 regression positions against 3 with it off. So
+the measurement says nothing, and the tie-break is that null move is unsound about quiet lines
+by construction while with it off this search returns `agent.py`'s score at every depth, which
+is the property the whole port is verified against. The code and the constant
+`NULL_MOVE_PRUNING` stay; measure it again once there is a PVS to reduce around, and with the
+300 to 400 games cycle 1 said it would take.
+
+**The regression suite did not improve: 3/12 for the python engine, 3/12 for the numba engine
+with null move off, 2/12 with it on.** Depth reached went from d5-d6 to d7-d9, so the extra
+plies are real and they are not what those twelve positions need. Read that as evidence about
+the evaluation rather than the search: `r73 m11` and `r73 m40` swap places between the two
+engines, and the rest are missed at every depth either engine reaches.
