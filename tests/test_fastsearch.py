@@ -103,10 +103,12 @@ def check_against_reference(reference: ModuleType, fens: list[str], depths: tupl
 ):
     """The root score of the port must equal the root score of the engine it came from.
 
-    Null-move pruning is switched off here, and only here. It is the one thing this search
-    does that `agent.py`'s does not, and it is deliberately unsound: it is allowed to miss a
-    line, which is the trade that buys the depth. With it off the two searches are the same
-    algorithm and the scores have to agree exactly; `check_null_move` covers it being on.
+    Null-move pruning and late move reductions are switched off here, and only here. They
+    are the two things this search does that `agent.py`'s does not, and both are deliberately
+    inexact: null move is allowed to miss a line, and a reduction is allowed to be wrong about
+    a move it ordered late. With both off the two searches are the same algorithm and the
+    scores have to agree exactly; `check_null_move` and `check_late_moves` cover them being
+    on.
 
     The principal variation search is *not* switched off, and this is the test that covers
     it. `agent.py` searches every move at the full window; `fastsearch` searches all but the
@@ -118,7 +120,9 @@ def check_against_reference(reference: ModuleType, fens: list[str], depths: tupl
     tally = {"searches": 0, "our nodes": 0, "their nodes": 0, "same move": 0}
     for fen in fens:
         for depth in depths:
-            move, score, nodes = fs.search_fixed(fen, depth, null_move=False)
+            move, score, nodes = fs.search_fixed(
+                fen, depth, null_move=False, late_moves=False
+            )
             their_move, their_score, their_nodes = reference_root(reference, fen, depth)
             if score != their_score:
                 raise Failure(
@@ -259,6 +263,42 @@ def check_null_move(fens: list[str], depth: int) -> str:
         move_off, _, nodes_off = fs.search_fixed(fen, depth, null_move=False)
         if move_on not in legal:
             raise Failure(f"null move on, depth {depth} from {fen!r} returned {move_on}")
+        on_nodes += nodes_on
+        off_nodes += nodes_off
+        agreed += move_on == move_off
+    saved = 1.0 - on_nodes / max(off_nodes, 1)
+    return (
+        f"mates unaffected; over {len(fens)} positions at d{depth} it searched "
+        f"{on_nodes:,} nodes against {off_nodes:,} ({saved:.0%} fewer) and chose the same "
+        f"move {agreed}/{len(fens)} times"
+    )
+
+
+def check_late_moves(fens: list[str], depth: int) -> str:
+    """Reductions must save nodes without losing a mate or returning an illegal move.
+
+    The same shape as `check_null_move`, and for the same reason: what a reduction is allowed
+    to cost is a quiet move searched in the wrong order, and what it is not allowed to cost is
+    a mate. A reduction is always re-searched at the full depth when it beats the bound, so a
+    mate on the reduced side of the tree still has to come back with its exact distance; if
+    the re-search were dropped these two suites are what would notice.
+    """
+    for fen, _ in MATE_IN_ONE:
+        _, score, _ = fs.search_fixed(fen, 3, late_moves=True)
+        if score != fs.MATE - 1:
+            raise Failure(f"with reductions on, mate in one from {fen!r} scored {score:+d}")
+    for fen in MATE_IN_TWO:
+        _, score, _ = fs.search_fixed(fen, 3, late_moves=True)
+        if score != fs.MATE - 3:
+            raise Failure(f"with reductions on, mate in two from {fen!r} scored {score:+d}")
+    on_nodes = off_nodes = 0
+    agreed = 0
+    for fen in fens:
+        legal = [candidate.uci() for candidate in chess.Board(fen).legal_moves]
+        move_on, _, nodes_on = fs.search_fixed(fen, depth, late_moves=True)
+        move_off, _, nodes_off = fs.search_fixed(fen, depth, late_moves=False)
+        if move_on not in legal:
+            raise Failure(f"reductions on, depth {depth} from {fen!r} returned {move_on}")
         on_nodes += nodes_on
         off_nodes += nodes_off
         agreed += move_on == move_off
@@ -592,6 +632,7 @@ def main() -> None:
 
     print(f"promotion tie-break: {check_promotion_tiebreak()}")
     print(f"null move: {check_null_move(sample[:20], 6)}")
+    print(f"late moves: {check_late_moves(sample[:20], 6)}")
     print(f"fallback: {check_fallback()}")
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
