@@ -19,6 +19,7 @@ The current baseline for the bench is the newest shipped version (v2.4 as of 202
 | v2.2 | 2026-09-08 | a6c1fa6 (PR #6) | `fastboard.py` (numba board, move generation, Zobrist) shipped in the zip but not imported by `agent.py`. Plays identically to v2.1. | Groundwork for v3.0; shipping it early proved the packager and the platform accept it. | **Rated rounds 73 (won vs Castling, 1462) and 74 (lost vs Makina).** Depth 4 to 6, 28% and 57% of the clock unspent, 8 and 4 real blunders. |
 | v2.3 | 2026-09-08 ~17:00 | 8cc4670 (PR #7) | The iteration gate in `_think`: a new depth starts while the soft budget is unspent and the whole projected iteration fits the hard budget. Hard budget and abort path unchanged. | v2.2 refused depth 5 with most of its budget unspent because the cost projection is capped at 8x and table-warmed early depths trip the cap; all four round 74 blunders were such moves. | **Uploaded for round 75.** Fast bench vs v2.2: 53.1%, 51.8%, 54.2% across three runs, no disqualifiers; deeper by about a third of a ply at 120 s. |
 | v2.4 | 2026-09-08 (built ~17:35, awaiting upload) | 1077652 (PR #5) | Tapered evaluation (middlegame and endgame tables blended by material), mop-up for won endings, passed, isolated and doubled pawns, king shield. Evaluation also faster: median 62k nps vs 50k on the same positions. | v2.2 and v2.3 had material plus fixed piece-square tables and nothing else; the ladder above Sunfish is evaluation. Written by a teammate on `phase0/eval`, merged to prod without a bench; benched here before shipping. | Bench vs v2.3: **82.8%** (+25 =3 -4), Elo +273, interval +153 to +510, 32 games; 71.9% vs Sunfish; suite 3 of 12. Clean on disqualifiers, peak RSS 243 MB in a 120 s game. |
+| v3.0 | 2026-09-08 (PR open from `v3/compiled-search`, not yet merged or uploaded) | 64885ab + docs | The v2.4 evaluation and search compiled with numba over `fastboard.py` (`fastsearch.py`), driven by v2.3's time management with a node budget and a wall-clock backstop; the python-chess engine stays in `agent.py` as the fallback; every move checked legal before it leaves. | Cycles 1 to 3 showed the python-chess engine squeezed at depth 5 to 6, and the real blunders were 2 to 4 plies deeper. 2.4M nps against 79k: depth 8 to 9 at 120 s locally against 5 to 6. | Bench vs v2.4 (final code): **93.5%** (+179 =16 -5) over 200 fast games, Elo +463, interval +396 to +566; gauntlet 92.2% vs v2.4, 93.8% vs Sunfish, 100% vs minimax; two 120 s games won; clean on disqualifiers throughout; peak RSS 266 MB; suite 5 of 17 (v2.4 4). Proxy in `docs/BENCH_LOG.md`. |
 
 ## Not shipped
 
@@ -39,4 +40,9 @@ The current baseline for the bench is the newest shipped version (v2.4 as of 202
 - v2.4 and on: further changes inside the python-chess engine (reserve floor, dynamic time
   extension, checks in quiescence, evaluation terms).
 - v3.0: the search moved onto `fastboard.py`, the numba board. A different engine in speed and
-  shape, so a new major.
+  shape, so a new major. Built 2026-09-08 evening on `v3/compiled-search`; on merge and upload it
+  needs the tag, a frozen copy of all three files under `local-opponents/v3.0/`, the bench's
+  `GAUNTLET` pointed at it, and the zip named `submission-v3.0.zip`.
+- v3.1 and on: changes inside the compiled engine (pseudo-legal ordering with lazy legality,
+  checks in quiescence, null move, the pruning that never paid on python-chess), each one
+  benched against v3.0.

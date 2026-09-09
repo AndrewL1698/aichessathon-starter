@@ -73,6 +73,14 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 evening · **PR open** `v3/compiled-search` into `prod`: v3.0, the v2.4 engine on the
+  numba board. `fastsearch.py` (compiled evaluation and search, proven equal to `agent.py`'s on
+  10,045 positions and at fixed depth on 369), the wrapper in `agent.py` with v2.3's clock rules,
+  a node budget and a wall-clock backstop, v2.4 kept as the fallback. 2.4M nps against 79k, depth
+  8 to 9 at 120 s against 5 to 6. Final code vs v2.4: 93.5% over 200 fast games (Elo +463, lower
+  bound +396), 92.2% in the gauntlet, 93.8% vs Sunfish, no disqualifiers anywhere, peak RSS
+  266 MB, `make zip` and `make gate` clean. Includes PR #9's tooling commits (merge #9 first).
+  Not uploaded: the user merges and uploads; v2.4 stays the shipped build until then.
 - 2026-09-08 · **In progress** `phase1/movegen` (PR 6): `fastboard.py`, the numba mailbox core
   (10x12 int8 board, packed int32 moves, pseudo-legal generation, make/unmake, attack detection,
   incremental Zobrist in `st[7]`). No search and no evaluation yet. All 30 published perft counts
