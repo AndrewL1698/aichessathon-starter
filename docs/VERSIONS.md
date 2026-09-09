@@ -7,7 +7,7 @@ the bench plays against, and a row here saying what changed and why. Candidates 
 shipped keep their branch names; they are listed at the bottom and explained in
 `docs/LOGBOOK.md` Part 2, rejections included.
 
-The current baseline for the bench is the newest shipped version (v2.4 as of 2026-09-08 18:00).
+The current baseline for the bench is the newest shipped version (v3.1 as of 2026-09-08 23:45).
 
 ## Shipped
 
@@ -19,6 +19,8 @@ The current baseline for the bench is the newest shipped version (v2.4 as of 202
 | v2.2 | 2026-09-08 | a6c1fa6 (PR #6) | `fastboard.py` (numba board, move generation, Zobrist) shipped in the zip but not imported by `agent.py`. Plays identically to v2.1. | Groundwork for v3.0; shipping it early proved the packager and the platform accept it. | **Rated rounds 73 (won vs Castling, 1462) and 74 (lost vs Makina).** Depth 4 to 6, 28% and 57% of the clock unspent, 8 and 4 real blunders. |
 | v2.3 | 2026-09-08 ~17:00 | 8cc4670 (PR #7) | The iteration gate in `_think`: a new depth starts while the soft budget is unspent and the whole projected iteration fits the hard budget. Hard budget and abort path unchanged. | v2.2 refused depth 5 with most of its budget unspent because the cost projection is capped at 8x and table-warmed early depths trip the cap; all four round 74 blunders were such moves. | **Uploaded for round 75.** Fast bench vs v2.2: 53.1%, 51.8%, 54.2% across three runs, no disqualifiers; deeper by about a third of a ply at 120 s. |
 | v2.4 | 2026-09-08 (built ~17:35, awaiting upload) | 1077652 (PR #5) | Tapered evaluation (middlegame and endgame tables blended by material), mop-up for won endings, passed, isolated and doubled pawns, king shield. Evaluation also faster: median 62k nps vs 50k on the same positions. | v2.2 and v2.3 had material plus fixed piece-square tables and nothing else; the ladder above Sunfish is evaluation. Written by a teammate on `phase0/eval`, merged to prod without a bench; benched here before shipping. | Bench vs v2.3: **82.8%** (+25 =3 -4), Elo +273, interval +153 to +510, 32 games; 71.9% vs Sunfish; suite 3 of 12. Clean on disqualifiers, peak RSS 243 MB in a 120 s game. |
+| v3.0 | 2026-09-08 late | PR #10 (`phase1/search`, 227d8ee) | Search and evaluation moved onto the numba board: `fasteval.py`, `fastsearch.py`; python-chess engine kept as the fallback. Same tree as v2.4, proven by equality tests. | Depth is speed: 1.2–3.3M nps vs 50–70k gives two to three more plies, which is where the rated-game blunders were. | Bench vs v2.4: **93.8%** (+30 =0 -2) at 10 s, 93.8% vs Sunfish, 100% vs minimax; 0 disqualifiers, worst move 1.29 s, peak RSS ~270 MB. Suite 3 of 12 at d7–9. |
+| v3.1 | 2026-09-08 late | `search/clock-backstop` | A timer thread that expires the search at the hard deadline, alongside the node-counted clock read; the search functions release the interpreter lock. Same tree as v3.0. | The clock read is counted in nodes; one slow subtree near the deadline on the 0.4x platform is an overrun with no second stop. Carried over from PR #11, with the thread joined on exit so a late wake cannot expire the next move. | Disqualifier check vs v3.0: 16 fast games, 46.9%, 0 / 0 / 0 / 0. Backstop test: depth-40 searches with the clock read disabled stop within 5 ms of the deadline. |
 
 ## Not shipped
 

@@ -217,3 +217,94 @@ difference), spend 81 s / 96 s vs 98 s / 82 s, 1 loss 1 win; growth-cap-4 depth 
 5.96 / 6.05, spend 109 s / 130 s vs 104 s / 123 s, minimum clock 9.3 s, 2 wins. No
 disqualifiers anywhere. No re-run: the best baseline-column score is 51.6%, nothing to
 reproduce. Cycle 3 closed.
+
+## Phase 1, 2026-09-08: the numba engine (phase1/search)
+
+`fasteval.py` and `fastsearch.py` are `agent.py`'s evaluation and search compiled by numba over
+the `fastboard` mailbox. `get_move` runs them, validates the move against
+`chess.Board(fen).legal_moves`, and falls back to `_think_python` on any exception or illegal
+move. It is a port, not a redesign, and it is held to that: `tests/test_fasteval.py` proves the
+two evaluations return the same integer on 10,000 positions, and `tests/test_fastsearch.py`
+proves the two searches return the same root score at the same depth on 188 fixed-depth
+searches at depths 2 to 5, at 1.03x the nodes.
+
+Node rate 1.2 to 3.3 M/s against the python-chess engine's 49 to 69 k/s on the same positions,
+25 to 30x, measured under a competing benchmark at load 4 to 6. Depth at 10 s + 0.1 s: median 6,
+range 6 to 7, against the python engine's median 4, range 4 to 5. At 120 s + 0.5 s: median 8,
+range 7 to 8, against median 6, range 4 to 6. Two plies at both controls. Import with warm-up
+3.7 to 4.4 s, RSS after import 215 to 225 MB, peak RSS 224 to 226 MB across every gauntlet run
+here. The `make zip` smoke game has been seen anywhere between 202 and 244 MB, because numba's
+compilation allocations live in the same process and are not returned tidily; the search's own
+footprint is what does not move, since the table is a fixed 33 MB array rather than a dict that
+grows with the game.
+
+Opponents: `../eval-agent` is prod with the evaluation (v2.4), `../memory-agent` is prod before
+it (v2.1). Two games at a time, load 4 to 6 from another benchmark on the same machine.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3.0 shipped | eval-agent v2.4 | 10s+0.1s | 32 | +29 =2 -1 | 93.8% | +470 | +322 to +inf | 0 / 0 / 0 / 0 | 1.25s | 225 MB |
+| v3.0 shipped | sunfish | 10s+0.1s | 16 | +14 =2 -0 | 93.8% | +470 | +307 to +inf | 0 / 0 / 0 / 0 | 1.25s | 225 MB |
+| v3.0 shipped | memory-agent v2.1 | 10s+0.1s | 32 | +30 =0 -2 | 93.8% | +470 | +304 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+| v3.0 null move on | eval-agent v2.4 | 10s+0.1s | 32 | +31 =1 -0 | 98.4% | +720 | +526 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+| v3.0 null move on | sunfish | 10s+0.1s | 16 | +15 =1 -0 | 96.9% | +597 | +397 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+| v3.0 null move on | v3.0 null move off | 10s+0.1s | 32 | +13 =7 -12 | 51.6% | +11 | -100 to +124 | 0 / 0 / 0 / 0 | 1.26s | 225 MB |
+
+| v3.0 shipped | sunfish | 120s+0.5s | 2 | +2 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 13.89s | 224 MB |
+| v3.0 after audit fixes | eval-agent v2.4 | 10s+0.1s | 32 | +31 =1 -0 | 98.4% | +720 | +526 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+
+The last row is the confirmation run after the audit fixes. It is nominally better than the
+93.8% above it, but the two intervals overlap almost entirely and 32 games cannot tell them
+apart; what it establishes is that nothing regressed, not that anything improved. The fix that
+matters cannot show up here at all: the fallback never fired in any of these games, and the
+history loss it caused only bites in a game where it does.
+
+Also 16 games at 2 s + 0.1 s and 60 at 3 s + 0.1 s against `baselines/random`: 76 wins, 76 by
+checkmate, no failed terminations.
+
+At the real control the two games against Sunfish, one each colour, were both won with no flag
+and no fallback: `exceptions 0` is the fallback count, since `_think_fast` raises whenever the
+numba engine returns anything `chess.Board(fen).legal_moves` does not contain. The slowest move
+was 13.89 s against a hard budget of 13.89 s at that clock, so the deadline binds to within a
+clock-check slice, which is what reading the real clock through `objmode` every 1024 nodes
+buys over estimating a node budget.
+
+**Null-move pruning is off in what ships, and the two gauntlet rows above are why it is a close
+call rather than a decision.** Head to head against exactly this engine with it on, which is the
+sensitive comparison because everything else is identical, 32 games came back 51.6%, Elo +11,
+interval -100 to +124. The gauntlet rows differ by one loss and one draw out of 32, which is
+inside that interval. It also solved 2 of the 12 regression positions against 3 with it off. So
+the measurement says nothing, and the tie-break is that null move is unsound about quiet lines
+by construction while with it off this search returns `agent.py`'s score at every depth, which
+is the property the whole port is verified against. The code and the constant
+`NULL_MOVE_PRUNING` stay; measure it again once there is a PVS to reduce around, and with the
+300 to 400 games cycle 1 said it would take.
+
+**The regression suite did not improve: 3/12 for the python engine, 3/12 for the numba engine
+with null move off, 2/12 with it on.** Depth reached went from d5-d6 to d7-d9, so the extra
+plies are real and they are not what those twelve positions need. Read that as evidence about
+the evaluation rather than the search: `r73 m11` and `r73 m40` swap places between the two
+engines, and the rest are missed at every depth either engine reaches.
+
+## v3.1, 2026-09-08 late: the timer-thread backstop (search/clock-backstop)
+
+The one idea carried over from the parallel v3.0 port in PR #11. v3.0 reads the clock every
+1024 nodes through `objmode`, so it stops as regularly as nodes come; a thread now sleeps until
+the hard deadline and sets `STATS[EXPIRED]`, which every node reads before the clock check, and
+the search functions release the interpreter lock so the thread can run. The search tree is
+unchanged, so the fast bench is a disqualifier check, not an Elo claim; the test that matters is
+`tests.test_fastsearch`'s `backstop`, which disables the clock read and asks for depth 40: six
+searches all stopped on the thread within 5 ms of the deadline.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| backstop | v3.0 | 10s+0.1s | 16 | +6 =3 -7 | 46.9% | -22 | -199 to +144 | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+
+120 s + 0.5 s against v3.0, one game per colour: won as White by checkmate (54 moves), lost as
+Black by checkmate (29 moves); the tree is identical, so the split is the coin toss it looks
+like. Depth over the first 40 moves 8.55 / 8.83 against v3.0's 8.70 / 7.62 on the other side
+of the same boards, so the flag read per node and `nogil` cost nothing measurable. Worst
+overshoot of the hard budget 1 ms on both sides (the clock-check slice, as before); slowest
+move 13.9 s at a 13.9 s hard budget; clock minima 15.5 s and 28.4 s. The thread never had to
+fire in play, which is the expected case; the test is where it is exercised.
+

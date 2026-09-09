@@ -73,6 +73,21 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 late · **v3.1** `search/clock-backstop`: the timer-thread backstop from PR #11 on
+  top of v3.0, with `STATS[EXPIRED]` read at every node, `nogil` on the three search functions,
+  and the thread joined on exit (the PR #11 audit found `Timer.cancel()` cannot stop a callback
+  whose sleep has ended). Tree unchanged; 16 fast games vs v3.0 clean of disqualifiers; the new
+  `backstop` test stops depth-40 searches with the clock read disabled within 5 ms. PR #11 is
+  superseded by v3.0 + v3.1 and can be closed.
+- 2026-09-08 late · **PR #10 merged** to `prod` = **v3.0**: `fasteval.py` and `fastsearch.py`, the
+  v2.4 evaluation and search compiled by numba over `fastboard.py`; `agent.py` plays the numba move
+  after a python-chess legality check and keeps the python engine as the fallback. Equality-tested
+  (same integer evaluation on 10,000 positions, same root score on 188 fixed-depth searches).
+  1.2–3.3M nps, depth 6 at 10 s and 8 at 120 s; 93.8% vs v2.4 and vs Sunfish. Null move ships off.
+  Audit HIGH fixed before merge (fallback resync via `fastsearch.remember_played`). Head-to-head
+  vs the parallel port in PR #11: 44.9% for #11 over 144 games, interval −88 to +15, i.e. equal
+  within noise; #11 is now conflicting and its extras (timer-thread clock backstop) are for a
+  follow-up. Bench baseline is now v3.0; freeze `local-opponents/v3.0` from the merge commit.
 - 2026-09-08 · **In progress** `phase1/movegen` (PR 6): `fastboard.py`, the numba mailbox core
   (10x12 int8 board, packed int32 moves, pseudo-legal generation, make/unmake, attack detection,
   incremental Zobrist in `st[7]`). No search and no evaluation yet. All 30 published perft counts
