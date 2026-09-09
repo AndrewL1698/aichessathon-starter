@@ -1,5 +1,20 @@
-"""A chess agent: iterative deepening alpha-beta negamax with quiescence over a material and
-piece-square evaluation, remembering what it searched and where the game has been."""
+"""A chess agent: iterative deepening alpha-beta negamax with quiescence over a tapered
+piece-square evaluation, remembering what it searched and where the game has been.
+
+The engine is written twice. `fastsearch` and `fasteval` are the same search and the same
+evaluation compiled by numba over the `fastboard` mailbox, and they are what plays: they are
+about twenty-five times faster than the python-chess version below, which is two more plies in
+the same second. The python-chess version stays in this file and stays correct, because it is
+the fallback: every move the fast engine returns is checked against `chess.Board(fen)` before
+it goes out, and anything that raises or comes back illegal is played by `_think_python`
+instead. A numba miscompilation, an unparsable fen, a move the mailbox believes in and
+python-chess does not - all of them cost a few milliseconds and the slower engine's move,
+rather than the game.
+
+`tests/test_fasteval.py` proves the two evaluations return the same integer on ten thousand
+positions, and `tests/test_fastsearch.py` proves the two searches return the same root score at
+the same depth. They are one engine in two languages, not two engines.
+"""
 
 import resource
 import sys
@@ -9,6 +24,10 @@ from collections.abc import Hashable
 from dataclasses import dataclass, field
 
 import chess
+
+import fastboard
+import fasteval
+import fastsearch
 
 # Scores are centipawns: a pawn is worth 100 points. MATE is deliberately much larger than
 # every possible material and positional score, and INFINITY sits one above it so that a
@@ -1075,15 +1094,33 @@ def _observe(board: chess.Board) -> None:
     _MEMORY.seen.add(_key(board))
 
 
-def _think(fen: str, time_left_ms: int) -> str:
-    """Deepen until the budget is spent, keeping the best move we have proven so far."""
+def _remember_python(fen: str, uci: str) -> None:
+    """Tell the fallback engine about a move the fast engine played.
+
+    Without this the fallback would come back into a game whose history stops at whatever move
+    it last played itself, and would happily repeat a position it had never been told about.
+    """
+    board = chess.Board(fen)
+    board.push(chess.Move.from_uci(uci))
+    _MEMORY.seen.add(_key(board))
+    _MEMORY.expected = board
+
+
+def _think_python(fen: str, time_left_ms: int) -> str:
+    """Deepen until the budget is spent, keeping the best move we have proven so far.
+
+    The fallback engine. `_think_fast` plays every move this does not, and this one only runs
+    when that raised or produced something illegal, so it has to stay correct and stay here.
+    """
     started = time.perf_counter()
     board = chess.Board(fen)
     moves = list(board.legal_moves)
     if not moves:
         return "0000"
 
-    _observe(board)
+    # `get_move` has already called `_observe` for this position, for both engines. Calling it
+    # again here would halve the history a second time on exactly the moves where the fallback
+    # is running, which is when the ordering it holds is most worth keeping.
     soft_ms, hard_ms = _budgets(time_left_ms)
     mask = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone. Reading it off the
@@ -1168,14 +1205,84 @@ def _think(fen: str, time_left_ms: int) -> str:
     return best.uci()
 
 
+def _think_fast(fen: str, time_left_ms: int) -> str:
+    """Search with the numba engine and prove the answer before handing it over.
+
+    The move is checked against python-chess, not against `fastboard`, because `fastboard` is
+    the thing being checked. An illegal move loses the game outright, so the check is worth its
+    move generation whatever the search cost; at the depths this reaches it is a rounding error.
+    """
+    move = fastsearch.think(fen, time_left_ms)
+    if move not in {candidate.uci() for candidate in chess.Board(fen).legal_moves}:
+        raise ValueError(f"the numba engine returned {move!r}, which is not legal in {fen!r}")
+    # Only now, once the move is known to be one that can actually be played. Committing it
+    # inside `think` would write a position the game never entered into the history whenever
+    # this check is the thing that fails.
+    fastsearch.remember_played(fen, move)
+    return move
+
+
 def get_move(fen: str, time_left_ms: int) -> str:
-    """Return a legal UCI move. Nothing raises out of here: a crash loses the game."""
+    """Return a legal UCI move. Nothing raises out of here: a crash loses the game.
+
+    Three engines deep, cheapest failure first: the numba search, then the python-chess search,
+    then any legal move at all. The middle one keeps its own game history whatever the first
+    one does, so falling back mid-game does not fall back into a position it has never seen.
+    """
     try:
-        return _think(fen, time_left_ms)
+        board = chess.Board(fen)
+        if not any(board.legal_moves):
+            return "0000"
+        # Kept up to date on every move, not only the ones it plays: `_observe` is what tells
+        # the fallback where the game has been, and a repetition it cannot see is a lost win.
+        _observe(board)
     except Exception:
         traceback.print_exc()
     try:
-        return next(iter(chess.Board(fen).legal_moves)).uci()
+        move = _think_fast(fen, time_left_ms)
+        _remember_python(fen, move)
+        return move
+    except Exception:
+        traceback.print_exc()
+    # Every path below plays a different move from the one the numba engine proposed, so each
+    # one has to tell both engines what actually went out. Leaving the fast engine's history
+    # describing a move that was never played is not a lost move, it is a lost game: on the
+    # next move `reachable` fails, `observe` concludes it is watching a different game, and
+    # the table and every position the game has stood in are cleared.
+    try:
+        move = _think_python(fen, time_left_ms)
+        fastsearch.remember_played(fen, move)
+        return move
+    except Exception:
+        traceback.print_exc()
+    try:
+        move = next(iter(chess.Board(fen).legal_moves)).uci()
+        _remember_python(fen, move)
+        fastsearch.remember_played(fen, move)
+        return move
     except Exception:
         traceback.print_exc()
         return "0000"
+
+
+def _warm() -> None:
+    """Prove the compiled engine runs, and say how long getting here took.
+
+    Every jitted function is compiled and run once by `fasteval` and `fastsearch` as they
+    import, which is why importing this module is slow and playing a move is not. The platform
+    allows ninety seconds before the clock starts; this prints what it actually spent so the
+    validation log says whether that budget is anywhere near being a problem.
+    """
+    started = time.perf_counter()
+    fastsearch.think(fastboard.START_FEN, 1_000)
+    fastsearch.reset()
+    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR
+    print(
+        f"numba engine ready: compiled fasteval {fasteval.COMPILE_SECONDS:.1f}s + "
+        f"fastsearch {fastsearch.COMPILE_SECONDS:.1f}s, first search "
+        f"{(time.perf_counter() - started) * 1000.0:.0f}ms, rss {rss_mb:.0f}MB",
+        flush=True,
+    )
+
+
+_warm()
