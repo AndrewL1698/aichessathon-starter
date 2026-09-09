@@ -421,6 +421,14 @@ def check_target_marker() -> str:
                     f"{fn.POLICY_NAMES[fn.TARGETS[got]]}, want {fn.POLICY_NAMES[policy]}"
                 )
             checked.append(f"{label} -> {got} -> {fn.POLICY_NAMES[policy]}")
+            # And what the engine would actually do with such a file: a residual is scored
+            # whole, an absolute one is blended, because blending measured 200 Elo better.
+            wanted = fn.RESIDUAL if policy == fn.RESIDUAL else fn.ABSOLUTE_POLICY
+            if fn.TARGETS[got] == fn.RESIDUAL:
+                if wanted != fn.RESIDUAL:
+                    raise Failure("a residual file must never be scored any other way")
+            elif wanted != fn.ABSOLUTE_POLICY:
+                raise Failure(f"an absolute file should be scored {fn.POLICY_NAMES[wanted]}")
         path = workspace / "marked.npz"
         np.savez_compressed(path, **(base | {"target": np.str_("wdl")}))
         try:

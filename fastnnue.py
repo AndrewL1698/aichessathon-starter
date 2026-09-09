@@ -79,9 +79,12 @@ INT16_MAX = 32767
 # --------------------------------------------------------------------------------------
 # The switch, and the four ways a leaf can be scored.
 #
-# Off by default. No network measured so far beats the hand evaluation -- `docs/BENCH_LOG.md`
-# has the rows -- so what ships is v3.2's evaluation and this file is mechanics waiting for a
-# net worth turning on. Flipping `USE_NNUE` is the whole change when one arrives.
+# Off by default, and that is now a decision for the orchestrator rather than a verdict from
+# the measurements. Blended with the hand evaluation, the 52M-position net is **Elo +191** over
+# v3.2 across 64 games with the interval well clear of zero (`docs/BENCH_LOG.md`), so the
+# evidence says turn it on; what it waits on is the orchestrator choosing which weight file
+# ships and re-running the bench against it. Setting this `True` is the whole change, and with
+# a file that declares itself absolute it selects the configuration that was measured.
 # --------------------------------------------------------------------------------------
 
 USE_NNUE = False
@@ -111,8 +114,16 @@ POLICY_NAMES = {HAND: "hand", ABSOLUTE: "absolute", BLEND: "blend", RESIDUAL: "r
 # refused rather than assumed, in `load`.
 TARGETS = {"cp": ABSOLUTE, "absolute": ABSOLUTE, "residual": RESIDUAL}
 
-# Overrides what the weight file asks for. `None` means "whatever the file says", which is the
-# only setting that ships; the bench sets `BLEND` to measure it.
+# How to score an *absolute* net -- one whose file says it predicts the evaluation itself.
+# `BLEND`, not `ABSOLUTE`, and that is a measurement rather than a preference: over 64 games at
+# 10 s + 0.1 s against v3.2, with the opening book on both sides, the same weight file scored
+# **75.0% (Elo +191, interval +109 to +298) blended** against the hand evaluation and **48.4%
+# (Elo -11)** alone. `docs/BENCH_LOG.md` has every row. A residual net is never blended: its
+# output is a correction that only means anything added whole.
+ABSOLUTE_POLICY = BLEND
+
+# Overrides both of the above. `None` means "whatever the file asks for", which is the only
+# setting that ships.
 POLICY: int | None = None
 
 # --------------------------------------------------------------------------------------
@@ -568,10 +579,17 @@ def active() -> bool:
 
 
 def file_policy() -> int:
-    """How to score a leaf when the net is on: what the file asks for, or the override."""
+    """How to score a leaf when the net is on: what the file asks for, or the override.
+
+    A residual file is scored as a residual and nothing else. An absolute one is scored the way
+    `ABSOLUTE_POLICY` says, which is blended, because that is what measured 200 Elo better than
+    using it alone.
+    """
     if POLICY is not None:
         return POLICY
-    return TARGETS[FILE_TARGET]
+    if TARGETS[FILE_TARGET] == RESIDUAL:
+        return RESIDUAL
+    return ABSOLUTE_POLICY
 
 
 def policy() -> int:
