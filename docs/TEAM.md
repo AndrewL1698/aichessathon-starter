@@ -73,8 +73,8 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
-- 2026-09-08 evening · **PR open** `v3/compiled-search` into `prod`: v3.0, the v2.4 engine on the
-  numba board. `fastsearch.py` (compiled evaluation and search, proven equal to `agent.py`'s on
+- 2026-09-08 evening · **PR #11 open** `v3/compiled-search` into `prod`: v3.0, the v2.4 engine on
+  the numba board. `fastsearch.py` (compiled evaluation and search, proven equal to `agent.py`'s on
   10,045 positions and at fixed depth on 369), the wrapper in `agent.py` with v2.3's clock rules,
   a node budget and a wall-clock backstop, v2.4 kept as the fallback. 2.4M nps against 79k, depth
   8 to 9 at 120 s against 5 to 6. Final code vs v2.4: 93.5% over 200 fast games (Elo +463, lower

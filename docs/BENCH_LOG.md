@@ -339,6 +339,8 @@ speed ratio has not been measured yet):
 | v3-final-proxy45 | baseline | 45s+0.2s | 24 | +20 =3 -1 | 89.6% | +374 | +234 to +1051 | 0 / 0 / 0 / 0 | 5.63s | 265 MB |
 
 Terminations: 21 checkmates, one draw each by repetition, fifty moves and insufficient
-material, one loss (Sicilian Dragon as Black). The worst move is the 5.625 s hard budget. The
+material, one loss (Sicilian Dragon as Black, mated with a queen and a rook against a bare
+king). The fifty-move draw was rook against bishop, a book draw v3.0 held from the losing
+side, which is what `DRAWISH_MARGIN` and contempt are for. The worst move is the 5.625 s hard budget. The
 gain holds at the slower control (v2.4 over v2.3 was 77.1% here). **v3.0 passes every gate;
 the PR into `prod` is open. The bench baseline stays v2.4 until v3.0 is uploaded.**

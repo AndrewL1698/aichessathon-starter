@@ -521,7 +521,7 @@ leaves at depth 9. Deeper is not automatically sharper by Stockfish's lights, wh
 suite does not decide anything. `tests.test_fastboard`
 clean.
 
-**Verdict: v3.0 passes every gate, and the PR into `prod` is open.** On the final code with the
+**Verdict: v3.0 passes every gate, and PR #11 into `prod` is open.** On the final code with the
 backstop: 93.5% over 200 fast games against v2.4 (+179 =16 -5, Elo +463, lower bound +396);
 gauntlet 92.2% against v2.4, 93.8% against Sunfish, 100% against minimax; 89.6% at the 45 s +
 0.2 s control (+20 =3 -1, Elo +374, lower bound +234); both 120 s games won by checkmate at
