@@ -36,6 +36,7 @@ import chess.polyglot
 
 import fastboard
 import fasteval
+import fastnnue
 import fastsearch
 
 # Scores are centipawns: a pawn is worth 100 points. MATE is deliberately much larger than
@@ -1130,6 +1131,12 @@ def _think_python(fen: str, time_left_ms: int) -> str:
 
     The fallback engine. `_think_fast` plays every move this does not, and this one only runs
     when that raised or produced something illegal, so it has to stay correct and stay here.
+
+    It stays on the hand evaluation whatever the fast engine is playing. Porting `fastnnue` to
+    python-chess would be a second implementation of the quantisation to keep in step with the
+    first, at forty times the cost per leaf, in the engine that only ever runs when the fast
+    one has already failed. A fallback move from a weaker evaluation is a move; a fallback that
+    is itself wrong is a game.
     """
     started = time.perf_counter()
     board = chess.Board(fen)
@@ -1352,21 +1359,27 @@ def get_move(fen: str, time_left_ms: int) -> str:
 def _warm() -> None:
     """Prove the compiled engine runs, and say how long getting here took.
 
-    Every jitted function is compiled and run once by `fasteval` and `fastsearch` as they
-    import, which is why importing this module is slow and playing a move is not. The platform
-    allows ninety seconds before the clock starts; this prints what it actually spent so the
-    validation log says whether that budget is anywhere near being a problem.
+    Every jitted function is compiled and run once by `fasteval`, `fastnnue` and `fastsearch`
+    as they import, which is why importing this module is slow and playing a move is not. The
+    platform allows ninety seconds before the clock starts; this prints what it actually spent
+    so the validation log says whether that budget is anywhere near being a problem.
+
+    The line also names the evaluation that is actually going to play. Whether the learned one
+    is active depends on a weight file that ships separately, and reading that off a game log
+    afterwards beats guessing: `fastnnue.STATUS` says either which net loaded or why none did.
     """
     started = time.perf_counter()
     fastsearch.think(fastboard.START_FEN, 1_000)
     fastsearch.reset()
     rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR
+    evaluation = fastnnue.STATUS if fastnnue.active() else f"hand ({fastnnue.STATUS})"
     book = f"{len(_BOOK):,} entries" if _BOOK is not None else f"none at {BOOK_PATH}"
     print(
         f"numba engine ready: compiled fasteval {fasteval.COMPILE_SECONDS:.1f}s + "
+        f"fastnnue {fastnnue.COMPILE_SECONDS:.1f}s + "
         f"fastsearch {fastsearch.COMPILE_SECONDS:.1f}s, first search "
         f"{(time.perf_counter() - started) * 1000.0:.0f}ms, rss {rss_mb:.0f}MB, "
-        f"book {book}",
+        f"evaluation {evaluation}, book {book}",
         flush=True,
     )
 

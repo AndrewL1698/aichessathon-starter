@@ -6,4 +6,12 @@ submission.zip
 *.pgn
 local-opponents/sunfish/sunfish.py
 !logs/*.pgn
+tools/nnue/data/
+tools/nnue/checkpoints/
 tools/book/cache/
+# Weight files are never committed from a feature branch. `harness/package.py` has
+# `DEFAULT_INCLUDES = ("weights",)`, so anything sitting here is packaged into submission.zip,
+# and a smoke net left behind would ship instead of the real one. The net that ships arrives
+# by its own PR from the machine that trained it, and only that PR removes this line.
+# `weights/book.bin` is committed on `prod` and is not matched by this.
+weights/*.npz

@@ -73,6 +73,57 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-09 · **In progress** `nnue/runtime`: `fastnnue.py`, the shipped half of the learned
+  evaluation. numba inference of the exported integer weights, exact against
+  `tools/nnue/nnue_ref.py` on 2,000 positions for all three weight files on `nnue/weights-v1`
+  (h128 at qa512/qb512, h256 at qa512/qb512, h256-e87 at qa256/qb1024 — every scale and the
+  hidden size are read from the file, none is hardcoded). Two perspective accumulators per ply,
+  `push` before every `make_move` and nothing on the way back, checked against a from-scratch
+  build over 10,000 make/unmake sequences including castling, en passant, promotions and null
+  moves: zero mismatches. `uv run python -m tests.test_nnue [--full]`.
+  **One deviation from the brief, on measurement.** The policy was to be "net plus `fasteval`'s
+  mop-up term in mop-up positions". Played out that way, KRRvK drew by repetition and KPvK never
+  promoted: the net scores every move in those within a few centipawns of every other (they all
+  leave the same men on the board) and the mop-up term is worth at most 120 cp. So leaves past
+  `fastnnue.bare_endgame` — either side down to a king and at most two other men, `fasteval`'s
+  own bound — are scored by the hand tables outright, mop-up, drawish scaling and bare-minor
+  zero included. All five bare endgames now convert and the playouts are byte-identical with the
+  network on and off, which is the test.
+  1.85M nodes/s at depth 7 against the hand evaluation's 2.41M, import 5.2 s with warm-up,
+  peak RSS 251 MB. `USE_NNUE` switches evaluations, and with it off `tests.test_fastsearch`'s
+  score equality against `agent.py` still holds exactly, so this PR changed the evaluation and
+  nothing else. Missing or malformed weights fall back to v3.1's hand evaluation and the init
+  log line names whichever is active. `torch` moved from `[project] dependencies` to an
+  optional `nnue` extra (`uv sync --extra nnue`); nothing that ships imports it.
+  **Weights are not committed on this branch** — `weights/*.npz` is gitignored with a comment
+  saying why, and the orchestrator brings `nnue/weights-v1` in at merge time.
+  **The result: blending the network with the hand evaluation is worth about 200 Elo.**
+  `(hand + net) // 2` scored **75.0%, Elo +191, interval +109 to +298** over 64 games vs v3.2 at
+  10 s + 0.1 s with the book on both sides. The *same weight file used alone* is 48.4%. The
+  absolute rows are monotone in validation loss (0.01654 / 0.01541 / 0.01489 giving -106 / -49 /
+  -11 Elo), so the offline metric's ordering is real. **The residual nets are a negative result at both
+  widths:** best validation losses measured (0.01450 at h256, **0.01350 at h512**) and they
+  played at 47.7% and **51.6%** — parity, ~180 Elo behind averaging a *worse* net with the hand
+  evaluation. So validation loss orders the absolute nets correctly and does not order policies
+  at all. The likely mechanism is that a residual is added at full weight so the net's noise
+  comes with it, while the blend halves that noise against material; the cheap thing to try is
+  `hand + net // 2`, one more branch in `leaf` and no retraining.
+  Zero illegal, zero exceptions, zero timeouts, zero over-budget across 464 games and six weight
+  files. Depth-7 nodes/s by width: h128 1.85M, h256 1.30-1.35M, **h512 0.94M — the only file to
+  miss the 1.0M target**, about half a ply, and its row says the width bought nothing.
+  **`USE_NNUE` still ships off**, so what plays is v3.2 exactly; flipping it selects the blend,
+  which is the configuration that measured +191. Turning it on is the orchestrator's call
+  together with which weight file ships. Ignore any 53.1% figure — that is the old 16-game
+  disqualifier row, not a strength number; `docs/BENCH_LOG.md` has the seven real rows and
+  reads the baseline column, since a row against v3.1 from a post-merge candidate measures the
+  opening book as well as the evaluation (that is the 86.7% row, kept only as the confounded
+  counterpart of the controlled 75.0%).
+  Also here: four leaf policies behind one stats slot, weight files that declare `target='cp'`
+  or `'residual'` (an unknown marker is refused, absent means absolute), and contempt reading
+  the hand evaluation whatever scores the leaves — the 52M nets read a dead-equal position as
+  +46 cp for whoever is to move, which cancels in negamax and did not cancel against
+  `CONTEMPT_THRESHOLD`. The `bare_endgame` handover is a count of men, so no cp offset moves it.
+
 - 2026-09-09 · **In review** `book/opening` (PR: opening book): `weights/book.bin`, a 24,479
   entry polyglot book (391,664 bytes) read by `chess.polyglot` before the search up to ply 20,
   weighted by master game counts, legality-checked, and committed to both engines' history

@@ -6,9 +6,15 @@ dependencies = [
     "chess==1.11.2",
     "numpy==2.5.2",
     "numba==0.67.0",
-    "torch==2.13.0",
     "onnxruntime==1.29.0",
 ]
+
+# torch is a training-only dependency: `tools/nnue` imports it, nothing that ships does, and
+# the runtime inference in `fastnnue.py` is numba over the exported integer weights. It is a
+# 200 MB download, so it stays out of `uv sync` and arrives only with `uv sync --extra nnue`.
+# The platform preinstalls torch 2.13 either way; this pin is what the training runs on.
+[project.optional-dependencies]
+nnue = ["torch==2.13.0"]
 
 [tool.uv]
 package = false
@@ -22,7 +28,7 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [dependency-groups]
-dev = ["mypy>=1.18", "ruff>=0.14"]
+dev = ["mypy>=1.18", "ruff>=0.14", "zstandard>=0.23"]
 
 [tool.ruff]
 line-length = 100
@@ -35,4 +41,12 @@ ignore = ["N818"]
 
 [tool.mypy]
 strict = true
-files = ["agent.py", "fastboard.py", "fasteval.py", "fastsearch.py", "harness", "tests"]
+files = [
+    "agent.py",
+    "fastboard.py",
+    "fasteval.py",
+    "fastnnue.py",
+    "fastsearch.py",
+    "harness",
+    "tests",
+]

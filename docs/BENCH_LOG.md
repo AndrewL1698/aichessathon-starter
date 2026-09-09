@@ -387,3 +387,239 @@ the book is silent there (3 master games through that position), so nothing diff
 Sveshnikov game is the measurement that matters: one book move at ply 15 cost 0 ms instead of
 about 11 s, and the clock after move 10 is 85.8 s against the opponent's 75.4 s. That is the
 whole mechanism - the book buys clock in the openings it knows, and is silent in the rest.
+
+## v3.2 candidate, 2026-09-09: the learned evaluation at runtime (nnue/runtime)
+
+`fastnnue.py` is the shipped half of the NNUE: numba inference of the integer weights
+`tools/nnue/export.py` writes, with two perspective accumulators kept per ply. This section is
+**mechanics and speed**. The evaluation changed, so the search tree changed, and nothing here
+is an Elo claim about the network beyond the rows measured below.
+
+### What was verified rather than assumed
+
+`uv run python -m tests.test_nnue [--full]`, against every `weights/nnue*.npz` present. The
+three files on `nnue/weights-v1` deliberately use three different scale combinations — h128 at
+`qa512 qb512`, h256 at `qa512 qb512`, h256-e87 at `qa256 qb1024` — and every scale and the
+hidden width is read from the file, so a scale assumption cannot hide:
+
+- **Exact equality with `tools/nnue/nnue_ref.py`**, 2,000 positions per file (943 with Black to
+  move, 60 with a live en passant, 198 with a promotion available, 985 endgames): **0
+  mismatches**, all three files. Not a tolerance — the reference is the specification the
+  export was verified against, and the two routes to the answer are independent, a mailbox scan
+  with a precomputed index table here against `board.piece_map()` and the index formula there.
+- **Incremental accumulators equal a from-scratch build**, 10,000 make/unmake sequences per
+  file driven through the calls the search makes in the order it makes them, both perspectives
+  compared in full at every ply (362 captures, 4 en passant, 22 promotions, 6 castles, 363 null
+  moves): **0 mismatches**. `acc[ply]` is also snapshotted and re-checked after each unmake,
+  which is the property the design rests on: unmaking is free because `acc[ply]` is never
+  written.
+- **Seven broken weight files all refused** and a missing one reported as missing: a future
+  scheme version, a hidden size the arrays contradict, a zero scale, a transposed first layer,
+  a bias at the wrong width, a bias at the wrong dtype, and an `l1_weight` whose int16
+  accumulator can overflow. A refused file is the hand evaluation and a line in the init log,
+  never a crash and never a net read with the wrong shapes.
+- **Floor division**, 65 cases including negative numerators at every scale a shipped file
+  uses. C truncation would put every negative evaluation one centipawn high, which is small
+  enough to pass a tolerance and large enough to break the equality above.
+- **`tests.test_fastsearch` with `USE_NNUE` off** still scores exactly what `agent.py` scores,
+  30 searches, unchanged. That is what says this branch changed the evaluation and nothing else.
+  Its legality, timeout and backstop checks pass again with the network on.
+
+### The evaluation policy, and the one thing the brief got wrong
+
+The plan was "network centipawns plus `fasteval`'s mop-up term in mop-up positions". Measured,
+that is not enough. Played out at a fixed depth with the network scoring the leaves and the
+mop-up term added on top:
+
+| ending | net + mop-up | hand evaluation |
+|---|---|---|
+| KRvK | mate | mate |
+| KQvK | mate | mate |
+| KRRvK | **draw by repetition** | mate in 9 plies |
+| KPvK | **draw by repetition** | mate |
+
+The reason is structural rather than a tuning miss. The network's training set is positions
+real games reached, so KRRvK and KPvK are a vanishing fraction of it, and it scores every legal
+move in KRRvK within a few centipawns of every other — every one of them leaves the same men on
+the board. The mop-up term is worth at most 120 cp by construction and the network's own
+variation across those positions is larger than that. KPvK is worse still: it is a hundred
+centipawns ahead, not four hundred, so `fasteval`'s mop-up condition does not even fire and the
+network was scoring it alone.
+
+So the policy shipped is a handover, not an addition: **leaves past `fastnnue.bare_endgame` —
+either side down to a king and at most two other men, which is `fasteval`'s own
+`MOP_UP_MAX_WEAK_PIECES` — are scored by the hand tables outright**, mop-up, drawish scaling and
+bare-minor zero included. There is nothing to lose by it: everything a learned evaluation knows
+is about positions with men on the board, and what decides a bare endgame is geometry and the
+fifty-move clock, which is what those three terms were written and tested for. The test is that
+all five bare endgames convert *and* that the playouts are identical with the network on and
+off, which cannot pass if a single leaf past the line is still scored by the network:
+
+```
+KRvK mate in 33 plies, KQvK mate in 19, KRRvK mate in 11, KPvK mate in 41, KBBvK mate in 47
+```
+
+The gate costs a dozen loads on a full board, because it counts each side's men from that
+side's own end and stops at the limit.
+
+### Speed
+
+The cost of a learned evaluation is paid twice per node: an accumulator update on the way down
+and an inner product at the leaf. Depth 7 over the six `tests.test_fastsearch` positions, h128:
+
+| position | network on | hand evaluation | ratio |
+|---|---|---|---|
+| start | 2.02M nodes/s | 2.97M | 68% |
+| kiwipete | 1.78M | 2.01M | 88% |
+| italian | 1.81M | 2.17M | 83% |
+| queens gambit | 2.01M | 2.56M | 78% |
+| sicilian | 1.83M | 2.62M | 70% |
+| endgame | 1.62M | 2.14M | 76% |
+| **mean** | **1.85M nodes/s** | **2.41M** | **77%** |
+
+Comfortably past the 1.0M target, and it took two fixes to get there. The first version ran
+**0.56M nodes/s**: the second layer's inner product accumulated into int64 and clipped the
+accumulator with a branch, and neither vectorises, so 4,096 multiply-accumulates cost 2,815 ns
+a leaf. int32 accumulation of an int16 by int16 product is one SIMD instruction and `min`/`max`
+clips without a branch — the same integers, 610 ns. Fusing the accumulator copy with the moving
+piece's delta saved another pass. Hoisting the clip into a scratch row was measured too and
+saved 29 ns of 610, which is not worth another array threaded through every frame of the search,
+so it was not done.
+
+Import with warm-up **5.2 s** against v3.1's 4.1 s (the target was 6 s; the 90 s the platform
+allows is not close to binding), peak RSS **251 MB** against v3.1's 220 MB, and the 2 GB cap is
+not close either.
+
+### Gauntlet
+
+Every 64-game row is at 10 s + 0.1 s. `nnue-h128` and `nnue-blend-e60-v31` ran one game at a
+time; the two `-v32` rows ran two at a time, so their worst move times are taken under load and
+the timing measurement to trust is the single-game rows'. Weights come from `nnue/weights-v1`;
+the smoke net was used only while the mechanics were being written and no number here is its.
+
+**Read the baseline column before the score column.** `local-opponents/v3.1` has no opening
+book and `local-opponents/v3.2` does. A post-merge candidate has one, so a row against v3.1 is
+measuring the book as well as the evaluation, and the v3.2 rows are the ones where the
+evaluation is the only difference between candidate and baseline.
+
+| run | net | policy | val loss | baseline | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|---|---|
+| nnue-h128-disq | h128 21M | absolute | 0.01654 | v3.1 (no book either side) | 16 | +8 =1 -7 | 53.1% | +22 | -158 to +216 | 0 / 0 / 0 / 0 |
+| nnue-h128 | h128 21M | absolute | 0.01654 | v3.1 (no book either side) | 64 | +20 =5 -39 | 35.2% | -106 | -201 to -25 | 0 / 0 / 0 / 0 |
+| nnue-h256-e87 | h256 21M e87 | absolute | 0.01541 | v3.2 | 64 | +26 =3 -35 | 43.0% | -49 | -139 to +34 | 0 / 0 / 0 / 0 |
+| nnue-h256-52m | h256 52M | absolute | 0.01489 | v3.2 | 64 | +28 =6 -30 | 48.4% | -11 | -95 to +72 | 0 / 0 / 0 / 0 |
+| nnue-residual-v32 | h256 52M res | residual | 0.01450 | v3.2 | 64 | +28 =5 -31 | 47.7% | -16 | -101 to +67 | 0 / 0 / 0 / 0 |
+| nnue-h512-res-v32 | h512 52M res | residual | 0.01350 | v3.2 | 64 | +30 =6 -28 | 51.6% | +11 | -72 to +95 | 0 / 0 / 0 / 0 |
+| nnue-blend-e60-v31 | h256 52M e60 | blend | 0.01460 | v3.1 (**book only on our side**) | 64 | +53 =5 -6 | 86.7% | +326 | +231 to +489 | 0 / 0 / 0 / 0 |
+| **nnue-blend-e60-v32** | **h256 52M e60** | **blend** | **0.01460** | **v3.2** | **64** | **+44 =8 -12** | **75.0%** | **+191** | **+109 to +298** | 0 / 0 / 0 / 0 |
+
+### What the rows say
+
+**The blend wins, and it wins by a lot.** Averaging the network with the hand evaluation,
+`(hand + net) // 2`, scored **75.0%, Elo +191, interval +109 to +298** against v3.2 with the
+book on both sides. The *same weight file* used alone is worth 48.4%. That is not a tuning
+gain; it is the difference between a network that costs Elo and one that pays about 200 of it,
+from one line in `leaf`.
+
+The hypothesis the blend was built to test was exactly right: a network that is noisy but
+carries real signal should beat both halves when averaged with a solid evaluation, and a
+network that carries nothing new should land between them. It landed far above both, so the
+network knows things `fasteval` does not; what it could not do alone was keep its material
+sanity, and halving it against the hand tables supplies that.
+
+**The 86.7% row is the one not to quote.** Its candidate had the opening book and its baseline
+did not, so it measures the book too. It is kept here because the honest version of "we got
++326" is "+326 was the confounded number, +191 is the controlled one", and because the gap
+between the two is a reasonable estimate of what the book is worth from those openings.
+
+**The absolute rows are monotone in validation loss** -- 0.01654 / 0.01541 / 0.01489 giving
+-106 / -49 / -11 Elo -- so the offline metric's *ordering* is worth trusting even though its
+level says nothing about board strength.
+
+**The residual net is the surprise, and it is a negative one -- at two widths.** Training the
+network on Stockfish's centipawns *minus* `fasteval`'s, and scoring leaves as `hand + net`, is
+the principled version of the blend. It reaches the best validation losses of anything measured
+here -- 0.01450 at 256 wide and **0.01350 at 512**, against the hand evaluation's 0.0329 on the
+same split -- and it played at **47.7%** and **51.6%**. Both are parity. The 512-wide file is
+the best net on paper by a clear margin and it is 180 Elo behind averaging a *worse* net with
+the hand evaluation.
+
+That is the most useful thing on this page, because it says the offline metric stops ordering
+things once the composition changes: within the absolute nets, validation loss ranks them
+correctly; across policies it does not rank them at all. Worth being clear about the mechanism,
+because it points somewhere cheap: the residual is added at *full* weight, so the network's
+noise arrives at full weight with it, while the blend halves that noise relative to material.
+If that reading is right the thing to try is a residual at half weight -- `hand + net // 2` --
+which is one more branch in `leaf` and no new training.
+
+Across 464 benched games and six weight files there were **zero illegal moves, zero exceptions,
+zero flag falls and zero over-budget moves**. `exceptions` is also the fallback count, since
+`_think_fast` raises on any move python-chess will not accept, so the numba engine never handed
+out a move the board did not believe in.
+
+### Speed by hidden width
+
+Depth 7 over the six `tests.test_fastsearch` positions, against the hand evaluation's 2.4-2.5M:
+
+| net | width | policy | nodes/s | of hand |
+|---|---|---|---|---|
+| h128 21M | 128 | absolute | 1.85M | 77% |
+| h256 52M e60 | 256 | blend | 1.30M | 53% |
+| h256 52M res | 256 | residual | 1.35M | 55% |
+| h512 52M res | 512 | residual | **0.94M** | 39% |
+
+The accumulator copy and the second layer both scale with the width, so doubling it costs about
+a third of the node rate -- roughly half a ply. **h512 is the only file to miss the 1.0M
+target**, at 0.94M, and its row above says it did not buy anything with the width: 51.6% at
+0.94M against the blend's 75.0% at 1.30M. So the price is real and, for the residual policy at
+least, it was not worth paying.
+
+### Why, as far as this branch can tell
+
+Over 1,393 positions from random playouts, with the bare endgames excluded so the handover is
+not what is being measured:
+
+| | slope against material | r against material | sd |
+|---|---|---|---|
+| network | 0.64 | 0.706 | 498 cp |
+| hand evaluation | 1.00 | 0.983 | 559 cp |
+
+The network knows what the pieces are worth — from the start position, removing a Black pawn is
++76 cp, a knight +337, a rook +483, the queen +857, all close enough — but across a sample it
+tracks material at r = 0.706 against the hand evaluation's 0.983, on a scale 36% flat, and its
+mean absolute disagreement with the hand evaluation is 288 cp. That is a couple of hundred
+centipawns of positional opinion swinging around on top of material, and a search whose leaves
+disagree with each other by that much will trade a pawn for nothing.
+
+Read the correlation figures with one caveat: random playouts are not the distribution the net
+was trained on, so they measure its behaviour *off* distribution rather than its quality. The
+64-game result is on real games and is the verdict; the correlation is a hypothesis about the
+mechanism, and the actionable version of it is that the loss (MSE on `sigmoid(cp / 400)`) buys
+very little accuracy per centipawn once a position is lopsided, which is exactly where a search
+needs it. Worth trying before another bench: more data, a wider net, or a loss with a material
+term in it.
+
+The 23% node-rate cost is not the explanation. Three quarters of the nodes is about a third of a
+ply, which is worth tens of Elo at these depths, not a hundred.
+
+### The side-to-move offset, and the one line that read it
+
+The 52M-position nets carry a tempo bonus: they score a dead-equal position at **+46 cp for
+whoever is to move** — the same +46 with either side to move, in the start position and in bare
+kings alike, against the hand evaluation's 0. That is not a bug in the export and not a
+perspective error; the mirror identity still holds exactly, which is what the parity test
+proves. It is a term the network learned, and a moderate one is normal in an engine.
+
+It cancels in negamax at even depths and does not cancel where a centipawn figure is compared
+against a constant. There is exactly one such place, and it was found by looking rather than by
+losing games to it: `contempt_for`'s `CONTEMPT_THRESHOLD`, 150 cp, calibrated against
+`fasteval`. Over 760 root positions, feeding the network's score to it fired contempt in **69%**
+of them against the hand evaluation's **58%**, agreeing on the sign only **62%** of the time.
+What that buys is a draw refused in positions that are not actually won.
+
+So contempt reads the hand evaluation whatever scores the leaves (`fastsearch.root_contempt`).
+Nothing else in the draw handling reads an evaluation at all — repetition, the fifty-move rule
+and insufficient material return `draw_score` directly — and the `fastnnue.bare_endgame`
+handover is a count of men on the board, not a score, so a cp offset cannot move it either. The
+h128 and h256-e87 rows above were measured *before* that change, with the network feeding
+contempt; the fix can only have helped, and it is one line if it needs re-measuring.
