@@ -643,6 +643,32 @@ clock minima 24.4 s and 41.0 s. Pooled with the doer's 64-game row the blend is 
 over 160 games, 78.1%.
 
 
+## Cycle 4, small fixes, 2026-09-09: what the rated-game reviews pointed at
+
+Baseline `local-opponents/v4.0`, 96 games at 10 s + 0.1 s per candidate, four at a time, the
+disqualifier counts and peak RSS from `harness.bench`. These are the three "small" items from the
+reviews of rounds 76 to 86 in `docs/LOGBOOK.md`: a rule the evaluation lacks, one time constant,
+one blend weight. One change per branch off `prod`.
+
+### `eval/kpk-rook-pawn-draw`: king and rook pawn against a bare king is a draw
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kpk-rook-pawn-draw | baseline | 10s+0.1s | 96 | +28 =32 -36 | 45.8% | -29 | -88 to +28 | 0 / 0 / 0 / 0 | 1.29s | 256 MB |
+
+**The bench is not the instrument for this one, and the row says why.** The rule can only fire
+in king-and-one-pawn positions with the pawn on a rook file and the defender in front; scanning
+the 96 PGNs, 7 games reached a king-and-pawn ending of any kind and **3 reached the rule's
+position, all three with the candidate defending, all three drawn**, which is what those
+positions are. The other 93 games ran code that is byte-for-byte v4.0's apart from a handful of
+integer compares at the leaf, so the -29 is the timing noise of two identical engines playing
+four at a time on a laptop; the interval is the honest statement and it includes zero. Node
+rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / kiwipete against
+3.93M / 2.61M on the sibling branch). What the change is measured by is `tests.test_fasteval`'s
+`check_kpk` and the round 82 positions at depth 10: the three game positions score 0 with
+contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
+attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
+
 ## Cycle 4 (M5), 2026-09-09: the round 85 fixes
 
 Two branches off `prod` (v4.0) from the M5, one change each, against `local-opponents/v4.0`.
