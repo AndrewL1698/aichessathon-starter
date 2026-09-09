@@ -160,6 +160,7 @@ PANIC_MS = 1_000
 GROWTH_MIN = 2.0
 GROWTH_MAX = 8.0
 GROWTH_UNKNOWN = 5.0
+SOFT_OVERRUN = 1.5
 NPS_FLOOR_MS = 5
 
 TABLE_BONUS = 4_000_000
@@ -1242,7 +1243,13 @@ def reset() -> None:
 
 
 def budgets(time_left_ms: int) -> tuple[float, float]:
-    """The soft and hard budgets in milliseconds, as `_budgets` computes them."""
+    """The soft and hard budgets in milliseconds, as `_budgets` computes them.
+
+    The soft budget is what an average move is meant to cost and the only thing the iteration
+    gate tests against elapsed time; the hard budget is the deadline the search aborts on, and
+    it is what the backstop thread is armed for. Neither changed here. `SOFT_OVERRUN` in
+    `think` is what now stands between them.
+    """
     soft = time_left_ms / SOFT_DIVISOR + SOFT_BONUS_MS
     hard = max(min(time_left_ms / HARD_DIVISOR, time_left_ms - SAFETY_MARGIN_MS), 0.0)
     return min(soft, hard), hard
@@ -1288,7 +1295,15 @@ def contempt_for(root_score: int) -> int:
 
 
 def projected(last_ms: float, previous_ms: float) -> float:
-    """What the next iteration costs, from the last one and how fast cost is growing."""
+    """What the next iteration costs, from the last one and how fast cost is growing.
+
+    An estimate, and a low one: over round 85's 73 moves the iteration that actually ran last
+    cost a median 1.28 times what this returned, and 63% of them cost more than it said. The
+    floor is what does it -- a table-warmed iteration that came in barely dearer than the one
+    before it clamps growth to `GROWTH_MIN`, and the next depth is nothing like twice the last.
+    Raising the floor was measured and is not the fix (see `think`); the fix is to stop
+    trusting this number all the way out to the hard deadline.
+    """
     growth = last_ms / previous_ms if previous_ms > 0.0 else GROWTH_UNKNOWN
     return last_ms * min(max(growth, GROWTH_MIN), GROWTH_MAX)
 
@@ -1448,6 +1463,9 @@ def think(fen: str, time_left_ms: int) -> str:
     partial = False
     last_ms, previous_ms = 0.0, 0.0
 
+    # How far past the soft budget an iteration is allowed to be projected to run. See the gate.
+    ceiling_ms = min(hard_ms, SOFT_OVERRUN * soft_ms)
+
     # A zero budget means the clock is under the safety margin, and then even the first
     # hundred nodes are time we do not have: the ordered first move is the whole reply.
     deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
@@ -1455,12 +1473,29 @@ def think(fen: str, time_left_ms: int) -> str:
         for depth in range(1, deepest + 1):
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             # Start an iteration while the soft budget is not yet spent and the whole iteration
-            # is projected to finish inside the hard budget. The first condition keeps the average
-            # move near the soft budget; the second refuses only iterations that would be cut off
-            # by the deadline and wasted, rather than every iteration that might end past the soft
-            # budget, which left most of the clock unspent. This is `agent.py`'s gate exactly.
+            # is projected to finish inside `ceiling_ms`. The first condition keeps the average
+            # move near the soft budget; the second refuses iterations that would be cut off by
+            # the deadline and wasted, rather than every iteration that might end past the soft
+            # budget, which left most of the clock unspent (v2.2's problem, and v2.3's fix).
+            #
+            # `ceiling_ms` is `SOFT_OVERRUN * soft_ms`, not the hard budget, and that is what
+            # rated round 85 changed. Gating on the hard budget alone means a move that starts
+            # its last iteration a hair under the soft budget may then run all the way to the
+            # deadline: at a 99.3 s clock, soft 4.4 s and hard 12.4 s, move 5 spent 9.7 s, and
+            # 16 of the game's 73 moves spent more than one and a half times their soft budget.
+            # The projection is not good enough to carry that much rope -- it reads a median
+            # 1.28x low (see `projected`) -- so iterations kept being started that could not
+            # finish, and 34 s of the 149 s spent went into iterations the deadline threw away.
+            # Replaying the game with the gate capped at 1.5x soft: the clock at move 60 rises
+            # from 9.6 s to 23.9 s, the slowest move falls from 14.1 s to 8.6 s, wasted
+            # iterations from 11 to 2, and mean depth over the first 40 moves moves 7.00 to
+            # 6.92. Raising `GROWTH_MIN` instead only reached 11 s at move 60, and a reserve in
+            # the hard budget cost a third of a ply for the same clock. The hard budget and the
+            # abort path are untouched; below a ~9.2 s clock `soft_ms` is already clamped to
+            # `hard_ms` and this ceiling cannot bind. `agent.py`'s gate is v2.3's and no longer
+            # matches this one; it is the fallback engine and its budgets are its own.
             if depth > 1 and (
-                elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > hard_ms
+                elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > ceiling_ms
             ):
                 break
             iteration_started = time.perf_counter()
