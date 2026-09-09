@@ -26,14 +26,20 @@ no engine, ours or anyone's, is consulted anywhere in this file.
 Breadth-first from the standard start position and from each of the eight sample openings in
 `harness/rules.py`, keeping at most `--max-moves` moves per position, each of which needs
 `--min-games` games and `--min-share` of the most-played move's count. `--min-games` defaults
-well below the brief's 100 because that number was calibrated against the explorer's ~2.5M
-game database: this corpus is a few hundred thousand games, and 100 there is a dozen here.
+to 12 rather than 100: at 100 the book is 6,600 entries and answers only two of the eight
+sample openings at all, and these collections are already filtered by opening, so a line with
+a dozen games in them is a line with far more than a dozen in an unfiltered database.
+
+Four of those eight sample openings occur in **no** master game in the corpus (English 3
+games, Petroff 0, Scotch 0, French Classical 0), so no threshold puts them in the book and no
+book built from human games can. `tests/test_book.py` records the measured depth per opening.
 
 Raw downloads are cached under `tools/book/cache/` (gitignored), so a rebuild re-reads the
 zips and never re-fetches them.
 """
 
 import argparse
+import pickle
 import random
 import re
 import struct
@@ -162,6 +168,19 @@ def encode(board: chess.Board, move: chess.Move) -> int:
         to_square = chess.square(rook_file, rank)
     promotion = 0 if move.promotion is None else move.promotion - 1
     return to_square | (move.from_square << 6) | (promotion << 12)
+
+
+def cached_tally(archives: list[Path], per_file: int) -> dict[tuple[int, int], int]:
+    """`tally`, kept on disk. Counting a corpus this size takes minutes; filtering it is
+    instant, and the filters are what get tuned."""
+    path = CACHE / f"counts-{len(archives)}x{per_file}.pickle"
+    if path.exists():
+        counted: dict[tuple[int, int], int] = pickle.loads(path.read_bytes())
+        print(f"  {len(counted):,} position-moves from {path.name}")
+        return counted
+    counted = tally(archives, per_file)
+    path.write_bytes(pickle.dumps(counted, protocol=pickle.HIGHEST_PROTOCOL))
+    return counted
 
 
 def tally(archives: list[Path], per_file: int) -> dict[tuple[int, int], int]:
@@ -315,7 +334,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=ROOT / "weights" / "book.bin")
     parser.add_argument("--files", type=int, default=0, help="use only the first N collections")
-    parser.add_argument("--games-per-file", type=int, default=1500)
+    parser.add_argument("--games-per-file", type=int, default=5000)
     parser.add_argument("--min-games", type=int, default=12)
     parser.add_argument("--min-share", type=float, default=0.15)
     parser.add_argument("--max-moves", type=int, default=4)
@@ -332,7 +351,7 @@ def main() -> None:
         _fetch(OPENING_URL.format(name=name), archive)
 
     started = time.perf_counter()
-    counts = tally(archives, arguments.games_per_file)
+    counts = cached_tally(archives, arguments.games_per_file)
     print(f"counted in {time.perf_counter() - started:.0f}s")
 
     entries, boards = select(
@@ -348,6 +367,19 @@ def main() -> None:
     )
     for name, plies in coverage(arguments.out):
         print(f"  {name:<22} {plies} plies of book on the most popular line")
+    print("what the corpus knows about each root, before the filters:")
+    for name, board in roots():
+        key = chess.polyglot.zobrist_hash(board)
+        played = sorted(
+            (
+                (counts[(key, encode(board, move))], move.uci())
+                for move in board.legal_moves
+                if (key, encode(board, move)) in counts
+            ),
+            reverse=True,
+        )
+        listed = ", ".join(f"{uci} {count}" for count, uci in played[:5]) or "nothing"
+        print(f"  {name:<22} {sum(count for count, _ in played):>7,} games: {listed}")
 
 
 def _cache_path(name: str) -> Path:
