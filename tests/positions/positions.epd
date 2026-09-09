@@ -48,3 +48,5 @@ r2q1rk1/pbp2ppp/1p2p3/3PP3/4nB2/2P3P1/P1Q1PPBP/R4RK1 b - - 0 13; bm e6d5; id "r8
 3r2k1/1p3ppp/p7/8/P7/1qP5/1P3PPP/R1B1RK2 b - - 2 23; bm d8d1; id "r84 m23 h5 -494"
 2k1rb1r/pp1n1pp1/2p3n1/3p3N/3P2B1/2P3P1/PP1B1P2/2KR3R b - - 3 20; bm h8g8; id "r85 m20 a5 -175"
 8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b - - 0 56; bm f1e1; id "r85 m56 g1=R -256"
+# Round 86 (v4.0, lost to AIY). Stockfish 19 depth 18, 150 cp threshold, real only; the second flagged move was already lost.
+r1bq1rk1/1p1p1p2/2nN1bpp/p1P1p3/8/6P1/PP1NPPBP/R2Q1RK1 b - - 3 16; bm b7b6; id "r86 m16 Bg7 -381"

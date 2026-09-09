@@ -629,3 +629,34 @@ endgame contempt loop (`fasteval` endgame terms plus `root_contempt`), advantage
 in BLEND). Nothing here is a wrong design; the search is a correct bare alpha-beta missing its
 standard pruning, and the evaluation's remaining faults are one handover rule and one blend
 weight. The five positions above are in `tests/positions`, which now holds 43.
+
+### 2026-09-09, round 86: v4.0's first loss, to AIY in 56 moves as Black.
+
+Banner: v4.0. Stockfish 19 at depth 18: our ACPL 56, 2 real blunders; AIY's ACPL 15 with no
+real mistake, the strongest opponent in the fourteen reviewed games. Clock 130.8 s used, 13.7 s
+left, depth 6 to 7 through the middlegame at 0.41 to 0.54M nps, both first moves from the book
+(7...cxd4 and 8...Qa5 cost 1 and 3 cp; 8...Qa5 is Stockfish's own choice, and the retreat
+9...Qd8 our search's, 1 cp).
+
+**How it was lost.** Three small slips at depth 7 against exact play, 10...Re8 (-74),
+11...a5 (-115) and 12...e5, took Stockfish's figure from -43 to -229 by move 12 while ours read
+-35 to -42. Then **16...Bg7 at depth 6** (-150 to -531, Stockfish wants ...b6), played after
+1.5 s of a 4.0 s soft budget with 89 s on the clock: the gate refused depth 7 because a
+table-warmed depth 6 times the growth cap of 8 overshot the 11.2 s hard budget. That is the
+same shape as 34.Qc6 in round 82 and 14.g4 in round 77, and it is the third real blunder in
+the reviewed games that a one-ply-deeper search would have avoided while most of the clock sat
+unused. In this game the seven gate-refused moves (under half the soft budget) carried two of
+the three real blunders; the 22 moves that ran past the soft budget carried none. The rest is a
+strong engine converting; 45...Kd5 into a lost queen ending is the other flagged move.
+
+**Calibration when losing.** From move 17 to 35 our root score sat 300 to 430 cp above
+Stockfish's (-154 to -632 against -517 to -969). Rounds 82 to 85 showed the same compression on
+the winning side (+50 where Stockfish had +250 to +500); it is symmetric, which is what
+`leaf`'s `(hand + net) // 2` predicts wherever the net sees more than the tables. No "unseen
+danger" move in the v3.1 sense (score above -100 while Stockfish is at or below -250): the sign
+is right, the size is not.
+
+**What it adds to the v4.1 candidates.** The gate candidate (`time/hard-divisor-6`) gets its
+clearest example; the blend candidate (`eval/blend-net-heavy`) gets the losing-side half of its
+evidence. The position before 16...Bg7 is in `tests/positions`, which now holds 44. Blunders
+per game, real only, v4.0: 2, 0, 1, 2, 2.
