@@ -173,15 +173,22 @@ RSS_DIVISOR = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
 # runs the score-equality test with it off, and the bench measures both settings.
 # --------------------------------------------------------------------------------------
 
-# Off, on the evidence. Head to head over 32 games at 10 s + 0.1 s against exactly this
-# engine with it on, it scored 51.6%, Elo +11 with a 95% interval of -100 to +124: no
-# measurable gain either way, and it solved one fewer of the twelve regression positions
-# (2/12 against 3/12). It is unsound about quiet lines by construction, and with it off this
-# search returns the same score as `agent.py`'s at every depth, which is a property worth
-# keeping for nothing. The code and the switch stay because the interval is far too wide to
-# call it harmful either, and it should be measured again once there is a principal variation
-# search to reduce against, which is where null move usually earns its keep.
-NULL_MOVE_PRUNING = False
+# On, and the two controls do not agree about it. The 51.6% (Elo +11, -100 to +124) that kept
+# this off was 32 games on v3.0, a hand-evaluated search at 2.4M nodes/s reaching depth 6 at
+# the fast control. Re-measured on v4.0, where the leaf is the learned evaluation and a ply
+# costs twice what it did: **56.8% over 200 games at 10 s + 0.1 s, Elo +47 with a 95%
+# interval of +6 to +90** -- the first pruning candidate this project has measured with an
+# interval clear of zero. At the 45 s + 0.2 s platform proxy the same build is **46.4% over 96
+# games, Elo -25, -86 to +34**, and at 120 s + 0.5 s it reached depth 8.65 against v4.0's 8.43
+# on the same board, which is no depth at all. So what it buys is real at a 10 s clock and not
+# visible at a platform clock, and `docs/BENCH_LOG.md` has both rows rather than the flattering
+# one. Nothing here is a disqualifier: 296 games with zero illegal moves, exceptions, timeouts
+# or over-budget moves, and a worst overshoot of the hard budget of 1 ms.
+#
+# It stays a flag rather than a fact, because it is the one thing this search does that
+# `agent.py`'s does not, and `tests/test_fastsearch.py`'s score equality against `agent.py`
+# runs with it off.
+NULL_MOVE_PRUNING = True
 # Two plies shallower plus the ply the null move itself costs.
 NULL_MOVE_REDUCTION = 2
 # Below this there is nothing left to save: the reduced search would be a quiescence call.

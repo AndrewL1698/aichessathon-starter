@@ -642,3 +642,49 @@ of the hard budget 1 ms; slowest moves 11.9 s at a 13.4 s hard budget and 9.8 s 
 clock minima 24.4 s and 41.0 s. Pooled with the doer's 64-game row the blend is +112 =26 -22
 over 160 games, 78.1%.
 
+
+## Cycle 4, 2026-09-09: pruning on the compiled engine with a learned leaf
+
+Baseline `local-opponents/v4.0`. Cycles 1 to 3 measured null move, LMR and futility as noise on
+the python-chess engine at 60k nodes/s; the engine is now the compiled one at 1.3M nodes/s with
+the network scoring the leaves, so a saved node is worth about twice what it was and every one
+of them is worth re-measuring. Candidates are branches off `prod`, one change each, 200 games at
+10 s + 0.1 s each with the disqualifier counts, then the 45 s + 0.2 s platform proxy and two
+120 s + 0.5 s games for whatever clears zero. Regression suite (`tests/positions/run.py
+--engine fast`, 17 positions, depth 11, 20 s each) reported beside the Elo, never instead of it:
+**prod v4.0 solves 9 of 17**, which is the before figure for every row below.
+
+### `search/null-move-v4`: null-move pruning turned on
+
+`NULL_MOVE_PRUNING = True`. Nothing else changed: the conditions were already the standard ones
+(not in check, depth >= 3, no null after a null, the side to move has a piece, no mate score in
+the window) and PR #10's fix for the repetition path -- a null-move node writes 0 into `path[]`
+rather than its key -- is in the code being switched on.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-null-move-v4 | baseline | 10s+0.1s | 200 | +88 =51 -61 | 56.8% | +47 | +6 to +90 | 0 / 0 / 0 / 0 | 1.28s | 257 MB |
+| search-null-move-v4-proxy45 | baseline | 45s+0.2s | 24 | +5 =7 -12 | 35.4% | -104 | -249 to +11 | 0 / 0 / 0 / 0 | 5.66s | 254 MB |
+| search-null-move-v4-proxy45-96 | baseline | 45s+0.2s | 96 | +31 =27 -38 | 46.4% | -25 | -86 to +34 | 0 / 0 / 0 / 0 | 5.66s | 257 MB |
+
+**The two controls disagree, and the 96-game row is why the 24-game row is in the table at
+all.** The fast control gives the first pruning result this project has measured with an
+interval clear of zero. The 24-game proxy came back at 35.4%, which is the opposite sign, so it
+was extended to 96 games rather than believed or ignored: 46.4%, -25, -86 to +34. The openings
+are not the explanation -- the 12 openings the 24-game run plays scored 55.2% over their 96
+games in the fast run, against 58.2% for the other 16 -- so what is left is that the gain is
+real at a 10 s clock and not visible at a platform clock.
+
+120 s + 0.5 s, one game per colour against v4.0, first 40 moves: candidate depth 8.65 and 7.70
+against v4.0's 8.43 and 7.85 on the other side of the same boards. **Null move buys no depth
+here**, which is the mechanism the proxy row is reporting: 10% fewer nodes at a fixed depth 6
+(`tests.test_fastsearch`) is a fifth of a ply, and a fifth of a ply is inside the rounding.
+Both games won by checkmate. Slowest moves 8.51 s against a 13.02 s hard budget and 10.06 s
+against 11.97 s, worst overshoot of the hard budget 1 ms, clock minima 10.3 s and 10.4 s.
+Regression suite 9 of 17, the same nine as v4.0, four of them reached a ply deeper.
+
+Zero illegal moves, exceptions, timeouts and over-budget moves across all 296 games and the two
+120 s games. `uv run ruff check .`, `uv run mypy`, `tests.test_fastsearch` (score equality
+against `agent.py` with null move off, 77 searches at depths 2 to 5; mates, legality, fallback,
+repetition, table, timeout and backstop checks with it on), `tests.test_nnue` and `make gate`
+all green.
