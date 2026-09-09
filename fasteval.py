@@ -422,6 +422,8 @@ def evaluate(board: np.ndarray, st: np.ndarray) -> int:
     black_material = 0
     white_pawns = 0
     black_pawns = 0
+    # The square of the last pawn seen; only read when it is the only pawn on the board.
+    lone_pawn_square = -1
     white_bishops = 0
     black_bishops = 0
     # A side's pawns, rooks and queens together: zero is the "cannot make progress" test the
@@ -450,6 +452,7 @@ def evaluate(board: np.ndarray, st: np.ndarray) -> int:
             black_men += 1
             black_material += value
         if kind == 1:
+            lone_pawn_square = square
             if white:
                 white_pawn_files |= 1 << (8 * file_index + rank_index)
                 white_pawns += 1
@@ -623,6 +626,29 @@ def evaluate(board: np.ndarray, st: np.ndarray) -> int:
     # exactly instead of leaving White a centipawn ahead of Black in the same position.
     total = middlegame * phase + endgame * (PHASE_MAX - phase)
     score = total // PHASE_MAX if total >= 0 else -((-total) // PHASE_MAX)
+    # King and rook pawn against a bare king is a draw when the defending king stands in front
+    # of the pawn on its file or the one beside it: the corner square cannot be taken from it,
+    # and the pawn ends in a stalemate or is captured. The tables call it a pawn up plus a
+    # passer on the sixth, around +250, so the search would trade into it believing it wins,
+    # and contempt then refuses the draw it is. `agent.py` has the same rule, word for word.
+    if (
+        white_men + black_men == 3
+        and white_pawns + black_pawns == 1
+        and minors == 0
+        and rooks == 0
+        and queens == 0
+    ):
+        pawn_file = FILE_OF[lone_pawn_square]
+        if pawn_file == 0 or pawn_file == 7:
+            pawn_rank = RANK_OF[lone_pawn_square]
+            if white_pawns == 1:
+                ahead = black_king_rank > pawn_rank
+                defender_file = black_king_file
+            else:
+                ahead = white_king_rank < pawn_rank
+                defender_file = white_king_file
+            if ahead and abs(defender_file - pawn_file) <= 1:
+                return 0
     if white_pawns == 0 and black_pawns == 0:
         # A single minor and two kings is a dead draw, and the tables would otherwise call it
         # a third of a piece. The search asks the rules for this, but quiescence never does.

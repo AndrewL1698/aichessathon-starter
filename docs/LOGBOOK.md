@@ -437,3 +437,294 @@ Worth revisiting on the compiled board, where a check test costs nothing.
 Elo in the python-chess engine is small change; three sensible candidates measured within
 noise of zero. The blunders left are depth, and depth is speed. Next is v3.0 (the search on
 `fastboard.py`), described in `docs/BRIEF.md` section 8.
+
+### 2026-09-09, rounds 76 to 81: v3.1's six rated games. Won 3, lost 3.
+
+All six logs carry v3.1's banner (`compiled fasteval + fastsearch`, no `book`, no `fastnnue`
+line), so none of them is v3.2 or v4.0. v4.0 had not played by round 81, which finished at
+12:16 UTC. Its first log will say `fastnnue` and `evaluation nnue` in the banner.
+
+| Round | Opponent | Colour | Result | Moves | Clock left | Our ACPL / real blunders | Their ACPL / real blunders |
+|---|---|---|---|---|---|---|---|
+| 76 | Chessbuster 9000 | White | won, mate | 63 | 11.6 s | 80 / 10 | 95 / 14 |
+| 77 | Skill Issue | White | lost, mate | 34 | 22.8 s | 94 / 5 | 23 / 1 |
+| 78 | Bongcloud | Black | lost, mate | 41 | 19.1 s | 63 / 2 | 17 / 0 |
+| 79 | Naveen Ragav | Black | won, mate | 35 | 27.0 s | 11 / 0 | 67 / 2 |
+| 80 | Milan | White | won, mate | 42 | 17.1 s | 39 / 3 | 91 / 6 |
+| 81 | Team Anay | Black | lost, mate | 25 | 21.9 s | 79 / 2 | 22 / 0 |
+
+Stockfish 19 at depth 18 through `tools/analyse_game.py`, plus a join of our printed root
+score against Stockfish's evaluation of the same position, both from our side, for the 208
+moves whose search line survives. The three losses were to opponents that made zero or one
+real mistake in the whole game; the three wins were against opponents that made two to
+fourteen. Platform speed was 1.0 to 1.5M nps, depth 7 or 8 on nearly every move, 90 to 100%
+of the clock used, no flags, no fallbacks. Time is not the story of these games.
+
+**1. The evaluation did not know it was losing.** Where Stockfish put us between -250 and
+-500, our root score averaged -94 (16 moves); between -100 and -250, it averaged -16 (20
+moves); and where Stockfish had us between +250 and +500 we said +99 (13 moves). Fourteen
+moves were played with our score above -100 while Stockfish's was at or below -250: two in
+round 76, seven in a row in round 77 (moves 16 to 24), five in a row in round 81 (moves 19
+to 23). Both decisive losses were decided inside those runs. Round 77: 14.g4 and 15.Ra3 at
+depth 7 let Black's Bd4, Bf3 and Ne5 stay in our camp, and from move 16 the engine printed
+-20 to -76 while Stockfish read -360 to -680. Round 81: 13...Qxd5 (depth 8, our -65;
+Stockfish wants ...exd5 and drops from -92 to -504), then ten moves at -30 to -150 in a
+position Stockfish had at -320 to -590, ending in 23...b5?? and a forced mate. Round 78
+was the slow version: 16...O-O-O at +20 (Stockfish -57 to -217, wants ...a5) into the
+a4/b4/c4 storm, then twenty moves each 20 to 130 cp worse than best.
+
+**2. Depth halves the blunder rate per ply.** Of the moves with a surviving line, those
+finished at depth 7 were real blunders 18% of the time (14 of 78, mean drop 316 cp), at
+depth 8 7% (7 of 97, mean drop 125), at depth 9 or 10 5% (1 of 20). Measured at fixed
+depth on four of the game positions, the tree grows 4.5 to 6.5x per ply in quiet positions,
+and quiescence is 50 to 64% of the nodes at depths 6 to 8, so the cost is the main search's
+branching factor, not a quiescence explosion: this is plain fail-soft alpha-beta with the
+table, killers and history, null move compiled in but off, and no PVS, LMR or futility. v4.0
+searches exactly this tree with a slower leaf, so it will sit at depth 7 more often than
+v3.1 did.
+
+**3. The mate-horizon class.** 23...b5 in round 81 is the clearest: at fixed depth 7 the
+engine rates the position -17 and sees no threat; depth 8 is where Qe7 followed by Qf6 and
+Qg7# appears, and the depth-8 tree is 42 times the depth-7 tree (13.2M nodes against 314k)
+because every root move now needs that refutation. In the game the depth-8 iteration hit
+the hard budget (4.76 s, clock 38 s) after proving the depth-7 move lost and finding that
+b5 lost slightly less, and before reaching ...Rfe8 or Stockfish's ...Qa3. `search_root`'s
+partial-iteration rule is sound as written (a move handed back has outscored the previous
+best at the new depth), but in a root fail-low that is "least bad of the moves searched so
+far". Partial-iteration moves were real blunders 5 times in 23 (22%) against 17 in 185 (9%)
+for completed iterations; those are also the hardest positions, so read it as a symptom of
+depth rather than a bug. 35.Qxe5 in round 77 and 43...Rh7 in round 78 are the same shape
+with the game already lost.
+
+**4. Conversion.** Round 76's two-rooks-against-rook-and-bishop ending took 40 moves with
+three real blunders (moves 31, 39, 44) and our score at +27 to +138 where Stockfish had
++390 to +546. Won anyway.
+
+**What v4.0 already fixes.** The twenty positions above went into `tests/positions` (the
+tool's other two were already lost by 13 and 21 pawns before the move). At 20 s per position
+through `--engine fast`, on a loaded machine: **v3.1 solves 5 of 22, v4.0 solves 14 of 22.**
+At fixed depth 7 on the fourteen "did not know it was losing" positions, v3.1's root score
+averages -28, v4.0's -168, Stockfish's -484: the sign and the trend are there, still
+compressed. v4.0 finds ...exd5 in round 81 move 13 at depth 5, exf5 in round 76 moves 14 to
+16 at depth 1, and Ka1 / Re1 / Rxd4 in round 77. It still misses 23...b5 at depths 8 to 9,
+and 14.g4 / 15.Ra3 in round 77 stay missed by both.
+
+**What is left, for search cycle 4, in the order the evidence supports.** (a) Cheaper
+nodes: null move on, PVS, LMR, delta pruning in quiescence; each ply is worth roughly half
+the blunders, and v4.0 gives one back per node. The v3.0 null-move test was 32 games and said
+nothing; the 300 games it asked for are the first job. (b) Check extension and first-ply
+checks in quiescence on the compiled board: the class in finding 3 is quiet moves that set
+up a mate, and the python-chess rejection was about the cost of the check test, which is
+gone. (c) A root fail-low rule (when the first move's new-depth score drops by 150 cp or
+more, let the iteration run to the hard budget and prefer the completed depth's move only if
+nothing proven better exists) is worth a candidate, benched, not assumed. (d) Time: two of
+the 22 blunders were depth-7 moves the gate stopped at 33% and 39% of the soft budget with
+86 and 97 s on the clock, because a table-warmed depth 7 times the growth cap of 8 overshot
+the hard budget; but gate-refused moves overall blundered at 8%, the same as the rest, so
+this is last.
+
+**Tooling.** `harness/readlog.py`'s `OUTPUT_LINE` predates v3.0's line format (`tt 47%`,
+`null 0`) and matches none of a v3.x log's search lines, so it reports every one of these
+games as having no surviving output. Two tokens of regex; not touched here because
+`harness/` is off limits, flagged for a separate fix. `tools/analyse_game.py` is fine.
+
+**Blunders per game, real only: 8 (v2.2, r73), 4 (v2.2, r74), 5 (v2.3, r75), then v3.1:
+10, 5, 2, 0, 3, 2.** The v3.1 average is 3.7 against 5.7 before it, on games that are also
+shorter. Suite is 38 positions.
+
+### 2026-09-09, rounds 82 to 85: v4.0's first four rated games. Won 2, drew 2. What carried over from v3.1, what is fixed, what is new.
+
+Which build played which round, from the log banners: 73 and 74 v2.2, 75 v2.3 (python-chess
+engine, no banner); 76 to 81 v3.1 (`fasteval + fastsearch`, no `book`, no `fastnnue`); 82 to
+85 v4.0 (`fastnnue 1.5s`, `evaluation nnue h256 qa256 qb1024 qc128 cp400`, `book 24,479`).
+
+| Round | Opponent | Colour | Result | Moves | Clock left | Our ACPL / real blunders | Their ACPL / real blunders |
+|---|---|---|---|---|---|---|---|
+| 82 | Rudra | White | draw, insufficient material | 125 | 8.4 s | 9 / 2 | 9 / 2 |
+| 83 | TheWinners | White | won, mate | 26 | 49.8 s | 20 / 0 | 80 / 4 |
+| 84 | Zugzwang | Black | won, mate | 49 | 15.7 s | 29 / 1 | 59 / 4 |
+| 85 | NajeebA | Black | draw, insufficient material | 73 | 8.4 s | 17 / 2 | 19 / 3 |
+
+Same method as rounds 76 to 81: Stockfish 19 at depth 18, and our printed root score joined
+to Stockfish's evaluation of the same position, 178 moves with a surviving line. Four games
+and five real blunders is a small sample; everything below about v4.0 is provisional.
+
+**Speed and depth.** v4.0 runs at 0.52 to 0.56M nps on the platform against v3.1's 1.16 to
+1.37M, and its median depth is 7 where v3.1's was 8. Locally the same position at depth 7
+runs at 1.56M nps with the net and 2.89M with the hand tables alone, so the network costs
+46% of the node rate here and about 55% on the platform. In BLEND mode `leaf` computes both
+`evaluate` and `infer` at every leaf.
+
+**Strengths.** The evaluation is calibrated where v3.1's was blind: in positions Stockfish
+had within 100 cp of level, our score averaged 5 cp from Stockfish's (120 moves; v3.1: 33
+cp), and the "did not know it was losing" run that decided rounds 77 and 81 does not occur
+(2 such moves in 178, one a forced recapture; v3.1 had 14 in 208). Against the two strong
+opponents (ACPL 9 and 19) v4.0 drew; v3.1 lost all three of its games against opponents of
+that quality. ACPL 9 to 29 against v3.1's 39 to 94. Both mates were found cleanly once the
+position was won. Book moves (10.Be2 in round 82; 7.g4 and 8.Rg1 in round 83) all cost 10 cp
+or less by Stockfish.
+
+**Weaknesses, with where they live.**
+
+1. *Depth, carried over and now worse per node.* The search is v3.1's tree unchanged
+   (`fastsearch.negamax` and `quiescence`: fail-soft alpha-beta with table, killers and
+   history; null move compiled in but off; no PVS, LMR, futility or delta pruning; measured
+   4.5 to 6.5x growth per ply). All four middlegame blunders were depth-6 or depth-7 moves:
+   34.Qc6 in round 82 (depth 6, +319 to +14), 42.Rxc5 in round 82 (-34 to -358, line lost
+   in the log gap), 23...h5 in round 84 (depth 7, +648 to +154), 20...a5 in round 85 (depth
+   7, -62 to -237). On these five positions at 20 s, v4.0 solves 3 and the faster v3.1
+   solves 4: they are not evaluation misses. Blunder rate by depth in v4.0: 1 of 23 at
+   depth 6, 2 of 60 at depth 7, 0 of 32 at depth 8. Size: medium; each technique is 20 to 40
+   lines inside `negamax` plus a 300-game bench. This is search cycle 4 as already planned.
+
+2. *The iteration gate refuses the next ply more often now.* 34.Qc6 was played after 1.5 s of
+   a 2.2 s soft budget with 44 s on the clock, because the table-warmed depth 6 times
+   `GROWTH_MAX` (8) overshot the hard budget (`clock / 8`); depth 7 finds Qd1. Two of the four
+   blunders were gate-refused moves at 70% and 74% of soft. Overall, gate-refused moves
+   blundered 1 in 50, so this is a small effect; with a slower engine every ply costs more
+   and the same cap binds earlier. Location: `fastsearch.think`, `projected`, `budgets`
+   (`SOFT_DIVISOR` 25, `HARD_DIVISOR` 8, `GROWTH_MIN` 2, `GROWTH_MAX` 8). Size: constants,
+   needs a bench; the v2.x runs of the same idea measured nothing.
+
+3. *Bare endgames: the hand tables call a dead draw a win, and contempt then refuses the
+   draw.* New. Round 82 reached king and h-pawn against king with the defending king on g8/h8
+   at move 77 and shuffled for 57 moves, playing 134.h7 with the halfmove clock at 99 to
+   dodge the fifty-move rule. `fasteval.evaluate` scores those positions +182 to +292 (passed
+   pawn plus tables; `DRAWISH_MARGIN` only applies with no pawns and there is no rook-pawn or
+   wrong-corner rule), `fastnnue.bare_endgame` hands the leaf to those tables, and
+   `root_contempt` reads +250 > `CONTEMPT_THRESHOLD` and sets contempt to -50, so every draw
+   scores -50 and any non-repeating move scores better. Cost here: 57 moves and about 30 s of
+   clock (both draws ended at 8.4 s). Risk elsewhere: in a drawn ending where the only way to
+   avoid repetition is a worse move, contempt gives away the half point. Location:
+   `fasteval.py` endgame section (mop-up and drawish scaling) and
+   `fastsearch.root_contempt` / `draw_score`. Size: small and local. Two candidate shapes:
+   contempt 0 whenever `bare_endgame` is true, or a KPvK rook-pawn rule in `fasteval`.
+
+4. *Underestimates its own winning positions.* New, cosmetic so far. Where Stockfish had us
+   between +250 and +500, our score averaged +50 (9 moves); round 83 moves 12 to 19 printed
+   +6 to +60 against +263 to +438, round 84 moves 21 to 33 printed +150 to +475 against +555
+   to +933. Location: `fastsearch.leaf`, BLEND = (hand + net) // 2, which halves the net's
+   scale wherever the tables see less. No half point traced to it. Size: a weighting change,
+   which is a bench candidate, not a code fix.
+
+5. *Root fail-low inside an aborted iteration.* Carried over unchanged
+   (`search_root` and `think`); did not fire in these four games (0 of 10 partial moves
+   blundered) but the code path that produced 23...b5 in round 81 is the same.
+
+6. *Promotion tie-break.* 56...g1=R in round 85 is not an underpromotion error: g1=Q and g1=R
+   score identically (+21, both answered by Rxg1) and locally the engine picks the queen at
+   every depth; the in-game choice was a tie broken by table state. The mistake Stockfish
+   flags is promoting at all rather than ...Re1+ (0 to -256), a depth-12 find. Nothing to fix.
+
+**The half point that was actually lost.** Round 82: +319 at move 34 (Stockfish), two errors
+in eight moves to -358 at move 42, held to a draw because Rudra did not convert either.
+Round 85 was never better than level after move 23 and ended in a drawn rook ending.
+
+**Summary of the comparison.** Fixed by v4.0: the evaluation blindness under attack that lost
+rounds 77 and 81 (on v3.1's 22 blunder positions v3.1 solves 5, v4.0 solves 14). Carried
+over: search depth per node, the gate, the aborted-iteration rule; all in `fastsearch.py`,
+and depth is now half a ply worse because the net costs half the node rate. New: the bare-
+endgame contempt loop (`fasteval` endgame terms plus `root_contempt`), advantage compression
+(`leaf` BLEND), and the per-node cost of the net (`fastnnue.infer` plus the double evaluation
+in BLEND). Nothing here is a wrong design; the search is a correct bare alpha-beta missing its
+standard pruning, and the evaluation's remaining faults are one handover rule and one blend
+weight. The five positions above are in `tests/positions`, which now holds 43.
+
+### 2026-09-09, round 86: v4.0's first loss, to AIY in 56 moves as Black.
+
+Banner: v4.0. Stockfish 19 at depth 18: our ACPL 56, 2 real blunders; AIY's ACPL 15 with no
+real mistake, the strongest opponent in the fourteen reviewed games. Clock 130.8 s used, 13.7 s
+left, depth 6 to 7 through the middlegame at 0.41 to 0.54M nps, both first moves from the book
+(7...cxd4 and 8...Qa5 cost 1 and 3 cp; 8...Qa5 is Stockfish's own choice, and the retreat
+9...Qd8 our search's, 1 cp).
+
+**How it was lost.** Three small slips at depth 7 against exact play, 10...Re8 (-74),
+11...a5 (-115) and 12...e5, took Stockfish's figure from -43 to -229 by move 12 while ours read
+-35 to -42. Then **16...Bg7 at depth 6** (-150 to -531, Stockfish wants ...b6), played after
+1.5 s of a 4.0 s soft budget with 89 s on the clock: the gate refused depth 7 because a
+table-warmed depth 6 times the growth cap of 8 overshot the 11.2 s hard budget. That is the
+same shape as 34.Qc6 in round 82 and 14.g4 in round 77, and it is the third real blunder in
+the reviewed games that a one-ply-deeper search would have avoided while most of the clock sat
+unused. In this game the seven gate-refused moves (under half the soft budget) carried two of
+the three real blunders; the 22 moves that ran past the soft budget carried none. The rest is a
+strong engine converting; 45...Kd5 into a lost queen ending is the other flagged move.
+
+**Calibration when losing.** From move 17 to 35 our root score sat 300 to 430 cp above
+Stockfish's (-154 to -632 against -517 to -969). Rounds 82 to 85 showed the same compression on
+the winning side (+50 where Stockfish had +250 to +500); it is symmetric, which is what
+`leaf`'s `(hand + net) // 2` predicts wherever the net sees more than the tables. No "unseen
+danger" move in the v3.1 sense (score above -100 while Stockfish is at or below -250): the sign
+is right, the size is not.
+
+**What it adds to the v4.1 candidates.** The gate candidate (`time/hard-divisor-6`) gets its
+clearest example; the blend candidate (`eval/blend-net-heavy`) gets the losing-side half of its
+evidence. The position before 16...Bg7 is in `tests/positions`, which now holds 44. Blunders
+per game, real only, v4.0: 2, 0, 1, 2, 2.
+
+### 2026-09-09, round 87: v4.0 drew OnlyBlunder by perpetual check as White, from +372.
+
+Banner: v4.0 (before PR #17 merged). Stockfish 19 at depth 18: our ACPL 27, one real blunder;
+OnlyBlunder's ACPL 26 / 2 real blunders. 122.8 s used, 18.7 s left. **Twenty of our 43 moves
+were searched to depth 6 and ten to depth 7**, at 0.42 to 0.68M nps; the whole middlegame from
+move 17 to move 38 ran at depth 6 with 30 to 75 s on the clock.
+
+**Where the win went.** Stockfish had +372 before move 28. 28.bxc4 (depth 6, 1.6 s of a 2.3 s
+soft budget with 48 s on the clock; Stockfish wants b4) dropped it to +129, then 29.Qd4 (-76)
+and 30.Rb4 (-81), both depth 6, left +30 by move 30 and the position was level from move 31 on.
+The perpetual itself was not the mistake: from 41.d7 onward Stockfish scores every alternative
+0 at depth 30, and the only way out of the checks, 43.Rd2, loses a rook. Our own root score of
++189 and +280 at moves 41 and 42 was a horizon reading, and the -50 from move 43 on was the
+search correctly finding that every king move repeats.
+
+**What it adds.** The third game in a row whose decisive slips were depth-6 moves with plenty of
+clock (34.Qc6 in round 82, 16...Bg7 in round 86, 28.bxc4 here); v4.0 at 0.5M nps spends most
+of a middlegame at depth 6 because the next iteration is projected past the hard budget. The
+winning-side compression is here too: our root score read +51 to +93 across moves 11 to 27
+while Stockfish read +158 to +330. The position before 28.bxc4 is in `tests/positions`, which
+now holds 45. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1.
+
+### 2026-09-09, cycle 4, small fixes: three candidates from the rated-game reviews. One merged, one open, one rejected.
+
+The reviews of rounds 76 to 87 named three items small enough for one-change branches; each was
+benched against `local-opponents/v4.0`, 96 games at 10 s + 0.1 s, four at a time, with the
+disqualifier counts and peak RSS, and the rows are in `docs/BENCH_LOG.md`. The regression suite
+(prod's 17 positions, `--engine fast`, depth 11, 20 s) is 9 of 17 for v4.0 and for all three
+candidates: none of them touches the fixed-depth search.
+
+**`eval/kpk-rook-pawn-draw`, PR #17, merged.** King and rook pawn against a bare king scores 0
+when the defender is in front, in both evaluations. 45.8% (-88 to +28), no disqualifiers, and the
+bench cannot see it: the rule fired in 3 of 96 games, all with the candidate defending, all drawn
+as they should be. Judged on `tests.test_fasteval`'s nine rook-pawn positions and on the round 82
+positions it corrects (+182 to +292 with contempt -50 becomes 0 with contempt 0). Merged into
+`prod` the same afternoon.
+
+**`time/hard-divisor-6`, PR #18, open and not proven.** Hard budget a sixth of the clock instead
+of an eighth. 10 s: 42.2% (-120 to +6), which is an artifact of that control: the candidate's
+clock ran under the 1 s panic floor in 19 of 96 games against 0 for v4.0. 45 s proxy: 57.3%,
++51, -25 to +133. 120 s + 0.5 s, 16 games: 53.1%, slowest move 20.25 s on a 20.25 s budget,
+clock minimum 5.5 s against v4.0's 7.4 s, no disqualifiers. The mechanism is on record three
+times (rounds 82, 86, 87: decisive depth-6 moves with 44 to 89 s on the clock); the cost is a
+thinner clock at the end. A 96-game proxy extension is running and decides it on the lower bound.
+
+**`eval/blend-net-heavy`, rejected.** Leaf blend one part hand to three parts net. 37.0%, -93,
+-162 to -30. Clean: the hand half of the blend carries signal the net lacks at these depths, and
+the score compression the change was meant to fix (root scores of +50 where Stockfish had +250 to
++500, and 300 to 430 cp short while losing round 86) is a display problem, not a decision problem.
+The untested direction is the opposite weighting; nobody has measured it.
+
+**One lesson for the bench.** Any candidate that spends more per move looks bad at 10 s + 0.1 s
+because that control sits close to the panic floor; `time/growth-cap` showed the same split last
+cycle. Time and budget changes are decided at 45 s + 0.2 s and 120 s + 0.5 s, reading the clock
+minima out of the PGNs; the fast row is a smoke test for them.
+
+### 2026-09-09, round 88: v4.0 drew Phantom by repetition as White. Nothing to fix.
+
+Banner: v4.0 (prod before PR #17 merged, by the finish time). Stockfish 19 at depth 18: our
+ACPL 12 and Phantom's 10, no real blunder on either side, the cleanest of the fourteen reviewed
+games. 99.4 s used, 34.1 s left after 27 moves, depth 6 to 8 at 0.39 to 0.64M nps. Our root
+score sat within 22 cp of Stockfish's on average across the game (mean gap -8), the best
+calibration in any reviewed game: the position was level from move 10 on (Stockfish -57 to +13),
+the two moves that let a small opening edge go were 12.e4 (-66, Bd2 was better) and 16.Bg5
+(-52, Be3), and the repetition from move 30 was taken at 0 against 0. With the hand evaluation
+inside the contempt threshold, a draw scores 0, so accepting it from a position both engines
+read as level is the intended behaviour. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0.
