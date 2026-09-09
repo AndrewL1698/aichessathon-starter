@@ -7,7 +7,7 @@ the bench plays against, and a row here saying what changed and why. Candidates 
 shipped keep their branch names; they are listed at the bottom and explained in
 `docs/LOGBOOK.md` Part 2, rejections included.
 
-The current baseline for the bench is the newest shipped version (v3.1 as of 2026-09-08 23:45).
+The current baseline for the bench is the newest shipped version (v3.2 as of 2026-09-09 01:00).
 
 ## Shipped
 
@@ -21,6 +21,7 @@ The current baseline for the bench is the newest shipped version (v3.1 as of 202
 | v2.4 | 2026-09-08 (built ~17:35, awaiting upload) | 1077652 (PR #5) | Tapered evaluation (middlegame and endgame tables blended by material), mop-up for won endings, passed, isolated and doubled pawns, king shield. Evaluation also faster: median 62k nps vs 50k on the same positions. | v2.2 and v2.3 had material plus fixed piece-square tables and nothing else; the ladder above Sunfish is evaluation. Written by a teammate on `phase0/eval`, merged to prod without a bench; benched here before shipping. | Bench vs v2.3: **82.8%** (+25 =3 -4), Elo +273, interval +153 to +510, 32 games; 71.9% vs Sunfish; suite 3 of 12. Clean on disqualifiers, peak RSS 243 MB in a 120 s game. |
 | v3.0 | 2026-09-08 late | PR #10 (`phase1/search`, 227d8ee) | Search and evaluation moved onto the numba board: `fasteval.py`, `fastsearch.py`; python-chess engine kept as the fallback. Same tree as v2.4, proven by equality tests. | Depth is speed: 1.2–3.3M nps vs 50–70k gives two to three more plies, which is where the rated-game blunders were. | Bench vs v2.4: **93.8%** (+30 =0 -2) at 10 s, 93.8% vs Sunfish, 100% vs minimax; 0 disqualifiers, worst move 1.29 s, peak RSS ~270 MB. Suite 3 of 12 at d7–9. |
 | v3.1 | 2026-09-08 late | `search/clock-backstop` | A timer thread that expires the search at the hard deadline, alongside the node-counted clock read; the search functions release the interpreter lock. Same tree as v3.0. | The clock read is counted in nodes; one slow subtree near the deadline on the 0.4x platform is an overrun with no second stop. Carried over from PR #11, with the thread joined on exit so a late wake cannot expire the next move. | Disqualifier check vs v3.0: 16 fast games, 46.9%, 0 / 0 / 0 / 0. Backstop test: depth-40 searches with the clock read disabled stop within 5 ms of the deadline. |
+| v3.2 | 2026-09-09 | PR #13 (`book/opening`) | A polyglot opening book, `weights/book.bin` (24,479 entries from 1.13M over-the-board master games, built by `tools/book/build.py`), played up to ply 20 and committed to both engines' history like a searched move. Search unchanged. | The first searched moves at 120 s cost 4 s each on positions master practice already answers; where the book has coverage it hands the clock to the middlegame. Coverage is thin on the ladder's curated openings (four of the eight samples have no master games), so it fires in a minority of rated games. | Disqualifier check vs v3.1: 32 fast games, 42.2% (interval 26 to 58%, includes 50), 0 / 0 / 0 / 0. 120 s from the Sveshnikov: one book move, 85.8 s vs 75.4 s on the clock after move 10. |
 
 ## Not shipped
 
