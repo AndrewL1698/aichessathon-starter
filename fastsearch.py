@@ -1124,18 +1124,34 @@ def budgets(time_left_ms: int) -> tuple[float, float]:
     return min(soft, hard), hard
 
 
-def static_eval(board: np.ndarray, st: np.ndarray) -> int:
-    """The active evaluation of a root position, and the root accumulator as a side effect.
+def refresh_root(board: np.ndarray) -> None:
+    """Build `ACC[0]` from scratch. The one thing the incremental accumulators cannot do.
 
-    Building `ACC[0]` from scratch is the one thing the incremental accumulators cannot do for
-    themselves, and it has to happen once per search before any node below reads `ACC[1]`.
-    Returning the score at the same time is not tidiness: the only caller that wants the
-    number is contempt, and it wants it for exactly the position that was just refreshed.
+    Every node below the root reads `ACC[ply]` and writes `ACC[ply + 1]`, so this has to happen
+    once per search before `search_root` makes its first move, and never again.
     """
     if fastnnue.active():
         refresh(board, ACC, 0, NET)
-        return int(leaf(board, st, ACC, 0, STATS, NET))
-    return int(evaluate(board, st))
+
+
+def root_contempt(board: np.ndarray, st: np.ndarray) -> int:
+    """What a draw is worth to us here -- from the hand evaluation, whatever scores the leaves.
+
+    `CONTEMPT_THRESHOLD` is 150 of `fasteval`'s centipawns and was calibrated against them. The
+    learned evaluation's are not the same scale: measured over 760 root positions, the
+    52M-position net reads a dead-equal position as +46 cp for whoever is to move, and feeding
+    it to `contempt_for` fires contempt in 69% of positions against the hand evaluation's 58%,
+    agreeing on the sign only 62% of the time. A tempo bonus like that cancels in negamax at
+    even depths and does not cancel here, and what it buys is a draw refused in positions that
+    are not actually won.
+
+    This one line is the whole exposure, which is why it is worth being deliberate about rather
+    than clever. Nothing else in the draw handling reads an evaluation at all: repetition, the
+    fifty-move rule and insufficient material return `draw_score` directly, and the
+    `fastnnue.bare_endgame` handover is a count of men on the board. So contempt keeps reading
+    exactly what it was tuned against, and swapping the leaf evaluation cannot move it.
+    """
+    return contempt_for(int(evaluate(board, st)))
 
 
 def contempt_for(root_score: int) -> int:
@@ -1259,10 +1275,10 @@ def think(fen: str, time_left_ms: int) -> str:
     STATS[NNUE_ENABLED] = 1 if fastnnue.active() else 0
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
-    # reading it off the previous iteration's score feeds back on itself. Whichever evaluation
-    # is active is the one it reads, because the +-150 threshold is in that evaluation's
-    # centipawns; this call is also what builds the root accumulator.
-    STATS[CONTEMPT_AT] = contempt_for(static_eval(board, st))
+    # reading it off the previous iteration's score feeds back on itself, and `root_contempt`
+    # for why it is the hand evaluation it reads even when the network scores the leaves.
+    STATS[CONTEMPT_AT] = root_contempt(board, st)
+    refresh_root(board)
     KILLERS.fill(0)
     deadline = started + hard_ms / 1000.0
     backstop = _arm_backstop(deadline)
