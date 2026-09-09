@@ -311,5 +311,15 @@ the soft budget against 117% / 118%. Slowest moves 13.2 s at a 13.22 s hard budg
 25 and 20 ms; v2.4 in the same games 10 to 15 ms). Clock minimum 9.2 s in the 58-move game and
 23.1 s in the 44-move one, against v2.4's 10.3 s and 20.3 s: the clock sinks in long games under
 v2.3's rules for both engines, as it always has. Median 2.23M and 2.40M nps over the game.
-Peak RSS 263 MB and 260 MB; no fallback on any move. The gauntlet and the proxy on this code
-follow.
+Peak RSS 263 MB and 260 MB; no fallback on any move.
+
+The gauntlet on the final code, two at a time alongside the 120 s games and then the proxy:
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v3-final-gauntlet | baseline | 10s+0.1s | 32 | +28 =3 -1 | 92.2% | +429 | +294 to +1309 | 0 / 0 / 0 / 0 | 1.24s | 265 MB |
+| v3-final-gauntlet | sunfish | 10s+0.1s | 16 | +15 =0 -1 | 93.8% | +470 | +258 to +inf | 0 / 0 / 0 / 0 | 1.25s | 266 MB |
+| v3-final-gauntlet | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.25s | 264 MB |
+| v3-final-gauntlet | overall | 10s+0.1s | 64 | +59 =3 -2 | 94.5% | +495 | +374 to +909 | 0 / 0 / 0 / 0 | 1.25s | 266 MB |
+
+Every worst move in the gauntlet is now the 1.25 s hard budget. The proxy follows.
