@@ -402,10 +402,12 @@ def check_target_marker() -> str:
     workspace.mkdir(exist_ok=True)
     checked = []
     try:
-        for label, extra, want in (
-            ("no key", {}, "absolute"),
-            ("absolute", {"target": np.str_("absolute")}, "absolute"),
-            ("residual", {"target": np.str_("residual")}, "residual"),
+        for label, extra, want, policy in (
+            ("no key", {}, "absolute", fn.ABSOLUTE),
+            # `cp` is what `tools/nnue/train.py --target` actually writes for an absolute net.
+            ("cp", {"target": np.str_("cp")}, "cp", fn.ABSOLUTE),
+            ("absolute", {"target": np.str_("absolute")}, "absolute", fn.ABSOLUTE),
+            ("residual", {"target": np.str_("residual")}, "residual", fn.RESIDUAL),
         ):
             path = workspace / "marked.npz"
             np.savez_compressed(path, **(base | extra))
@@ -413,7 +415,12 @@ def check_target_marker() -> str:
             got = fn.target(path)
             if got != want:
                 raise Failure(f"a {label} file reads as target={got!r}, want {want!r}")
-            checked.append(f"{label} -> {got}")
+            if fn.TARGETS[got] != policy:
+                raise Failure(
+                    f"a {label} file maps to policy "
+                    f"{fn.POLICY_NAMES[fn.TARGETS[got]]}, want {fn.POLICY_NAMES[policy]}"
+                )
+            checked.append(f"{label} -> {got} -> {fn.POLICY_NAMES[policy]}")
         path = workspace / "marked.npz"
         np.savez_compressed(path, **(base | {"target": np.str_("wdl")}))
         try:

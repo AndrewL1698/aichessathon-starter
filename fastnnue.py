@@ -104,8 +104,12 @@ RESIDUAL = 3
 
 POLICY_NAMES = {HAND: "hand", ABSOLUTE: "absolute", BLEND: "blend", RESIDUAL: "residual"}
 
-# The two things an npz may say it was trained to predict.
-TARGETS = {"absolute": ABSOLUTE, "residual": RESIDUAL}
+# What an npz may say it was trained to predict, and how to score it. The spellings are
+# `tools/nnue/train.py`'s `--target` choices, which are `cp` and `residual`; `absolute` is
+# accepted as a synonym for `cp` because that is the word this file and the docs use for it
+# and a weight file should not be refused over a vocabulary difference. Anything else is
+# refused rather than assumed, in `load`.
+TARGETS = {"cp": ABSOLUTE, "absolute": ABSOLUTE, "residual": RESIDUAL}
 
 # Overrides what the weight file asks for. `None` means "whatever the file says", which is the
 # only setting that ships; the bench sets `BLEND` to measure it.
@@ -421,9 +425,10 @@ def _check(condition: bool, message: str) -> None:
 def target(path: Path) -> str:
     """What the weight file says it was trained to predict: `absolute` or `residual`.
 
-    A file with no `target` key is absolute. That is not a guess about the future -- every file
+    A file with no `target` key is absolute. That is not a guess about the future: every file
     exported before the key existed is absolute, and the key was added when the first residual
-    net was trained -- but it does mean a *new* absolute export need not carry it.
+    net was trained. The string is returned as the file spells it -- `cp` and `absolute` are
+    the same thing to `TARGETS` -- so the init log says what the file actually said.
     """
     with np.load(path) as data:
         if "target" not in data.files:
