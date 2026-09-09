@@ -42,6 +42,12 @@ ENDGAME_SEEDS: tuple[str, ...] = (
     "8/8/8/8/8/3rk3/8/3BK3 w - - 0 1",  # rook against a bishop, a book draw
     "8/8/8/8/8/2rrk3/8/3QK3 w - - 0 1",  # two rooks against a queen
     "8/4k3/8/8/8/8/4P3/4K3 w - - 0 1",  # KPvK
+    "7k/8/K6P/8/8/8/8/8 w - - 0 1",  # rook pawn, defending king in the corner: a draw
+    "6k1/8/7P/8/4K3/8/8/8 w - - 0 1",  # rook pawn, defending king in front on the next file
+    "8/8/8/8/3k4/p7/8/1K6 w - - 0 1",  # the same for Black's pawn, White defending
+    "8/4k1K1/8/7P/8/8/8/8 w - - 0 1",  # rook pawn, attacking king holds the corner: a win
+    "8/8/8/8/8/6kP/8/6K1 w - - 0 1",  # rook pawn, defending king level with it, not ahead
+    "6k1/8/7P/8/4K3/8/8/1B6 w - - 0 1",  # a bishop on the board: not the KPvK rule
     "8/P6k/8/8/8/8/6Kp/8 w - - 0 1",  # promotions on both sides
     "4k3/8/8/8/8/8/8/4K3 w - - 0 1",  # bare kings
     "8/1p1p1p2/8/8/8/8/1P1P1P2/4K1k1 w - - 0 1",  # doubled and isolated pawn structure
@@ -165,6 +171,38 @@ def check_mirror(fens: list[str]) -> int:
     return checked
 
 
+# Rook-pawn endings the rule in `evaluate` must call a draw, and near misses it must not.
+KPK_DRAWS: tuple[str, ...] = (
+    "7k/8/K6P/8/8/8/8/8 w - - 0 1",
+    "6k1/8/7P/8/4K3/8/8/8 w - - 0 1",
+    "8/8/7k/5K2/7P/8/8/8 w - - 0 1",
+    "8/8/8/8/3k4/p7/8/1K6 w - - 0 1",
+    "k7/8/K7/P7/8/8/8/8 b - - 0 1",
+)
+KPK_NOT_DRAWS: tuple[str, ...] = (
+    "8/4k1K1/8/7P/8/8/8/8 w - - 0 1",  # the attacking king already holds g7
+    "8/8/8/8/8/6kP/8/6K1 w - - 0 1",  # the defending king is level with the pawn, not ahead
+    "8/4k3/8/8/8/8/4P3/4K3 w - - 0 1",  # a centre pawn
+    "6k1/8/7P/8/4K3/8/8/1B6 w - - 0 1",  # a bishop as well: not a bare king
+)
+
+
+def check_kpk(reference: ModuleType) -> int:
+    """The rook-pawn rule fires on the draws, stays off the rest, and both engines agree."""
+    checked = 0
+    for fen in KPK_DRAWS:
+        board, st, _ = fb.from_fen(fen)
+        if int(fe.evaluate(board, st)) != 0 or int(reference.evaluate(chess.Board(fen))) != 0:
+            raise Failure(f"rook-pawn draw not scored zero: {fen}")
+        checked += 1
+    for fen in KPK_NOT_DRAWS:
+        board, st, _ = fb.from_fen(fen)
+        if int(fe.evaluate(board, st)) == 0:
+            raise Failure(f"rook-pawn rule fired where it should not: {fen}")
+        checked += 1
+    return checked
+
+
 def check_seeds() -> None:
     """A seed with the wrong side in check lets python-chess capture a king.
 
@@ -217,6 +255,7 @@ def main() -> None:
     reference = load_reference()
     print(f"reference evaluation loaded from {reference.__file__}")
     print(f"constants: {check_constants(reference)} tables and weights match agent.py")
+    print(f"rook-pawn rule: {check_kpk(reference)} positions scored as intended by both")
 
     rng = random.Random(0xE7A1)
     wanted = 10_000 if arguments.full else 2_000

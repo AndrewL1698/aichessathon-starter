@@ -700,6 +700,31 @@ def evaluate(board: chess.Board) -> int:
     # exactly instead of leaving White a centipawn ahead of Black in the same position.
     total = middlegame * phase + endgame * (PHASE_MAX - phase)
     score = total // PHASE_MAX if total >= 0 else -(-total // PHASE_MAX)
+    # King and rook pawn against a bare king is a draw when the defending king stands in front
+    # of the pawn on its file or the one beside it: the corner square cannot be taken from it,
+    # and the pawn ends in a stalemate or is captured. The tables call it a pawn up plus a
+    # passer on the sixth, around +250, so the search would trade into it believing it wins,
+    # and contempt then refuses the draw it is. `fasteval.py` has the same rule, word for word.
+    pawns = bitboards[0]
+    if (
+        chess.popcount(white | black) == 3
+        and chess.popcount(pawns) == 1
+        and not (bitboards[1] | bitboards[2] | bitboards[3] | bitboards[4])
+        and white_king >= 0
+        and black_king >= 0
+    ):
+        pawn_square = chess.msb(pawns)
+        pawn_file = pawn_square & 7
+        if pawn_file in (0, 7):
+            pawn_rank = pawn_square >> 3
+            if pawns & white:
+                ahead = (black_king >> 3) > pawn_rank
+                defender_file = black_king & 7
+            else:
+                ahead = (white_king >> 3) < pawn_rank
+                defender_file = white_king & 7
+            if ahead and abs(defender_file - pawn_file) <= 1:
+                return 0
     if not bitboards[0]:
         # A single minor and two kings is a dead draw, and the tables would otherwise call it
         # a third of a piece. _negamax asks the rules for this, but quiescence never does, so
