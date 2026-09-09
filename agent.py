@@ -14,16 +14,25 @@ rather than the game.
 `tests/test_fasteval.py` proves the two evaluations return the same integer on ten thousand
 positions, and `tests/test_fastsearch.py` proves the two searches return the same root score at
 the same depth. They are one engine in two languages, not two engines.
+
+Before either of them runs there is a lookup in `weights/book.bin`, a polyglot opening book of
+moves human masters played, built offline by `tools/book/build.py` from published game
+collections. Nothing our own engine produced is in it, and the first twenty plies are all it
+covers; `tests/test_book.py` proves every move in it is legal in the position it is filed
+under. A missing book is not an error: the agent searches from move one instead.
 """
 
+import random
 import resource
 import sys
 import time
 import traceback
 from collections.abc import Hashable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import chess
+import chess.polyglot
 
 import fastboard
 import fasteval
@@ -107,6 +116,16 @@ FIFTY_MOVE_PLIES = 100
 # getrusage reports the peak resident set in bytes on macOS and in kilobytes on Linux, which
 # is where this actually runs.
 RSS_DIVISOR = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+
+# The opening book: `weights/book.bin`, polyglot format, built offline from human master games
+# by `tools/book/build.py`, which does not ship. Each entry is a move masters played in that
+# position and a weight that is how often they played it. A book move is a searched move's
+# answer arrived at by a few hundred thousand strong players instead of by us, for no clock.
+BOOK_PATH = Path(__file__).resolve().parent / "weights" / "book.bin"
+# Where the book stops. The platform starts rated games from curated positions as deep as ply
+# 17, so a handful of plies is all a book can ever contribute; past this the position is the
+# search's problem and a book move would be a move nobody proved.
+BOOK_MAX_PLY = 20
 
 PIECE_VALUES: dict[int, int] = {
     chess.PAWN: 100,
@@ -1222,6 +1241,59 @@ def _think_fast(fen: str, time_left_ms: int) -> str:
     return move
 
 
+def _open_book() -> chess.polyglot.MemoryMappedReader | None:
+    """Open the book once, at import. A book that is not there is not an error.
+
+    The reader memory-maps the file and binary-searches it, so opening it costs nothing and a
+    lookup is two page reads. If the file is missing or unreadable - a zip built without
+    `weights/`, a corrupt download - the agent plays exactly as it did before there was a book
+    rather than failing a game over an opening.
+    """
+    try:
+        return chess.polyglot.open_reader(BOOK_PATH)
+    except OSError:
+        return None
+
+
+_BOOK = _open_book()
+
+
+def _book_move(fen: str, time_left_ms: int) -> str | None:
+    """The book's move for this position, or None to search.
+
+    Weighted, not always the most popular move: the platform plays the same opening positions
+    round after round, and an agent that answers one position with one move is an agent every
+    opponent gets to prepare against once. The weights are master game counts, so the spread
+    is over moves masters actually chose.
+
+    The move is checked against python-chess before it goes out, like the numba engine's move
+    is, because an illegal move loses the game and a book is a file that could be anything.
+    """
+    if _BOOK is None:
+        return None
+    started = time.perf_counter()
+    board = chess.Board(fen)
+    if board.ply() > BOOK_MAX_PLY:
+        return None
+    entries = [entry for entry in _BOOK.find_all(board) if board.is_legal(entry.move)]
+    if not entries:
+        return None
+    chosen = random.choices(entries, weights=[entry.weight for entry in entries])[0]
+    spent_ms = (time.perf_counter() - started) * 1000.0
+    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR
+    # The search's line, with the depth-zero shape it prints when it never completed an
+    # iteration, so `harness.readlog` parses this move like any other and the trailing word
+    # says which ones came out of the book. No score: nothing here evaluated the position,
+    # and a made-up score would show up as a swing against the first searched move.
+    print(
+        f"d0 move {chosen.move.uci()} nodes 0 {spent_ms:.0f}ms soft 0 hard 0 "
+        f"clock {time_left_ms} tt {len(_MEMORY.table)} cut 0 contempt +0 "
+        f"peakrss {rss_mb:.0f}MB book {len(entries)} of {len(_BOOK)}",
+        flush=True,
+    )
+    return chosen.move.uci()
+
+
 def get_move(fen: str, time_left_ms: int) -> str:
     """Return a legal UCI move. Nothing raises out of here: a crash loses the game.
 
@@ -1236,6 +1308,18 @@ def get_move(fen: str, time_left_ms: int) -> str:
         # Kept up to date on every move, not only the ones it plays: `_observe` is what tells
         # the fallback where the game has been, and a repetition it cannot see is a lost win.
         _observe(board)
+    except Exception:
+        traceback.print_exc()
+    # The book before any search. A position master practice has an answer for does not need
+    # one found, and it is committed exactly as a searched move is: both engines are told what
+    # went out, or the next move finds a history that describes a game this is not. Off book
+    # `_book_move` returns None and nothing below it changes.
+    try:
+        move = _book_move(fen, time_left_ms)
+        if move is not None:
+            _remember_python(fen, move)
+            fastsearch.remember_played(fen, move)
+            return move
     except Exception:
         traceback.print_exc()
     try:
@@ -1277,10 +1361,12 @@ def _warm() -> None:
     fastsearch.think(fastboard.START_FEN, 1_000)
     fastsearch.reset()
     rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR
+    book = f"{len(_BOOK):,} entries" if _BOOK is not None else f"none at {BOOK_PATH}"
     print(
         f"numba engine ready: compiled fasteval {fasteval.COMPILE_SECONDS:.1f}s + "
         f"fastsearch {fastsearch.COMPILE_SECONDS:.1f}s, first search "
-        f"{(time.perf_counter() - started) * 1000.0:.0f}ms, rss {rss_mb:.0f}MB",
+        f"{(time.perf_counter() - started) * 1000.0:.0f}ms, rss {rss_mb:.0f}MB, "
+        f"book {book}",
         flush=True,
     )
 
