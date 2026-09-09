@@ -301,4 +301,15 @@ repetitions, 7 insufficient material, 1 fifty moves.
 
 Same result inside noise (94.2% became 93.5%), and the worst move is now the hard budget
 itself: 1.25 s at a 10 s clock, where the run without the backstop reached 1.28 s at 9 s and
-the gauntlet 1.35 s at 7.3 s. The 120 s games, the gauntlet and the proxy on this code follow.
+the gauntlet 1.35 s at 7.3 s.
+
+120 s + 0.5 s games on the final code, both won by v3.0 by checkmate: as White from the English
+Opening in 58 moves, as Black from the French Winawer in 44. First 40 moves, v3.0 against v2.4
+on the other side of the board: depth 8.47 / 8.28 against 5.90 / 5.62, spend 123% / 110% of
+the soft budget against 117% / 118%. Slowest moves 13.2 s at a 13.22 s hard budget and 8.3 s at
+12.2 s; one hard-budget overshoot in the two games, of 5 ms (the games before the backstop had
+25 and 20 ms; v2.4 in the same games 10 to 15 ms). Clock minimum 9.2 s in the 58-move game and
+23.1 s in the 44-move one, against v2.4's 10.3 s and 20.3 s: the clock sinks in long games under
+v2.3's rules for both engines, as it always has. Median 2.23M and 2.40M nps over the game.
+Peak RSS 263 MB and 260 MB; no fallback on any move. The gauntlet and the proxy on this code
+follow.
