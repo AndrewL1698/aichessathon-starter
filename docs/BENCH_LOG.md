@@ -308,3 +308,82 @@ overshoot of the hard budget 1 ms on both sides (the clock-check slice, as befor
 move 13.9 s at a 13.9 s hard budget; clock minima 15.5 s and 28.4 s. The thread never had to
 fire in play, which is the expected case; the test is where it is exercised.
 
+
+## Book, 2026-09-09: a polyglot opening book (book/opening)
+
+`weights/book.bin`, 24,479 entries over 15,530 positions, 391,664 bytes, read by
+`chess.polyglot` at import and consulted before the search up to ply 20. The site's rules were
+re-read for this: "Opening books and endgame tablebases are permitted as shipped data, and
+`chess.polyglot` and `chess.syzygy` are in the base image", inside "model weights, opening
+books and any other files, total <= 50 MB unzipped", and no limit on book moves or plies.
+
+**The Lichess masters explorer is gone.** `https://explorer.lichess.ovh/masters` and
+`/lichess` answer `401 Authorization Required` (nginx, no `WWW-Authenticate`) to every request,
+from this machine and from a second network, with and without a token, on both
+`explorer.lichess.ovh` and `explorer.lichess.org`; `/master` and
+`lichess.org/api/opening-explorer` are 404, and `lichess.org` itself answers 200, so this is
+that service and not our network. The corpus instead is PGN Mentor's 233 opening collections,
+**1,133,198 over-the-board master games**, 879 MB of zips cached under `tools/book/cache/`
+(gitignored). Provenance is the reason it is PGN files and not an engine: every move in the
+book was played by a human master in a real game.
+
+**Four of the eight sample openings occur in no master game at all.** Games in the corpus that
+pass through each root, which is what the book's depth per opening follows from:
+
+| root | master games through it | plies of book |
+|---|---|---|
+| standard start | 1,133,202 | 16 |
+| English Opening | 3 | 0 |
+| French Winawer | 127 | 3 |
+| Petroff Defence | 0 | 0 |
+| Scotch Game | 0 | 0 |
+| Grunfeld Defence | 651 | 9 |
+| French Classical | 0 | 0 |
+| Sicilian Closed | 44 | 5 |
+| Sicilian Sveshnikov | 1,373 | 9 |
+
+The ladder's curated positions are picked to be close to level, not to be theory, so a book of
+human games cannot answer them, and no threshold changes that: at `--min-games 100` (the number
+this was briefed with) the book is 6,600 entries and answers only Grunfeld and Sveshnikov; at
+12 it is 24,479 entries and answers four roots; at 4 it is 46,109 entries and 738 KB and still
+leaves the same four openings at zero. 12 ships. **Expect the book to fire in a minority of
+rated games** — it fires from the standard position, which rated games never use.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| book | v3.1 | 10s+0.1s | 32 | +11 =5 -16 | 42.2% | -55 | -179 to +57 | 0 / 0 / 0 / 0 | 1.26s | 227 MB |
+
+The score interval is 26.3% to 58.1%, so it includes 50%, and the disqualifiers are all zero,
+which is the pass criterion: a book that changes at most a handful of opening moves cannot show
+Elo over 32 games. Nine of the sixteen bench openings are the ladder's, where the book is
+mostly silent.
+
+Lookup cost, measured over the nine roots and an off-book middlegame, worst 0.096 ms against a
+5 ms budget. The book rebuilds byte-identically from the cache
+(`8e8bf2b0...`), and `tools/book/build.py` reads every entry back through
+`chess.polyglot.open_reader` and proves it legal before the file is accepted.
+
+**A defect this found in `harness/readlog.py`, which this branch may not edit:** the numba
+search's log line has not matched `OUTPUT_LINE` since v3.0. It prints `tt 31%` where the reader
+wants an integer and an extra `null 0` field before `contempt`, so the reader files every
+searched move under "other output" and reports a total log gap on every v3.0+ game. The book's
+line is written in the shape the reader still parses (`d0 move <uci> nodes 0 <n>ms soft 0
+hard 0 clock <ms> tt <n> cut 0 contempt +0 peakrss <n>MB book <k> of <total>`), and
+`tests/test_book.py` asserts that through `readlog.parse`. Worth a one-line fix on a harness
+branch.
+
+**120 s + 0.5 s against v3.1, one game per colour from the harness's first opening (English),
+plus one from the Sveshnikov where the book has something to say.** Everything but the book is
+byte-identical to v3.1, so where the book does not fire the two engines replay the same game.
+
+| game | our colour | book moves | our clock after move 10 | their clock after move 10 | first searched depth | result |
+|---|---|---|---|---|---|---|
+| English | white | 0 | 75.3 s | 74.4 s | 6 | won by checkmate |
+| English | black | 0 | 74.5 s | 75.4 s | 6 | lost by checkmate |
+| Sveshnikov | black | 1 (`c6b8`, 2 entries, 1,052 master games) | **85.8 s** | 75.4 s | 6 | won by checkmate |
+
+The two English games are the same board from both sides, which is what identical engines do:
+the book is silent there (3 master games through that position), so nothing differed. The
+Sveshnikov game is the measurement that matters: one book move at ply 15 cost 0 ms instead of
+about 11 s, and the clock after move 10 is 85.8 s against the opponent's 75.4 s. That is the
+whole mechanism - the book buys clock in the openings it knows, and is silent in the rest.
