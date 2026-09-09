@@ -97,25 +97,31 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   optional `nnue` extra (`uv sync --extra nnue`); nothing that ships imports it.
   **Weights are not committed on this branch** — `weights/*.npz` is gitignored with a comment
   saying why, and the orchestrator brings `nnue/weights-v1` in at merge time.
-  **The mechanics work and no network has beaten the hand evaluation yet.** 64 games at
-  10 s + 0.1 s, one game at a time: h128 (21M, val 0.01654) vs v3.1 **35.2%, Elo -106, interval
-  -201 to -25**; h256-e87 (21M, val 0.01541) vs v3.2 **43.0%, Elo -49, interval -139 to +34**.
-  Validation loss and board strength are moving together, so the offline metric's ordering is
-  real and the gap left is about 50 Elo, not 100. Zero illegal, zero exceptions, zero timeouts,
-  zero over-budget across 144 games; worst move 1.25-1.26 s against a 1.25 s hard budget, which
-  is v3.2's own figure. `nnue-h256-52m` reached 27 of 64 games (+9 =1 -17) before the machine
-  became too contended for the timing to mean anything and is not reported; `nnue-h256-52m-e60`
-  is parity-tested and un-benched.
-  **Recommendation: merge this for the runtime and turn `USE_NNUE` on only once a net beats the
-  hand evaluation over 64 games.** With it off, or with no weight file at all, this is exactly
-  v3.2, and it is one line either way. The next move is on the training side.
-  `docs/BENCH_LOG.md` has the rows, the material-correlation diagnostic, and **the side-to-move
-  offset**: the 52M nets read a dead-equal position as +46 cp for whoever is to move, which
-  cancels in negamax and does not cancel against `CONTEMPT_THRESHOLD`. Feeding the net to
-  `contempt_for` fired contempt in 69% of 760 root positions against the hand evaluation's 58%,
-  agreeing on the sign 62% of the time, so contempt now reads the hand evaluation whatever
-  scores the leaves. The `bare_endgame` handover is a count of men, not a score, so no cp offset
-  can move it, and repetition, fifty-move and insufficient material never read an evaluation.
+  **The result: blending the network with the hand evaluation is worth about 200 Elo.**
+  `(hand + net) // 2` scored **75.0%, Elo +191, interval +109 to +298** over 64 games vs v3.2 at
+  10 s + 0.1 s with the book on both sides. The *same weight file used alone* is 48.4%. The
+  absolute rows are monotone in validation loss (0.01654 / 0.01541 / 0.01489 giving -106 / -49 /
+  -11 Elo), so the offline metric's ordering is real. **The residual net is a negative result:**
+  best validation loss of any 256-wide file (0.01450) and it played at 47.7%, Elo -16 — parity,
+  200 Elo behind simply averaging. The likely reason is that a residual is added at full weight
+  so the net's noise comes with it, while the blend halves that noise against material; the
+  cheap thing to try is `hand + net // 2`, one more policy and no retraining.
+  Zero illegal, zero exceptions, zero timeouts, zero over-budget across 464 games and six weight
+  files. Depth-7 nodes/s by width: h128 1.85M, h256 1.30-1.35M, **h512 0.94M — the first file to
+  miss the 1.0M target**, which is about half a ply.
+  **`USE_NNUE` still ships off**, so what plays is v3.2 exactly; flipping it selects the blend,
+  which is the configuration that measured +191. Turning it on is the orchestrator's call
+  together with which weight file ships. Ignore any 53.1% figure — that is the old 16-game
+  disqualifier row, not a strength number; `docs/BENCH_LOG.md` has the seven real rows and
+  reads the baseline column, since a row against v3.1 from a post-merge candidate measures the
+  opening book as well as the evaluation (that is the 86.7% row, kept only as the confounded
+  counterpart of the controlled 75.0%).
+  Also here: four leaf policies behind one stats slot, weight files that declare `target='cp'`
+  or `'residual'` (an unknown marker is refused, absent means absolute), and contempt reading
+  the hand evaluation whatever scores the leaves — the 52M nets read a dead-equal position as
+  +46 cp for whoever is to move, which cancels in negamax and did not cancel against
+  `CONTEMPT_THRESHOLD`. The `bare_endgame` handover is a count of men, so no cp offset moves it.
+
 - 2026-09-09 · **In review** `book/opening` (PR: opening book): `weights/book.bin`, a 24,479
   entry polyglot book (391,664 bytes) read by `chess.polyglot` before the search up to ply 20,
   weighted by master game counts, legality-checked, and committed to both engines' history

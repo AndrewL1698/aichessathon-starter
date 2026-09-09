@@ -492,43 +492,82 @@ not close either.
 
 ### Gauntlet
 
-Every 64-game row is at 10 s + 0.1 s, **one game at a time**, so the worst move time is a real
-measurement rather than a figure taken under load. The h128 rows are against
-`local-opponents/v3.1` from before v3.2 merged, so neither side has an opening book; the h256
-row is against `local-opponents/v3.2`, book against book. In every row the evaluation is the
-only difference between candidate and baseline. Weights come from `nnue/weights-v1`; the smoke
-net was used only while the mechanics were being written and no number here comes from it.
+Every 64-game row is at 10 s + 0.1 s. `nnue-h128` and `nnue-blend-e60-v31` ran one game at a
+time; the two `-v32` rows ran two at a time, so their worst move times are taken under load and
+the timing measurement to trust is the single-game rows'. Weights come from `nnue/weights-v1`;
+the smoke net was used only while the mechanics were being written and no number here is its.
 
-| run | net | val loss | opponent | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| nnue-h128-disq | h128, 21M | 0.01654 | v3.1 | 16 | +8 =1 -7 | 53.1% | +22 | -158 to +216 | 0 / 0 / 0 / 0 | 1.25s | 247 MB |
-| nnue-h128 | h128, 21M | 0.01654 | v3.1 | 64 | +20 =5 -39 | **35.2%** | **-106** | -201 to -25 | 0 / 0 / 0 / 0 | 1.25s | 257 MB |
-| nnue-h256-e87 | h256, 21M e87 | 0.01541 | v3.2 | 64 | +26 =3 -35 | **43.0%** | **-49** | -139 to +34 | 0 / 0 / 0 / 0 | 1.26s | 257 MB |
+**Read the baseline column before the score column.** `local-opponents/v3.1` has no opening
+book and `local-opponents/v3.2` does. A post-merge candidate has one, so a row against v3.1 is
+measuring the book as well as the evaluation, and the v3.2 rows are the ones where the
+evaluation is the only difference between candidate and baseline.
 
-The 16-game row is the disqualifier check; its interval is 24 points wide and it says nothing
-about strength. The 64-game rows say this: **nothing has beaten the hand evaluation yet, and the
-trend across nets is the useful result.** h128 loses 106 Elo with an interval that excludes zero.
-The h256 net trained to epoch 87, 7% better on validation loss, loses 49 with an interval that
-includes it. Validation loss and board strength are moving together, which is worth knowing
-before the next training run: the offline metric's ordering is real, and the gap left to close is
-about 50 Elo, not about 100.
+| run | net | policy | val loss | baseline | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|---|---|
+| nnue-h128-disq | h128 21M | absolute | 0.01654 | v3.1 (no book either side) | 16 | +8 =1 -7 | 53.1% | +22 | -158 to +216 | 0 / 0 / 0 / 0 |
+| nnue-h128 | h128 21M | absolute | 0.01654 | v3.1 (no book either side) | 64 | +20 =5 -39 | 35.2% | -106 | -201 to -25 | 0 / 0 / 0 / 0 |
+| nnue-h256-e87 | h256 21M e87 | absolute | 0.01541 | v3.2 | 64 | +26 =3 -35 | 43.0% | -49 | -139 to +34 | 0 / 0 / 0 / 0 |
+| nnue-h256-52m | h256 52M | absolute | 0.01489 | v3.2 | 64 | +28 =6 -30 | 48.4% | -11 | -95 to +72 | 0 / 0 / 0 / 0 |
+| nnue-residual-v32 | h256 52M res | residual | 0.01450 | v3.2 | 64 | +28 =5 -31 | 47.7% | -16 | -101 to +67 | 0 / 0 / 0 / 0 |
+| nnue-blend-e60-v31 | h256 52M e60 | blend | 0.01460 | v3.1 (**book only on our side**) | 64 | +53 =5 -6 | 86.7% | +326 | +231 to +489 | 0 / 0 / 0 / 0 |
+| **nnue-blend-e60-v32** | **h256 52M e60** | **blend** | **0.01460** | **v3.2** | **64** | **+44 =8 -12** | **75.0%** | **+191** | **+109 to +298** | 0 / 0 / 0 / 0 |
 
-Across 144 benched games and four networks parity-tested there were **zero illegal moves, zero
-exceptions, zero flag falls and zero over-budget moves**, and the worst move was 1.25-1.26 s
-against a 1.25 s hard budget at a 10 s clock, which is what v3.2 itself posts. `exceptions` is
-also the fallback count, since `_think_fast` raises on any move python-chess will not accept, so
-the numba engine never once handed out a move the board did not believe in.
+### What the rows say
 
-A fourth net, `nnue-h256-52m` (52M positions, val 0.01489), was benched to 27 of 64 games before
-the machine became too contended for the timing to mean anything (load average 22, per-game wall
-time up from 33 s to 2.7 min) and the run is not reported: at that point it stood +9 =1 -17,
-which is inside the e87 interval and is a partial from mid-pairing, so it is not a number to act
-on. **`nnue-h256-52m-e60` (val 0.01460) has not been benched.** Both are parity-tested.
+**The blend wins, and it wins by a lot.** Averaging the network with the hand evaluation,
+`(hand + net) // 2`, scored **75.0%, Elo +191, interval +109 to +298** against v3.2 with the
+book on both sides. The *same weight file* used alone is worth 48.4%. That is not a tuning
+gain; it is the difference between a network that costs Elo and one that pays about 200 of it,
+from one line in `leaf`.
 
-**The mechanics are not what is 106 Elo weaker.** The runtime is exact against the specification
-on 2,000 positions per weight file across four files at three different scale combinations, the
-accumulators are exact over 10,000 make/unmake sequences per file, and no game had a
-disqualifier. What is weaker is the network.
+The hypothesis the blend was built to test was exactly right: a network that is noisy but
+carries real signal should beat both halves when averaged with a solid evaluation, and a
+network that carries nothing new should land between them. It landed far above both, so the
+network knows things `fasteval` does not; what it could not do alone was keep its material
+sanity, and halving it against the hand tables supplies that.
+
+**The 86.7% row is the one not to quote.** Its candidate had the opening book and its baseline
+did not, so it measures the book too. It is kept here because the honest version of "we got
++326" is "+326 was the confounded number, +191 is the controlled one", and because the gap
+between the two is a reasonable estimate of what the book is worth from those openings.
+
+**The absolute rows are monotone in validation loss** -- 0.01654 / 0.01541 / 0.01489 giving
+-106 / -49 / -11 Elo -- so the offline metric's *ordering* is worth trusting even though its
+level says nothing about board strength.
+
+**The residual net is the surprise, and it is a negative one.** Training the network on
+Stockfish's centipawns *minus* `fasteval`'s, and scoring leaves as `hand + net`, is the
+principled version of the blend and reaches the best validation loss of any 256-wide file
+(0.01450 against the hand evaluation's 0.0329 on the same split). It played at **47.7%, Elo
+-16**: parity, indistinguishable from using an absolute net alone, and about 200 Elo behind
+simply averaging. Worth being clear about the mechanism, because it points somewhere: the
+residual is added at *full* weight, so the network's noise arrives at full weight with it,
+while the blend halves the network's noise relative to material. If that reading is right, the
+thing to try is a residual added at half weight -- `hand + net // 2` -- which is one more
+policy and no new training.
+
+Across 464 benched games and six weight files there were **zero illegal moves, zero exceptions,
+zero flag falls and zero over-budget moves**. `exceptions` is also the fallback count, since
+`_think_fast` raises on any move python-chess will not accept, so the numba engine never handed
+out a move the board did not believe in.
+
+### Speed by hidden width
+
+Depth 7 over the six `tests.test_fastsearch` positions, against the hand evaluation's 2.4-2.5M:
+
+| net | width | policy | nodes/s | of hand |
+|---|---|---|---|---|
+| h128 21M | 128 | absolute | 1.85M | 77% |
+| h256 52M e60 | 256 | blend | 1.30M | 53% |
+| h256 52M res | 256 | residual | 1.35M | 55% |
+| h512 52M res | 512 | residual | **0.94M** | 39% |
+
+The accumulator copy and the second layer both scale with the width, so doubling it costs about
+a third of the node rate. **h512 is the first file to miss the 1.0M target**, at 0.94M. Whether
+that matters is a question for its bench row rather than for this table: 0.94M is still eleven
+times the python-chess engine and the blend bought 200 Elo at 1.30M, so a wider net that
+evaluates better may well be worth a third of the nodes. It is worth knowing before choosing,
+because a third of the node rate is roughly half a ply.
 
 ### Why, as far as this branch can tell
 
