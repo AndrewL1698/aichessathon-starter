@@ -73,6 +73,24 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-09 · **In review** `book/opening` (PR: opening book): `weights/book.bin`, a 24,479
+  entry polyglot book (391,664 bytes) read by `chess.polyglot` before the search up to ply 20,
+  weighted by master game counts, legality-checked, and committed to both engines' history
+  through `fastsearch.remember_played`. Built offline by `tools/book/build.py` from 1,133,198
+  over-the-board master games in PGN Mentor's 233 opening collections. **The Lichess masters
+  explorer this was briefed on is dead** (401 on every route, two networks), which is why the
+  corpus is PGN files; provenance still human games only, never our engine, as `AGENTS.md`
+  requires. **Four of the eight sample openings the ladder publishes occur in no master game at
+  all** (Petroff, Scotch, French Classical 0 games; English 3), so the book answers the start
+  position (16 plies), Sveshnikov (9), Grunfeld (9), Sicilian Closed (5) and Winawer (3) and
+  nothing else: expect it to fire in a minority of rated games. 32 games vs v3.1 42.2%,
+  interval 26.3-58.1% so it includes 50%, 0/0/0/0 disqualifiers; the book move in a 120 s
+  Sveshnikov game left the clock at 85.8 s against 75.4 s after move 10. Lookup 0.096 ms worst.
+  Also found, and **not** fixed here because `harness/` is off limits: the numba search's log
+  line has not matched `harness/readlog.py`'s `OUTPUT_LINE` since v3.0 (`tt 31%` and an extra
+  `null` field), so the reader reports a total log gap on every v3.0+ game; the book's own line
+  is written in the shape that still parses.
+
 - 2026-09-08 late · **v3.1** `search/clock-backstop`: the timer-thread backstop from PR #11 on
   top of v3.0, with `STATS[EXPIRED]` read at every node, `nogil` on the three search functions,
   and the thread joined on exit (the PR #11 audit found `Timer.cancel()` cannot stop a callback
