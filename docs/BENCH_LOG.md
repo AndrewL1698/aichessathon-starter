@@ -642,3 +642,23 @@ of the hard budget 1 ms; slowest moves 11.9 s at a 13.4 s hard budget and 9.8 s 
 clock minima 24.4 s and 41.0 s. Pooled with the doer's 64-game row the blend is +112 =26 -22
 over 160 games, 78.1%.
 
+
+## Cycle 4, small fixes, 2026-09-09: `eval/blend-net-heavy`
+
+Baseline `local-opponents/v4.0`, four games at a time, `harness.bench`. `leaf` under `BLEND`
+returns `(hand + 3 * net) // 4` instead of `(hand + net) // 2`; nothing else differs.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| blend-net-heavy | baseline | 10s+0.1s | 96 | +27 =17 -52 | 37.0% | -93 | -162 to -30 | 0 / 0 / 0 / 0 | 1.29s | 255 MB |
+
+**Rejected, and cleanly: the whole interval is below zero.** The theory was that the mean halves
+the net's scale wherever the net sees more than the tables (root scores of +50 where Stockfish
+had +250 to +500 in rounds 82 to 85, and 300 to 430 cp above Stockfish's while losing round 86).
+The compression is real and the fix for it is not this: weighting the net three to one costs
+about 90 Elo at 10 s, which is the same direction as v4.0's own measurement that the mean beat
+the net alone. Read together, the two results say the hand evaluation's half is doing work the
+net does not, at least at the depths a 10 s game reaches, and that the compressed score is a
+display problem more than a decision problem. Not taken to the proxy control: the lower bound
+decides. The untested direction is the opposite weighting, `(3 * hand + net) // 4`, which
+nobody has measured; it would be a new candidate, not a retry of this one.

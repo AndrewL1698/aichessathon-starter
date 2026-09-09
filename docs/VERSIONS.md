@@ -28,6 +28,7 @@ The current baseline for the bench is the newest shipped version (v4.0 as of 202
 
 | Branch | Commit | What | Why not |
 |---|---|---|---|
+| `eval/blend-net-heavy` | v4.1 candidate, rejected | Leaf blend one part hand to three parts net instead of the mean. | 37.0% vs v4.0 over 96 games at 10 s, Elo -93, interval -162 to -30. The hand half of the blend carries signal the net lacks; the score compression it was meant to fix is cosmetic. |
 | `cand/null-move` | 132a964 | Null move pruning | 53.6% vs v2.2 over 88 games, lower bound below zero. The only pruning candidate with a consistent positive sign; worth 300+ games. |
 | `cand/lmr` | 5990f59 | Late move reductions | 48.4% vs v2.2. Needs principal variation search underneath it to pay. |
 | `cand/futility` | 4d8f361 | Frontier futility pruning | 50.0% vs v2.2. No effect at 32 games. |
