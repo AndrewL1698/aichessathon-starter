@@ -519,7 +519,30 @@ solves 5 at depth 7 to 9, v2.4 4 at depth 5 to 7, three in common; v3.0 finds ro
 idea twice where v2.4 never does, and drops one round 73 position it chose at depth 5 and
 leaves at depth 9. Deeper is not automatically sharper by Stockfish's lights, which is why the
 suite does not decide anything. `tests.test_fastboard`
-clean. **200 fast games against v2.4: +181 =15 -4, 94.2%, Elo +486, interval +416 to +596,
+clean.
+
+**Verdict: v3.0 passes every gate, and the PR into `prod` is open.** On the final code with the
+backstop: 93.5% over 200 fast games against v2.4 (+179 =16 -5, Elo +463, lower bound +396);
+gauntlet 92.2% against v2.4, 93.8% against Sunfish, 100% against minimax; 89.6% at the 45 s +
+0.2 s control (+20 =3 -1, Elo +374, lower bound +234); both 120 s games won by checkmate at
+depth 8.3 to 8.5 against 5.6 to 5.9; no illegal move, exception, flag or over-budget move in
+any run; peak RSS 266 MB; `make zip` and `make gate` clean; every worst move now the hard
+budget itself. Every table is in `docs/BENCH_LOG.md`. Blunders per game for v3.0 is a number
+the first rated game will give; the 8, 4 and 5 of the python-chess engine are the comparison.
+
+**What v3.0 does not fix, and what is next.** The evaluation is v2.4's, unchanged, so what the
+deeper search converges on is v2.4's judgement (the suite's round 74 queen move, played at
+depth 9 with a score of -815, is that: the mate is past the horizon and the evaluation likes the
+queen). The clock still sinks in long games under v2.3's rules (9.2 s at the low point of a
+58-move 120 s game, v2.4 10.3 s on the other side); a reserve floor is the same candidate it
+was. The compiled engine's platform speed ratio is unmeasured until its first rated game log;
+the wrapper measures its own rate at run time, so the budgets do not depend on it. Candidates
+for v3.1, one at a time against v3.0: pseudo-legal generation with legality checked as moves
+are made (the plain speed gain still on the table), checks in quiescence (rejected on
+python-chess because the check test was expensive; here it is nearly free), null move (the only
+pruning with a consistent positive sign at 88 games), and the reserve floor. After those, the
+handoff's list: 3 and 4 man Syzygy, a larger blunder suite, dynamic draw weighting.
+ **200 fast games against v2.4: +181 =15 -4, 94.2%, Elo +486, interval +416 to +596,
 no illegal moves, exceptions, flags or over-budget moves, worst move 1.28 s at a 9 s clock,
 peak RSS 266 MB.** The first lower bound in this log above a hundred, let alone four. Two 120 s
 games against v2.4, one per colour: both won by checkmate, depth 8.05 and 8.93 over the first
