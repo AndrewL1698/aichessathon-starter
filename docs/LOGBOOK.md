@@ -730,3 +730,30 @@ the two moves that let a small opening edge go were 12.e4 (-66, Bd2 was better) 
 (-52, Be3), and the repetition from move 30 was taken at 0 against 0. With the hand evaluation
 inside the contempt threshold, a draw scores 0, so accepting it from a position both engines
 read as level is the intended behaviour. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0.
+
+### 2026-09-09, round 90: v4.0 lost to NotGothamChess in 92 moves as Black, from a held draw, on a thin clock.
+
+Banner: v4.0. Stockfish 19 at depth 18: our ACPL 68, five real blunders, all in the ending;
+NotGothamChess's ACPL 66 with three real blunders, a beatable opponent. 156.2 s of 162 s used,
+**5.8 s left after 84 moves**, and 28 of the 84 move lines are lost to the 4 KB cap (moves 35 to
+62), so the middle is read from the PGN and Stockfish alone.
+
+**How it went.** Level to move 38 (Stockfish -60 to +4; our score -10 to -148, a little
+pessimistic). 39...Rff2, inside the log gap, took it from 0 to -505 (...Re6 held): the rooks got
+tangled, 43.Rxg7+ and 44.Rxh7 followed, and moves 40 to 55 sat at -480 to -620. Then the opponent
+gave it back: after 55.Rg4+ Stockfish read -83, and 56...R2f3+ 57.gxf3 Rxf3+ went into a rook
+against two rooks with a perpetual that Stockfish scores at -17 to -70 for the next twelve moves.
+**We held that draw from move 57 to move 68 and lost it at move 69**: ...Rf7+ (depth 10, 545 ms
+of an 813 ms soft budget, 10 s on the clock) lets 70.Kh8 and 71.Rg8 end the checks; ...Rh8+
+draws, because Kxh8 is stalemate (our king on h5 has no square against rooks on g6 and g4) and
+declining it keeps the checks going. 70...Rf8+ instead of ...Rh7+ was the same miss a move later,
+and the rest is a queen mating a bare king.
+
+**What it says.** Two things, both already on the table. The clock: the soft budget is `clock /
+25 + 400 ms`, so the first ten moves of a quiet Nimzo-Indian took 51 s at depth 7 to 8 and move
+69 was searched for half a second; three v4.0 games have now ended with 5.8 to 8.4 s left (82, 85,
+90) and this one was decided in that regime. A flatter allocation across an 80-move game is the
+untested time candidate, and it cuts against `time/hard-divisor-6`, which spends the middlegame
+harder still. The depth: the stalemate resource needed more than depth 10 to see, and depth 10
+was all half a second bought. The three positions (moves 39, 56, 69) are in `tests/positions`,
+which now holds 48. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0, 5.

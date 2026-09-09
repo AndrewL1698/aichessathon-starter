@@ -52,3 +52,7 @@ r2q1rk1/pbp2ppp/1p2p3/3PP3/4nB2/2P3P1/P1Q1PPBP/R4RK1 b - - 0 13; bm e6d5; id "r8
 r1bq1rk1/1p1p1p2/2nN1bpp/p1P1p3/8/6P1/PP1NPPBP/R2Q1RK1 b - - 3 16; bm b7b6; id "r86 m16 Bg7 -381"
 # Round 87 (v4.0, drawn vs OnlyBlunder by perpetual check). Stockfish 19 depth 18, 150 cp threshold.
 4rrk1/p2q1pp1/bp1p1nnp/3P4/P1p1PPP1/1PN1B2P/2RQ4/1R4KB w - - 0 28; bm b3b4; id "r87 m28 bxc4 -243"
+# Round 90 (v4.0, lost to NotGothamChess). Stockfish 19 depth 18, 150 cp threshold; the two moves after 69 were already lost.
+1R6/5kpp/5r2/8/2R1P3/7P/3r2P1/6K1 b - - 0 39; bm f6e6; id "r90 m39 Rff2 -505"
+8/5r2/6R1/7k/6R1/6KP/5rP1/8 b - - 23 56; bm f2g2; id "r90 m56 R2f3+ -424"
+5r2/7K/6R1/7k/6R1/7P/8/8 b - - 23 69; bm f8h8; id "r90 m69 Rf7+ -mate"
