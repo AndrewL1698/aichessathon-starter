@@ -379,6 +379,54 @@ def check_timed(fens: list[str], reference: ModuleType) -> str:
     )
 
 
+def check_backstop(fens: list[str]) -> str:
+    """The timer thread stops a search that the node-counted clock read cannot.
+
+    The clock is read every `CHECK_MASK + 1` nodes, so a search only stops on it as often as
+    nodes come, and a slow subtree near the deadline is an overrun. This defeats that read
+    outright, with a mask no node count ever satisfies, and asks for depth 40, which nothing
+    finishes, so that only the thread can end the search. Each search then has to stop close
+    to its deadline, flag both the expiry and the abort, and still return a legal move. With
+    the thread inert every one of these runs until the heat death of the test, so it cannot
+    pass by accident.
+    """
+    masks = fs.NODE_CHECK_MASK, fs.FINE_CHECK_MASK
+    never = (1 << 62) - 1
+    fs.NODE_CHECK_MASK = fs.FINE_CHECK_MASK = never
+    worst_late = 0.0
+    try:
+        for index, fen in enumerate(fens):
+            budget_ms = (150, 300, 500)[index % 3]
+            legal = [candidate.uci() for candidate in chess.Board(fen).legal_moves]
+            fs.reset()
+            started = time.perf_counter()
+            deadline = started + budget_ms / 1000.0
+            backstop = fs._arm_backstop(deadline)
+            try:
+                move, _, _ = fs.search_fixed(fen, 40, deadline=deadline, first=0)
+            finally:
+                backstop.cancel()
+                backstop.join()
+            spent_ms = (time.perf_counter() - started) * 1000.0
+            if not fs.STATS[fs.EXPIRED] or not fs.STATS[fs.ABORTED]:
+                raise Failure(f"the backstop never fired on a {budget_ms} ms budget from {fen!r}")
+            if move not in legal:
+                raise Failure(f"a backstopped search from {fen!r} returned {move}, not legal")
+            worst_late = max(worst_late, spent_ms - budget_ms)
+            if spent_ms > budget_ms + 100.0:
+                raise Failure(
+                    f"the backstop fired {spent_ms - budget_ms:.0f} ms late on a {budget_ms} ms "
+                    f"budget from {fen!r}"
+                )
+    finally:
+        fs.NODE_CHECK_MASK, fs.FINE_CHECK_MASK = masks
+        fs.reset()
+    return (
+        f"{len(fens)} depth-40 searches with the clock read disabled all stopped on the "
+        f"thread, at most {worst_late:.0f} ms after the deadline, all legal"
+    )
+
+
 def check_speed(depth: int) -> list[tuple[str, float, int]]:
     """The node rate in the middlegame, which is the number this whole port exists for."""
     rates = []
@@ -451,6 +499,7 @@ def main() -> None:
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
     print(f"timeouts: {check_timed(sample[:24], reference)}")
+    print(f"backstop: {check_backstop(sample[:6])}")
 
     depth = 8 if arguments.full else 7
     print(f"\nnode rate at depth {depth}")
