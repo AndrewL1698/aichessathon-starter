@@ -18,6 +18,15 @@ flag; this way the budget arithmetic, the deadline and the abort keep exactly th
 have in `agent.py`. Python still drives iterative deepening, one jitted call per depth, so an
 abort also lands cleanly between iterations.
 
+**The backstop.** The clock read above is counted in nodes, so it is only as regular as the
+node rate, and one subtree of deep quiescence on a slow machine is 1024 nodes that take longer
+than the last few milliseconds of the budget. So `think` also arms a timer thread that sleeps
+until the hard deadline and then sets `stats[EXPIRED]`, which every node reads before anything
+else. The search functions release the interpreter lock (`nogil`) so the thread can actually
+run while they do; `clock()` takes the lock back for its 340 nanoseconds and releases it. The
+two stops are independent: the node-counted read is the one that fires in nearly every game,
+and the thread is there for the move where it does not.
+
 **Aborting.** A timeout cannot unwind through a `raise` here, so `stats[ABORTED]` is set and
 every frame returns as soon as it sees it, *after* unmaking its move. The board, the undo stack
 and the ply-indexed buffers are all consistent when the abort reaches Python, unlike
@@ -52,6 +61,7 @@ handful of comparisons.
 
 import resource
 import sys
+import threading
 import time
 
 import numpy as np
@@ -176,6 +186,7 @@ NODES, CUTOFFS, DRAWS, ABORTED = 0, 1, 2, 3
 CONTEMPT_AT, CHECK_MASK, BEST_MOVE, ROOT_BEST = 4, 5, 6, 7
 TT_PROBES, TT_HITS, TT_STORES, GAME_COUNT = 8, 9, 10, 11
 NULL_ENABLED, NULL_CUTOFFS = 12, 13
+EXPIRED = 14
 STATS_SIZE = 16
 
 # Read-only, so numba can hold it as a global constant.
@@ -650,7 +661,7 @@ _SEARCH_SIG = (
 )
 
 
-@njit(nbt.int64(*_QUIESCENCE_SIG), cache=False)
+@njit(nbt.int64(*_QUIESCENCE_SIG), cache=False, nogil=True)
 def quiescence(
     board: np.ndarray,
     st: np.ndarray,
@@ -666,7 +677,7 @@ def quiescence(
 ) -> int:
     """Search the noisy continuations so the evaluation is never read mid-exchange."""
     stats[NODES] += 1
-    if (stats[NODES] & stats[CHECK_MASK]) == 0 and clock() > deadline:
+    if stats[EXPIRED] != 0 or ((stats[NODES] & stats[CHECK_MASK]) == 0 and clock() > deadline):
         stats[ABORTED] = 1
         return 0
 
@@ -740,7 +751,7 @@ def quiescence(
     return best
 
 
-@njit(nbt.int64(*_SEARCH_SIG), cache=False)
+@njit(nbt.int64(*_SEARCH_SIG), cache=False, nogil=True)
 def negamax(
     board: np.ndarray,
     st: np.ndarray,
@@ -761,7 +772,7 @@ def negamax(
 ) -> int:
     """Fail-soft alpha-beta by observing that both sides' scores are exact opposites."""
     stats[NODES] += 1
-    if (stats[NODES] & stats[CHECK_MASK]) == 0 and clock() > deadline:
+    if stats[EXPIRED] != 0 or ((stats[NODES] & stats[CHECK_MASK]) == 0 and clock() > deadline):
         stats[ABORTED] = 1
         return 0
 
@@ -937,6 +948,7 @@ def negamax(
         nbt.int32,
     ),
     cache=False,
+    nogil=True,
 )
 def search_root(
     board: np.ndarray,
@@ -1110,6 +1122,28 @@ def remember_played(fen: str, uci: str) -> None:
     _EXPECTED = fb.to_fen(board, st)
 
 
+def _expire() -> None:
+    """What the backstop thread does at the hard deadline: the next node aborts."""
+    STATS[EXPIRED] = 1
+
+
+def _arm_backstop(deadline: float) -> threading.Timer:
+    """A thread that sleeps until `deadline` and sets `STATS[EXPIRED]`, then does nothing.
+
+    It is cancelled as soon as the move is chosen, so in an ordinary move it never wakes.
+    Cancelling is not enough on its own: a timer whose sleep has already ended runs its
+    function regardless, and if that write landed after the next move had cleared the flag
+    the next move would abort at its first node. So the caller joins the thread as well as
+    cancelling it, and only then returns; a stale write can only ever hit the move it was
+    armed for. It is a daemon so that a move which ends by exception cannot keep the process
+    alive.
+    """
+    backstop = threading.Timer(max(deadline - time.perf_counter(), 0.0), _expire)
+    backstop.daemon = True
+    backstop.start()
+    return backstop
+
+
 def think(fen: str, time_left_ms: int) -> str:
     """Deepen until the budget is spent, keeping the best move proven so far.
 
@@ -1125,7 +1159,7 @@ def think(fen: str, time_left_ms: int) -> str:
     observe(int(st[7]))
     soft_ms, hard_ms = budgets(time_left_ms)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
@@ -1135,6 +1169,7 @@ def think(fen: str, time_left_ms: int) -> str:
     STATS[CONTEMPT_AT] = contempt_for(int(evaluate(board, st)))
     KILLERS.fill(0)
     deadline = started + hard_ms / 1000.0
+    backstop = _arm_backstop(deadline)
 
     # Before the first iteration the only ordering there is is the static one, plus whatever
     # the table already knows about this position from the search two plies ago.
@@ -1153,36 +1188,40 @@ def think(fen: str, time_left_ms: int) -> str:
     # A zero budget means the clock is under the safety margin, and then even the first
     # hundred nodes are time we do not have: the ordered first move is the whole reply.
     deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
-    for depth in range(1, deepest + 1):
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        # Start an iteration while the soft budget is not yet spent and the whole iteration
-        # is projected to finish inside the hard budget. The first condition keeps the average
-        # move near the soft budget; the second refuses only iterations that would be cut off
-        # by the deadline and wasted, rather than every iteration that might end past the soft
-        # budget, which left most of the clock unspent. This is `agent.py`'s gate exactly.
-        if depth > 1 and (
-            elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > hard_ms
-        ):
-            break
-        iteration_started = time.perf_counter()
-        score = int(
-            search_root(
-                board, st, undo, TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS,
-                deadline, depth, best,
+    try:
+        for depth in range(1, deepest + 1):
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            # Start an iteration while the soft budget is not yet spent and the whole iteration
+            # is projected to finish inside the hard budget. The first condition keeps the average
+            # move near the soft budget; the second refuses only iterations that would be cut off
+            # by the deadline and wasted, rather than every iteration that might end past the soft
+            # budget, which left most of the clock unspent. This is `agent.py`'s gate exactly.
+            if depth > 1 and (
+                elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > hard_ms
+            ):
+                break
+            iteration_started = time.perf_counter()
+            score = int(
+                search_root(
+                    board, st, undo, TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS,
+                    deadline, depth, best,
+                )
             )
-        )
-        if STATS[ABORTED] != 0:
-            if STATS[ROOT_BEST] != 0:
-                best = int(STATS[ROOT_BEST])
-                partial = True
-            break
-        best = int(STATS[BEST_MOVE])
-        best_score = score
-        previous_ms = last_ms
-        last_ms = (time.perf_counter() - iteration_started) * 1000.0
-        reached = depth
-        if best_score >= MATE_FOUND:
-            break  # A forced mate is in hand; searching deeper cannot shorten it.
+            if STATS[ABORTED] != 0:
+                if STATS[ROOT_BEST] != 0:
+                    best = int(STATS[ROOT_BEST])
+                    partial = True
+                break
+            best = int(STATS[BEST_MOVE])
+            best_score = score
+            previous_ms = last_ms
+            last_ms = (time.perf_counter() - iteration_started) * 1000.0
+            reached = depth
+            if best_score >= MATE_FOUND:
+                break  # A forced mate is in hand; searching deeper cannot shorten it.
+    finally:
+        backstop.cancel()
+        backstop.join()
 
     spent_ms = (time.perf_counter() - started) * 1000.0
     depth_text = f"d{reached} score {best_score:+d}" if reached else "d0"
@@ -1232,7 +1271,7 @@ def search_fixed(
         reset()
     board, st, undo = fb.from_fen(fen)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
