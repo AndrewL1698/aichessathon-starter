@@ -459,6 +459,26 @@ ROOK_SEMI_OPEN_EG = 6
 BISHOP_PAIR_MG = 25
 BISHOP_PAIR_EG = 45
 
+# Mobility: how many squares a piece can actually go to. A square counts when the piece
+# attacks it, one of ours is not standing on it, and no enemy pawn covers it, because a square
+# a pawn guards is not one a knight or a rook can use. Counted for knights, bishops, rooks and
+# queens only: pawn moves are what the pawn structure terms already price, and a king with
+# somewhere to go in the middlegame is usually a king with no cover, which the shield term
+# reads the other way round.
+#
+# Each count is scored against a typical one for that piece rather than from zero, so the term
+# is about zero on a normal board instead of a bonus for owning pieces; without that, a queen
+# would be worth its own mobility baseline more than the tables say and material and mobility
+# would no longer be on the same scale. Indexed by piece type minus one, as PIECE_VALUES is,
+# so index 0 (pawn) and index 5 (king) are the pieces this deliberately does not score.
+#
+# Sliders are weighted below knights per square because they have many more squares, and the
+# endgame column is flatter across the board: with the position open, a rook's file is worth
+# more than a knight's outpost. `fasteval.py` counts the same squares by walking rays.
+MOBILITY_MG: tuple[int, ...] = (0, 4, 3, 2, 1, 0)
+MOBILITY_EG: tuple[int, ...] = (0, 4, 4, 4, 2, 0)
+MOBILITY_BASE: tuple[int, ...] = (0, 4, 6, 7, 13, 0)
+
 # Charged per missing pawn of the three the king would like in front of it. Middlegame only:
 # in the endgame there is nothing left to attack with and the king table wants the king out.
 # The mask is six squares, three files by two ranks, and the count is capped at three, so this
@@ -567,8 +587,8 @@ def _pieces(
 ) -> tuple[int, int]:
     """Rooks on open and half-open files, and the bishop pair, as (middlegame, endgame).
 
-    Mobility would belong here too and is deliberately absent: python-chess has to generate
-    moves to count it, which costs more at one leaf than everything else in this file together.
+    Mobility is the other piece term and lives in `_mobility`, which needs the pawns of both
+    sides rather than the files they sit on.
     """
     middlegame = endgame = 0
     all_pawns = white_pawns | black_pawns
@@ -600,6 +620,52 @@ def _pieces(
     if chess.popcount(board.bishops & black) >= 2:
         middlegame -= BISHOP_PAIR_MG
         endgame -= BISHOP_PAIR_EG
+    return middlegame, endgame
+
+
+def _mobility(
+    board: chess.Board, white: int, black: int, white_pawns: int, black_pawns: int
+) -> tuple[int, int]:
+    """Knight, bishop, rook and queen mobility, as (middlegame, endgame), White's side.
+
+    A piece's count is the size of its attack set minus the squares one of its own men stands
+    on and the squares an enemy pawn covers. Attack sets stop at the first blocker, so a rook
+    behind its own rook counts the squares up to it and no further, and the blocker itself
+    counts only when it is capturable. This is what makes the term say something the
+    piece-square tables cannot: the same knight on the same square is worth different amounts
+    depending on what the pawns have done around it.
+
+    `_pieces` used to carry the note that mobility was too expensive to have here. That was
+    true when this file was the engine. It is the fallback now, `fasteval.py` is what plays,
+    and the two have to score every position identically, so the term lives in both.
+    """
+    middlegame = endgame = 0
+    # The mobility area, per side: everything except our own men and the squares the enemy
+    # pawns cover. Both are complements, so they have bits set above 64; every use below is
+    # an AND with an attack set, which is a plain 64-bit board, so the width never escapes.
+    black_pawn_attacks = chess.shift_down_left(black_pawns) | chess.shift_down_right(black_pawns)
+    white_pawn_attacks = chess.shift_up_left(white_pawns) | chess.shift_up_right(white_pawns)
+    white_area = ~white & ~black_pawn_attacks
+    black_area = ~black & ~white_pawn_attacks
+    movers = (board.knights, board.bishops, board.rooks, board.queens)
+    for index, occupied in enumerate(movers, 1):
+        mg_weight = MOBILITY_MG[index]
+        eg_weight = MOBILITY_EG[index]
+        base = MOBILITY_BASE[index]
+        pieces = occupied & white
+        while pieces:
+            square = (pieces & -pieces).bit_length() - 1
+            pieces &= pieces - 1
+            count = chess.popcount(board.attacks_mask(square) & white_area) - base
+            middlegame += count * mg_weight
+            endgame += count * eg_weight
+        pieces = occupied & black
+        while pieces:
+            square = (pieces & -pieces).bit_length() - 1
+            pieces &= pieces - 1
+            count = chess.popcount(board.attacks_mask(square) & black_area) - base
+            middlegame -= count * mg_weight
+            endgame -= count * eg_weight
     return middlegame, endgame
 
 
@@ -683,8 +749,9 @@ def evaluate(board: chess.Board) -> int:
     black_pawns = bitboards[0] & black
     pawn_mg, pawn_eg = _pawn_structure(white_pawns, black_pawns)
     piece_mg, piece_eg = _pieces(board, white, black, white_pawns, black_pawns)
-    middlegame += pawn_mg + piece_mg
-    endgame += pawn_eg + piece_eg
+    mobility_mg, mobility_eg = _mobility(board, white, black, white_pawns, black_pawns)
+    middlegame += pawn_mg + piece_mg + mobility_mg
+    endgame += pawn_eg + piece_eg + mobility_eg
 
     kings = bitboards[5]
     white_king = (kings & white).bit_length() - 1

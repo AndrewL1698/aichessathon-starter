@@ -34,6 +34,12 @@ import numpy as np
 from numba import njit
 from numba import types as nbt
 
+# The mobility term walks rays, so it needs the same direction tables the move generator
+# uses. Imported rather than copied: a second set that drifted would be a wrong evaluation
+# nothing tests for. `fastboard` imports numpy and numba and nothing else, so this does not
+# put python-chess anywhere near this module.
+from fastboard import ALL_D, EMPTY, KNIGHT_D, OFF
+
 # Every `@njit` below compiles as it is decorated, so what `COMPILE_SECONDS` at the foot of
 # this file spans is the compilation of the whole module, not only the `warm()` call at the
 # end of it. `agent.py` prints it, so the platform's log says what the init budget went on.
@@ -266,6 +272,14 @@ ROOK_SEMI_OPEN_EG = 6
 BISHOP_PAIR_MG = 25
 BISHOP_PAIR_EG = 45
 
+# Mobility: how many squares a piece can actually go to, scored against a typical count for
+# that piece so the term is about zero on a normal board rather than a bonus for owning
+# pieces. Knights, bishops, rooks and queens only. Indexed by piece type minus one, so index
+# 0 and index 5 are the pawn and the king, which this does not score.
+MOBILITY_MG: tuple[int, ...] = (0, 4, 3, 2, 1, 0)
+MOBILITY_EG: tuple[int, ...] = (0, 4, 4, 4, 2, 0)
+MOBILITY_BASE: tuple[int, ...] = (0, 4, 6, 7, 13, 0)
+
 # Charged per missing pawn of the three the king would like in front of it. Middlegame only:
 # in the endgame there is nothing left to attack with and the king table wants the king out.
 # The mask is six squares, three files by two ranks, and the count is capped at three, so this
@@ -394,6 +408,11 @@ for _mb in range(21, 99):
 PASSED_MG_BY_RANK = np.array(PASSED_MG, dtype=np.int32)
 PASSED_EG_BY_RANK = np.array(PASSED_EG, dtype=np.int32)
 
+# The mobility weights as arrays, indexed by kind minus one exactly as the tuples are.
+MOBILITY_MG_BY_KIND = np.array(MOBILITY_MG, dtype=np.int32)
+MOBILITY_EG_BY_KIND = np.array(MOBILITY_EG, dtype=np.int32)
+MOBILITY_BASE_BY_KIND = np.array(MOBILITY_BASE, dtype=np.int32)
+
 _BOARD_T = nbt.int8[::1]
 _ST_T = nbt.int64[::1]
 
@@ -401,6 +420,71 @@ PIECE_VALUE_BY_KIND = np.array(PIECE_VALUES, dtype=np.int32)
 # Index of the lowest set bit of a one-file rank set, so the pawn loops walk pawns rather
 # than the eight ranks each file might hold one on.
 CTZ8 = np.array([0] + [(_i & -_i).bit_length() - 1 for _i in range(1, 256)], dtype=np.int32)
+
+
+@njit(nbt.int64(_BOARD_T, nbt.int64, nbt.int64, nbt.boolean), cache=False)
+def mobility_count(board: np.ndarray, square: int, kind: int, white: bool) -> int:
+    """How many squares the knight, bishop, rook or queen on `square` can use.
+
+    Equal to `popcount(board.attacks_mask(square) & area)` in `agent.py`, where `area` is
+    everything bar our own men and the squares an enemy pawn covers, by walking the rays the
+    move generator walks: out from the piece while the squares are empty, and one more square
+    if what stopped the ray is capturable. Off-board squares hold `OFF`, so the walk needs no
+    bounds test of its own.
+
+    "Covered by an enemy pawn" is two array reads rather than a pawn attack set built up
+    front. A black pawn steps in the +10 direction, so it attacks from `to - 9` and `to - 11`;
+    a white pawn attacks from `to + 9` and `to + 11`. Both offsets stay inside the mailbox for
+    any on-board `to`, and the border holds `OFF`, which is neither pawn code.
+    """
+    if white:
+        friend_lo = 1
+        friend_hi = 6
+        enemy_pawn = 7
+        guard_a = -9
+        guard_b = -11
+    else:
+        friend_lo = 7
+        friend_hi = 12
+        enemy_pawn = 1
+        guard_a = 9
+        guard_b = 11
+    count = 0
+    if kind == 2:
+        for k in range(8):
+            to = square + KNIGHT_D[k]
+            target = board[to]
+            if target == OFF or (friend_lo <= target <= friend_hi):
+                continue
+            if board[to + guard_a] != enemy_pawn and board[to + guard_b] != enemy_pawn:
+                count += 1
+        return count
+    if kind == 3:
+        first = 0
+        last = 4
+    elif kind == 4:
+        first = 4
+        last = 8
+    else:
+        first = 0
+        last = 8
+    for k in range(first, last):
+        step = ALL_D[k]
+        to = square + step
+        target = board[to]
+        while target == EMPTY:
+            if board[to + guard_a] != enemy_pawn and board[to + guard_b] != enemy_pawn:
+                count += 1
+            to += step
+            target = board[to]
+        if (
+            target != OFF
+            and not (friend_lo <= target <= friend_hi)
+            and board[to + guard_a] != enemy_pawn
+            and board[to + guard_b] != enemy_pawn
+        ):
+            count += 1
+    return count
 
 
 @njit(nbt.int64(_BOARD_T, _ST_T), cache=False)
@@ -483,6 +567,16 @@ def evaluate(board: np.ndarray, st: np.ndarray) -> int:
                 white_heavy += 1
             else:
                 black_heavy += 1
+        if 2 <= kind <= 5:
+            mobility = (
+                mobility_count(board, square, kind, white) - MOBILITY_BASE_BY_KIND[kind - 1]
+            )
+            if white:
+                middlegame += mobility * MOBILITY_MG_BY_KIND[kind - 1]
+                endgame += mobility * MOBILITY_EG_BY_KIND[kind - 1]
+            else:
+                middlegame -= mobility * MOBILITY_MG_BY_KIND[kind - 1]
+                endgame -= mobility * MOBILITY_EG_BY_KIND[kind - 1]
 
     # Passed, isolated and doubled pawns, and the rook files, one pass over the eight files.
     for file_index in range(8):
