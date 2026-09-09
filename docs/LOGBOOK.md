@@ -52,11 +52,12 @@ to the set of seen positions.
 
 - The *soft* budget is `time_left / 25 + 400 ms`. This is the target: the search stops
   starting new work once it expects to pass it.
-- The *hard* budget is `time_left / 8`, but never more than `time_left - 300 ms`. This is the
-  deadline. The search is aborted the moment it passes it, whatever it is doing.
+- The *hard* budget is `time_left / 6`, but never more than `time_left - 300 ms`. This is the
+  deadline. The search is aborted the moment it passes it, whatever it is doing. It was
+  `time_left / 8` through v4.0; v4.1 raised it, see Part 2.
 
-At 120 s the soft budget is 5.2 s and the hard budget 15 s. Both shrink with the clock, so the
-engine can never spend more than an eighth of what it has, and a flag needs eight consecutive
+At 120 s the soft budget is 5.2 s and the hard budget 20 s. Both shrink with the clock, so the
+engine can never spend more than a sixth of what it has, and a flag needs six consecutive
 worst cases in a row. Under one second (`PANIC_MS`) it searches one ply only. Under 300 ms it
 plays the first move in its ordering without searching at all.
 
