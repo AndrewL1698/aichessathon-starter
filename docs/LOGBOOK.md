@@ -437,3 +437,97 @@ Worth revisiting on the compiled board, where a check test costs nothing.
 Elo in the python-chess engine is small change; three sensible candidates measured within
 noise of zero. The blunders left are depth, and depth is speed. Next is v3.0 (the search on
 `fastboard.py`), described in `docs/BRIEF.md` section 8.
+
+### 2026-09-09, rounds 76 to 81: v3.1's six rated games. Won 3, lost 3.
+
+All six logs carry v3.1's banner (`compiled fasteval + fastsearch`, no `book`, no `fastnnue`
+line), so none of them is v3.2 or v4.0. v4.0 had not played by round 81, which finished at
+12:16 UTC. Its first log will say `fastnnue` and `evaluation nnue` in the banner.
+
+| Round | Opponent | Colour | Result | Moves | Clock left | Our ACPL / real blunders | Their ACPL / real blunders |
+|---|---|---|---|---|---|---|---|
+| 76 | Chessbuster 9000 | White | won, mate | 63 | 11.6 s | 80 / 10 | 95 / 14 |
+| 77 | Skill Issue | White | lost, mate | 34 | 22.8 s | 94 / 5 | 23 / 1 |
+| 78 | Bongcloud | Black | lost, mate | 41 | 19.1 s | 63 / 2 | 17 / 0 |
+| 79 | Naveen Ragav | Black | won, mate | 35 | 27.0 s | 11 / 0 | 67 / 2 |
+| 80 | Milan | White | won, mate | 42 | 17.1 s | 39 / 3 | 91 / 6 |
+| 81 | Team Anay | Black | lost, mate | 25 | 21.9 s | 79 / 2 | 22 / 0 |
+
+Stockfish 19 at depth 18 through `tools/analyse_game.py`, plus a join of our printed root
+score against Stockfish's evaluation of the same position, both from our side, for the 208
+moves whose search line survives. The three losses were to opponents that made zero or one
+real mistake in the whole game; the three wins were against opponents that made two to
+fourteen. Platform speed was 1.0 to 1.5M nps, depth 7 or 8 on nearly every move, 90 to 100%
+of the clock used, no flags, no fallbacks. Time is not the story of these games.
+
+**1. The evaluation did not know it was losing.** Where Stockfish put us between -250 and
+-500, our root score averaged -94 (16 moves); between -100 and -250, it averaged -16 (20
+moves); and where Stockfish had us between +250 and +500 we said +99 (13 moves). Fourteen
+moves were played with our score above -100 while Stockfish's was at or below -250: two in
+round 76, seven in a row in round 77 (moves 16 to 24), five in a row in round 81 (moves 19
+to 23). Both decisive losses were decided inside those runs. Round 77: 14.g4 and 15.Ra3 at
+depth 7 let Black's Bd4, Bf3 and Ne5 stay in our camp, and from move 16 the engine printed
+-20 to -76 while Stockfish read -360 to -680. Round 81: 13...Qxd5 (depth 8, our -65;
+Stockfish wants ...exd5 and drops from -92 to -504), then ten moves at -30 to -150 in a
+position Stockfish had at -320 to -590, ending in 23...b5?? and a forced mate. Round 78
+was the slow version: 16...O-O-O at +20 (Stockfish -57 to -217, wants ...a5) into the
+a4/b4/c4 storm, then twenty moves each 20 to 130 cp worse than best.
+
+**2. Depth halves the blunder rate per ply.** Of the moves with a surviving line, those
+finished at depth 7 were real blunders 18% of the time (14 of 78, mean drop 316 cp), at
+depth 8 7% (7 of 97, mean drop 125), at depth 9 or 10 5% (1 of 20). Measured at fixed
+depth on four of the game positions, the tree grows 4.5 to 6.5x per ply in quiet positions,
+and quiescence is 50 to 64% of the nodes at depths 6 to 8, so the cost is the main search's
+branching factor, not a quiescence explosion: this is plain fail-soft alpha-beta with the
+table, killers and history, null move compiled in but off, and no PVS, LMR or futility. v4.0
+searches exactly this tree with a slower leaf, so it will sit at depth 7 more often than
+v3.1 did.
+
+**3. The mate-horizon class.** 23...b5 in round 81 is the clearest: at fixed depth 7 the
+engine rates the position -17 and sees no threat; depth 8 is where Qe7 followed by Qf6 and
+Qg7# appears, and the depth-8 tree is 42 times the depth-7 tree (13.2M nodes against 314k)
+because every root move now needs that refutation. In the game the depth-8 iteration hit
+the hard budget (4.76 s, clock 38 s) after proving the depth-7 move lost and finding that
+b5 lost slightly less, and before reaching ...Rfe8 or Stockfish's ...Qa3. `search_root`'s
+partial-iteration rule is sound as written (a move handed back has outscored the previous
+best at the new depth), but in a root fail-low that is "least bad of the moves searched so
+far". Partial-iteration moves were real blunders 5 times in 23 (22%) against 17 in 185 (9%)
+for completed iterations; those are also the hardest positions, so read it as a symptom of
+depth rather than a bug. 35.Qxe5 in round 77 and 43...Rh7 in round 78 are the same shape
+with the game already lost.
+
+**4. Conversion.** Round 76's two-rooks-against-rook-and-bishop ending took 40 moves with
+three real blunders (moves 31, 39, 44) and our score at +27 to +138 where Stockfish had
++390 to +546. Won anyway.
+
+**What v4.0 already fixes.** The twenty positions above went into `tests/positions` (the
+tool's other two were already lost by 13 and 21 pawns before the move). At 20 s per position
+through `--engine fast`, on a loaded machine: **v3.1 solves 5 of 22, v4.0 solves 14 of 22.**
+At fixed depth 7 on the fourteen "did not know it was losing" positions, v3.1's root score
+averages -28, v4.0's -168, Stockfish's -484: the sign and the trend are there, still
+compressed. v4.0 finds ...exd5 in round 81 move 13 at depth 5, exf5 in round 76 moves 14 to
+16 at depth 1, and Ka1 / Re1 / Rxd4 in round 77. It still misses 23...b5 at depths 8 to 9,
+and 14.g4 / 15.Ra3 in round 77 stay missed by both.
+
+**What is left, for search cycle 4, in the order the evidence supports.** (a) Cheaper
+nodes: null move on, PVS, LMR, delta pruning in quiescence; each ply is worth roughly half
+the blunders, and v4.0 gives one back per node. The v3.0 null-move test was 32 games and said
+nothing; the 300 games it asked for are the first job. (b) Check extension and first-ply
+checks in quiescence on the compiled board: the class in finding 3 is quiet moves that set
+up a mate, and the python-chess rejection was about the cost of the check test, which is
+gone. (c) A root fail-low rule (when the first move's new-depth score drops by 150 cp or
+more, let the iteration run to the hard budget and prefer the completed depth's move only if
+nothing proven better exists) is worth a candidate, benched, not assumed. (d) Time: two of
+the 22 blunders were depth-7 moves the gate stopped at 33% and 39% of the soft budget with
+86 and 97 s on the clock, because a table-warmed depth 7 times the growth cap of 8 overshot
+the hard budget; but gate-refused moves overall blundered at 8%, the same as the rest, so
+this is last.
+
+**Tooling.** `harness/readlog.py`'s `OUTPUT_LINE` predates v3.0's line format (`tt 47%`,
+`null 0`) and matches none of a v3.x log's search lines, so it reports every one of these
+games as having no surviving output. Two tokens of regex; not touched here because
+`harness/` is off limits, flagged for a separate fix. `tools/analyse_game.py` is fine.
+
+**Blunders per game, real only: 8 (v2.2, r73), 4 (v2.2, r74), 5 (v2.3, r75), then v3.1:
+10, 5, 2, 0, 3, 2.** The v3.1 average is 3.7 against 5.7 before it, on games that are also
+shorter. Suite is 38 positions.
