@@ -74,22 +74,31 @@ def densify(indices: torch.Tensor, device: torch.device) -> torch.Tensor:
     return scratch[:, 1:]
 
 
-def load_shards(data_dir: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Load every shard under ``data_dir`` into RAM as one index matrix and one cp vector."""
+def load_shards(
+    data_dir: Path, with_hand: bool = False
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Load every shard under ``data_dir`` into RAM: index matrix, cp vector, and, when asked,
+    the ``hand`` vector that ``tools.nnue.hand`` adds (missing it is an error, not a zero)."""
     paths = sorted(data_dir.glob("*.npz"))
     if not paths:
         raise SystemExit(f"no .npz shards under {data_dir}")
     index_blocks: list[np.ndarray] = []
     cp_blocks: list[np.ndarray] = []
+    hand_blocks: list[np.ndarray] = []
     for path in paths:
         with np.load(path) as shard:
             index_blocks.append(shard["indices"])
             cp_blocks.append(shard["cp"])
+            if with_hand:
+                if "hand" not in shard:
+                    raise SystemExit(f"{path} has no hand array; run tools.nnue.hand first")
+                hand_blocks.append(shard["hand"])
     indices = np.concatenate(index_blocks)
     cp = np.concatenate(cp_blocks)
-    megabytes = (indices.nbytes + cp.nbytes) / 1e6
+    hand = np.concatenate(hand_blocks) if with_hand else None
+    megabytes = (indices.nbytes + cp.nbytes + (hand.nbytes if hand is not None else 0)) / 1e6
     print(f"loaded {len(paths)} shard(s), {indices.shape[0]:,} positions, {megabytes:.0f} MB")
-    return indices, cp
+    return indices, cp, hand
 
 
 def pick_device(requested: str) -> torch.device:
@@ -124,8 +133,19 @@ def run_epoch(
     order: np.ndarray,
     batch_size: int,
     device: torch.device,
+    l1_clip: float | None = None,
+    offset: np.ndarray | None = None,
 ) -> float:
-    """Run one pass. ``optimiser`` None means evaluation. Returns mean MSE in WDL space."""
+    """Run one pass. ``optimiser`` None means evaluation. Returns mean MSE in WDL space.
+
+    ``offset`` is the hand evaluation in units of ``cp_scale``, one per row, for a residual
+    net: the sigmoid is taken of ``hand + net`` so the net learns only the correction.
+
+    ``l1_clip`` clamps the layer-1 weights and biases to ``[-l1_clip, l1_clip]`` after every
+    step. export.py proves the int16 accumulator safe from the 32 largest weights per neuron
+    plus the bias, so a clip of c bounds it by 33 * c * qa: c <= 1.9 always exports at qa=512
+    and c <= 3.8 at qa=256. Unconstrained nets pass 2.4 within 30 epochs and keep growing.
+    """
     total = 0.0
     seen = 0
     training = optimiser is not None
@@ -134,12 +154,19 @@ def run_epoch(
         batch = torch.from_numpy(indices[rows])
         wanted = torch.from_numpy(target[rows]).to(device)
         with torch.set_grad_enabled(training):
-            predicted = torch.sigmoid(model(densify(batch, device)))
+            raw = model(densify(batch, device))
+            if offset is not None:
+                raw = raw + torch.from_numpy(offset[rows]).to(device)
+            predicted = torch.sigmoid(raw)
             loss = torch.nn.functional.mse_loss(predicted, wanted)
         if training and optimiser is not None:
             optimiser.zero_grad(set_to_none=True)
             loss.backward()
             optimiser.step()
+            if l1_clip is not None:
+                with torch.no_grad():
+                    model.l1.weight.clamp_(-l1_clip, l1_clip)
+                    model.l1.bias.clamp_(-l1_clip, l1_clip)
         total += float(loss.item()) * rows.size
         seen += rows.size
     return total / max(seen, 1)
@@ -148,14 +175,22 @@ def run_epoch(
 def train(arguments: argparse.Namespace) -> None:
     device = pick_device(arguments.device)
     print(f"device: {device}")
-    indices, cp = load_shards(Path(arguments.data))
+    residual = arguments.target == "residual"
+    indices, cp, hand = load_shards(Path(arguments.data), with_hand=residual)
     target = torch.sigmoid(torch.from_numpy(cp.astype(np.float32)) / arguments.cp_scale).numpy()
+    offset = hand.astype(np.float32) / arguments.cp_scale if hand is not None else None
 
     generator = np.random.default_rng(arguments.seed)
     order = generator.permutation(indices.shape[0])
     split = max(1, int(indices.shape[0] * arguments.val_fraction))
     validation, training_rows = order[:split], order[split:]
     print(f"train {training_rows.size:,} positions, validate {validation.size:,}")
+    mean_loss = float(np.mean((target[validation] - target[validation].mean()) ** 2))
+    print(f"baseline val loss, mean predictor: {mean_loss:.6f}")
+    if offset is not None:
+        hand_only = torch.sigmoid(torch.from_numpy(offset[validation])).numpy()
+        hand_loss = float(np.mean((hand_only - target[validation]) ** 2))
+        print(f"baseline val loss, hand evaluation alone (net = 0): {hand_loss:.6f}")
 
     model = Nnue(arguments.hidden).to(device)
     optimiser = torch.optim.Adam(model.parameters(), lr=arguments.lr)
@@ -167,10 +202,18 @@ def train(arguments: argparse.Namespace) -> None:
         started = time.monotonic()
         generator.shuffle(training_rows)
         train_loss = run_epoch(
-            model, optimiser, indices, target, training_rows, arguments.batch_size, device
+            model,
+            optimiser,
+            indices,
+            target,
+            training_rows,
+            arguments.batch_size,
+            device,
+            arguments.l1_clip,
+            offset,
         )
         val_loss = run_epoch(
-            model, None, indices, target, validation, arguments.batch_size, device
+            model, None, indices, target, validation, arguments.batch_size, device, None, offset
         )
         seconds = time.monotonic() - started
         print(
@@ -186,12 +229,22 @@ def train(arguments: argparse.Namespace) -> None:
                 "model": model.state_dict(),
                 "hidden": arguments.hidden,
                 "cp_scale": arguments.cp_scale,
+                "target": arguments.target,
                 "epoch": epoch,
                 "val_loss": val_loss,
             },
             checkpoints / f"epoch_{epoch:03d}.pt",
         )
         (checkpoints / "history.json").write_text(json.dumps(history, indent=2))
+        if arguments.patience and epoch > arguments.patience:
+            recent = min(row["val"] for row in history[-arguments.patience :])
+            before = min(row["val"] for row in history[: -arguments.patience])
+            if before - recent < arguments.min_delta:
+                print(
+                    f"stopping: val improved by less than {arguments.min_delta} over the last "
+                    f"{arguments.patience} epochs"
+                )
+                break
 
     best = min(history, key=lambda row: row["val"])
     print(f"best val {best['val']:.6f} at epoch {int(best['epoch'])}")
@@ -206,9 +259,28 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=16384)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--l1-clip",
+        type=float,
+        default=None,
+        help="clamp layer-1 weights and biases to +-this after every step; 1.9 keeps qa=512",
+    )
     parser.add_argument("--cp-scale", type=float, default=DEFAULT_CP_SCALE)
+    parser.add_argument(
+        "--target",
+        choices=("cp", "residual"),
+        default="cp",
+        help="residual: fit hand + net to cp, needs the hand array from tools.nnue.hand",
+    )
     parser.add_argument("--val-fraction", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="stop when val has not improved by --min-delta over this many epochs; 0 = never",
+    )
+    parser.add_argument("--min-delta", type=float, default=1e-5)
     parser.add_argument("--device", default="auto", choices=("auto", "mps", "cpu"))
     train(parser.parse_args(argv))
 

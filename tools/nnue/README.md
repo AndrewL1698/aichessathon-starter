@@ -5,23 +5,10 @@ ships.** It is not imported by `agent.py`, `fastboard.py`, `fastsearch.py` or `h
 not in `submission.zip`, and it never runs on the clock. The only thing that crosses the line
 is one file of weights, `weights/nnue.npz`, and that arrives by a deliberate later PR.
 
-Runtime inference is `fastnnue.py`, numba over the exported integer arrays, and no shipped
-module imports torch. That is why the export is plain numpy integer arrays and why
-`nnue_ref.py` exists: it is the executable specification `fastnnue.py` reproduces, exactly,
-and `tests/test_nnue.py` is the test that says so.
-
-## torch is an extra, not a dependency
-
-Only this directory needs torch, so it is not in `[project] dependencies`; a plain `uv sync`
-does not download two hundred megabytes for a repo whose runtime is numba. To train or export:
-
-```bash
-uv sync --extra nnue          # adds torch==2.13.0, matching the platform image
-```
-
-Everything under `tools/nnue` needs that extra. Everything else in the repo — the engine, the
-tests, `make gate`, `make zip` — runs on a plain `uv sync`. `uv run --extra nnue python -m ...`
-works too, if you would rather not leave torch in the environment.
+Runtime inference will be written in numba, not torch, in a separate PR. That is why the export
+is plain numpy integer arrays and why `nnue_ref.py` exists: it is the executable specification
+that PR has to reproduce. Read `nnue_ref.py` and the quantisation section below and you can
+write the runtime without reading anything else here.
 
 ## Why this is allowed
 
@@ -102,6 +89,32 @@ useful augmentation here, even though it is the one that first comes to mind. Th
 already built into the feature scheme, so it produces a byte-identical feature vector and exactly
 zero new information. `test_export.py` asserts that identity rather than assuming it.
 
+## Residual target: the net as a correction to the hand evaluation
+
+`train.py --target residual` fits `sigmoid((hand + net) / cp_scale)` to the same target as
+before, where `hand` is `fasteval.evaluate` for the position. The net then learns only what the
+hand evaluation gets wrong, and material sanity is the hand evaluation's by construction. The
+loss is the same MSE in WDL space, so a residual run's validation loss is directly comparable
+to a plain run's, and `train.py` prints two baselines at the start: the mean predictor and the
+hand evaluation alone (net = 0). The sanity table for a residual net prints the *correction* in
+centipawns, so expect numbers near zero.
+
+The hand evaluation is added to the shards by `tools.nnue.hand`, which rebuilds each position
+from its feature row (the shards hold no fen) and evaluates it with the modules in
+`--engine-dir`. That rebuild is exact because the evaluation is colour-symmetric and reads
+nothing the row lacks; `--verify` proves it on real records and refuses to run otherwise.
+
+```bash
+uv run python -m tools.nnue.hand --data tools/nnue/data/lichess --out tools/nnue/data/lichess-hand \
+  --engine-dir . --verify lichess_db_eval.jsonl.zst
+uv run python -m tools.nnue.train --data tools/nnue/data/lichess-hand --target residual \
+  --hidden 256 --l1-clip 3.8
+```
+
+The exported file records `target` (`cp` or `residual`) so the runtime knows whether to add
+the hand evaluation to the net's output. `--l1-clip 3.8` keeps every epoch exportable at
+qa=256 (1.9 for qa=512); without it the layer-1 weights outgrow the int16 proof.
+
 ## Feature scheme
 
 768 inputs = 12 piece planes × 64 squares, from the **side to move's** perspective. The index
@@ -171,7 +184,7 @@ Run everything from the repo root (these are namespace packages; `python -m` is 
 the files directly will not resolve the imports).
 
 ```bash
-uv sync --extra nnue                      # torch, plus zstandard from the dev group
+uv sync                                   # installs zstandard into the dev group
 
 # --- Path A: lichess evals (no Stockfish needed) ---
 curl -sI https://database.lichess.org/lichess_db_eval.jsonl.zst      # check the size
@@ -341,18 +354,8 @@ a deliberately truncated `curl -r` prefix (stops cleanly), the `zstd -dc` fallba
 `tools/nnue/data/`, `tools/nnue/checkpoints/` and `weights/*.npz` are gitignored. Data, shards,
 checkpoints and weights are never committed; the real weights ship later by a deliberate PR.
 
-`harness/package.py` has `DEFAULT_INCLUDES = ("weights",)`, so a `weights/` directory is
-packaged into `submission.zip` automatically and no packaging change was needed. The flip side
-is that **any** `.npz` sitting in `weights/` gets packaged, a smoke net included, which is why
-`weights/*.npz` is gitignored with a comment saying so and why the net that ships arrives by
-its own PR. Before an upload, check that `weights/` holds `nnue.npz` and nothing else.
-
-### What the runtime needs from a weight file
-
-`fastnnue.py` reads `hidden`, `qa`, `qb`, `qc` and `cp_scale` out of the file and hardcodes
-none of them, so a re-export at a different hidden width or a different `qa` needs no code
-change — `tests/test_nnue.py` checks every `weights/nnue*.npz` it finds, at whatever width. It
-re-proves the int16 accumulator bound `_check_accumulator` proves here, because the file is
-what ships and the export is what ran once, and it refuses to load a file that fails it: a net
-whose accumulator can wrap would play plausible-looking chess and lose endgames. A refused file
-is not a crash, it is the hand evaluation and a line in the init log saying so.
+One thing the later PR should know: `harness/package.py` already has `DEFAULT_INCLUDES =
+("weights",)`, so a `weights/` directory is packaged into `submission.zip` automatically and no
+packaging change is needed. The flip side is that **any** `weights/nnue.npz` sitting in the tree
+gets packaged, smoke net included, so this branch deliberately leaves no weight file behind —
+re-run `export.py` when you want one.

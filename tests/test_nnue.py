@@ -187,6 +187,31 @@ def check_rejection() -> str:
                     f"{label} raised {unexpected!r} rather than a WeightError"
                 ) from unexpected
             raise Failure(f"{label} was accepted")
+        # A damaged container, not merely wrong contents: a copy cut off halfway, an empty
+        # file, and a corrupt compressed stream. Each raises something that is not an OSError
+        # or a ValueError out of `np.load`, and each has to come back as a WeightError so the
+        # import falls back to the hand evaluation instead of never finishing.
+        intact = workspace / "intact.npz"
+        np.savez_compressed(intact, **base)
+        whole = intact.read_bytes()
+        damaged: tuple[tuple[str, bytes], ...] = (
+            ("a file cut off halfway", whole[: len(whole) // 2]),
+            ("a file cut off after 100 bytes", whole[:100]),
+            ("an empty file", b""),
+            ("a corrupt compressed stream", whole[:60] + bytes(64) + whole[124:]),
+        )
+        for label, content in damaged:
+            path = workspace / "damaged.npz"
+            path.write_bytes(content)
+            try:
+                fn.load(path)
+            except fn.WeightError:
+                continue
+            except Exception as unexpected:
+                raise Failure(
+                    f"{label} raised {unexpected!r} rather than a WeightError"
+                ) from unexpected
+            raise Failure(f"{label} was accepted")
         # A missing file is the ordinary case, not a corruption, and it must not raise here.
         missing = workspace / "absent.npz"
         try:

@@ -86,6 +86,8 @@ def export(arguments: argparse.Namespace) -> Path:
     checkpoint = torch.load(arguments.checkpoint, map_location="cpu", weights_only=True)
     hidden = int(checkpoint["hidden"])
     cp_scale = round(float(checkpoint["cp_scale"]))
+    # "cp": the output is the evaluation. "residual": the output is added to the hand evaluation.
+    target = str(checkpoint.get("target", "cp"))
     model = Nnue(hidden)
     model.load_state_dict(checkpoint["model"])
     model.eval()
@@ -95,13 +97,14 @@ def export(arguments: argparse.Namespace) -> Path:
     # even though real positions stay far below it. Halving qa halves the bound; the runtime
     # reads the scale from the file, so nothing downstream changes.
     qa = arguments.qa
+    qb = arguments.qb
     with torch.no_grad():
         # torch.nn.Linear stores [out, in]; the runtime wants to gather whole feature rows, so
         # layer 1 is transposed to [768, hidden] and layer 2 to [hidden, 32].
         l1_weight = _quantise(model.l1.weight.T.numpy(), qa, np.int16)
         l1_bias = _quantise(model.l1.bias.numpy(), qa, np.int16)
-        l2_weight = _quantise(model.l2.weight.T.numpy(), QB, np.int16)
-        l2_bias = _quantise(model.l2.bias.numpy(), qa * QB, np.int32)
+        l2_weight = _quantise(model.l2.weight.T.numpy(), qb, np.int16)
+        l2_bias = _quantise(model.l2.bias.numpy(), qa * qb, np.int32)
         l3_weight = _quantise(model.l3.weight.reshape(-1).numpy(), QC, np.int16)
         l3_bias = _quantise(model.l3.bias.numpy(), qa * QC, np.int32)
 
@@ -115,9 +118,10 @@ def export(arguments: argparse.Namespace) -> Path:
         version=np.int32(SCHEME_VERSION),
         hidden=np.int32(hidden),
         qa=np.int32(qa),
-        qb=np.int32(QB),
+        qb=np.int32(qb),
         qc=np.int32(QC),
         cp_scale=np.int32(cp_scale),
+        target=np.array(target),
         l1_weight=l1_weight,
         l1_bias=l1_bias,
         l2_weight=l2_weight,
@@ -128,7 +132,7 @@ def export(arguments: argparse.Namespace) -> Path:
     size = out.stat().st_size
     print(
         f"wrote {out} ({size:,} bytes, {size / 1e6:.2f} MB) "
-        f"hidden={hidden} qa={qa} qb={QB} qc={QC} cp_scale={cp_scale} "
+        f"hidden={hidden} qa={qa} qb={qb} qc={QC} cp_scale={cp_scale} target={target} "
         f"scheme_version={SCHEME_VERSION}"
     )
     if size > 40_000_000:
@@ -142,6 +146,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", default="weights/nnue.npz")
     parser.add_argument(
         "--qa", type=int, default=QA, help="layer-1 scale; halve it if the int16 proof fails"
+    )
+    parser.add_argument(
+        "--qb", type=int, default=QB, help="layer-2 scale; doubling it buys back layer-2 rounding"
     )
     export(parser.parse_args(argv))
 

@@ -48,6 +48,7 @@ that a weight file appearing does not move any compilation onto the clock.
 
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numba import njit
@@ -107,11 +108,11 @@ RESIDUAL = 3
 
 POLICY_NAMES = {HAND: "hand", ABSOLUTE: "absolute", BLEND: "blend", RESIDUAL: "residual"}
 
-# What an npz may say it was trained to predict, and how to score it. The spellings are
-# `tools/nnue/train.py`'s `--target` choices, which are `cp` and `residual`; `absolute` is
-# accepted as a synonym for `cp` because that is the word this file and the docs use for it
-# and a weight file should not be refused over a vocabulary difference. Anything else is
-# refused rather than assumed, in `load`.
+# What an npz may say it was trained to predict, and how to score it. `tools/nnue/export.py`
+# writes `target` as `cp` or `residual` (files exported before the key existed carry none, and
+# are absolute); `absolute` is accepted as a synonym for `cp` because that is the word this file
+# and the docs use for it and a weight file should not be refused over a vocabulary difference.
+# Anything else is refused rather than assumed, in `load`.
 TARGETS = {"cp": ABSOLUTE, "absolute": ABSOLUTE, "residual": RESIDUAL}
 
 # How to score an *absolute* net -- one whose file says it predicts the evaluation itself.
@@ -326,10 +327,10 @@ def infer(acc: np.ndarray, ply: int, side: int, net: Net) -> int:
     Three details in that loop are worth 4.6x and are not stylistic. The accumulation is
     int32, not int64, because an int16 by int16 product summed into int32 is one SIMD
     instruction and summing into int64 is a widening no vector unit does for free. int32 is
-    also the width `nnue_ref` accumulates in, which is the stronger reason: at the shipped
-    scales `z2` peaks around 1.4e6 and neither can overflow, and if a future net's did, both
-    would wrap identically and the parity test would still hold rather than quietly stop
-    describing the runtime. The clip is `min`/`max` rather than a pair of `if`s, because a
+    also the width `nnue_ref` accumulates in: at the shipped scales `z2` peaks under 1e8
+    against int32's 2.1e9, so neither overflows. (They would not wrap identically if one did,
+    because numba widens the running total to int64; that shows up as a failing parity test,
+    not a wrong game.) The clip is `min`/`max` rather than a pair of `if`s, because a
     branch in the inner loop stops the vectoriser dead. And it is recomputed once per output
     rather than hoisted into a scratch row: measured, hoisting it saved 29 of 610 nanoseconds,
     which is not worth another array threaded through every frame of the search.
@@ -433,7 +434,24 @@ def _check(condition: bool, message: str) -> None:
         raise WeightError(message)
 
 
-def target(path: Path) -> str:
+def _open(path: Path) -> Any:
+    """`np.load` with every way a damaged file can fail turned into a `WeightError`.
+
+    A truncated copy raises `zipfile.BadZipFile`, an empty one `EOFError`, a corrupt deflate
+    stream `zlib.error`, and none of those is an `OSError` or a `ValueError`. Left alone they
+    escape the import of this module and the agent never starts, which on the platform is
+    every game lost to a file that a `git show` interrupted halfway. A missing file is the
+    one exception passed through unchanged, because that is the ordinary case, not damage.
+    """
+    try:
+        return np.load(path)
+    except FileNotFoundError:
+        raise
+    except Exception as failure:
+        raise WeightError(f"not a readable npz ({type(failure).__name__}: {failure})") from failure
+
+
+def _target(path: Path) -> str:
     """What the weight file says it was trained to predict: `absolute` or `residual`.
 
     A file with no `target` key is absolute. That is not a guess about the future: every file
@@ -441,13 +459,13 @@ def target(path: Path) -> str:
     net was trained. The string is returned as the file spells it -- `cp` and `absolute` are
     the same thing to `TARGETS` -- so the init log says what the file actually said.
     """
-    with np.load(path) as data:
+    with _open(path) as data:
         if "target" not in data.files:
             return "absolute"
         return str(data["target"])
 
 
-def load(path: Path) -> Net:
+def _load(path: Path) -> Net:
     """Read and validate `weights/nnue.npz`, or raise `WeightError` saying what is wrong.
 
     Every shape, dtype and scale is checked rather than assumed. A file from a different
@@ -456,7 +474,7 @@ def load(path: Path) -> Net:
     as lost games rather than as a load error. The accumulator bound the export proves is
     re-proved here, because the file is what ships.
     """
-    with np.load(path) as data:
+    with _open(path) as data:
         missing = {
             "version", "hidden", "qa", "qb", "qc", "cp_scale",
             "l1_weight", "l1_bias", "l2_weight", "l2_bias", "l3_weight", "l3_bias",
@@ -474,6 +492,9 @@ def load(path: Path) -> Net:
         cp_scale = int(data["cp_scale"])
         for name, scale in (("qa", qa), ("qb", qb), ("qc", qc), ("cp_scale", cp_scale)):
             _check(scale > 0, f"{name} is {scale}, which cannot be divided by")
+        # The clip ceiling is held as an int16, so a qa past that would wrap negative and
+        # `min(max(v, 0), ceiling)` would return nonsense where `nnue_ref` clips correctly.
+        _check(qa <= 32767, f"qa is {qa}, past the int16 ceiling the clip is held in")
         l1_weight = data["l1_weight"]
         l1_bias = data["l1_bias"]
         l2_weight = data["l2_weight"]
@@ -551,6 +572,31 @@ def _stand_in(hidden: int = 128) -> Net:
     )
 
 
+def _guarded(read: Any, path: Path) -> Any:
+    """Run one of the readers above with every failure but a missing file as a `WeightError`.
+
+    `_open` covers the container, but a corrupt compressed stream only fails when the array
+    is read, inside the reader, as `zlib.error`; this is the same conversion one level up.
+    """
+    try:
+        return read(path)
+    except (WeightError, FileNotFoundError):
+        raise
+    except Exception as failure:
+        raise WeightError(f"unreadable ({type(failure).__name__}: {failure})") from failure
+
+
+def target(path: Path) -> str:
+    """What the file says it was trained to predict; see `_target`."""
+    return str(_guarded(_target, path))
+
+
+def load(path: Path) -> Net:
+    """The validated network from `path`; see `_load`. Raises `WeightError` on any damage."""
+    net: Net = _guarded(_load, path)
+    return net
+
+
 LOADED = False
 FILE_TARGET = "absolute"
 STATUS = ""
@@ -565,7 +611,7 @@ try:
 except FileNotFoundError:
     NET = _stand_in()
     STATUS = f"hand: no weight file at {WEIGHTS_PATH}"
-except (WeightError, OSError, ValueError, KeyError) as _failure:
+except Exception as _failure:
     NET = _stand_in()
     STATUS = f"hand: {WEIGHTS_PATH.name} rejected ({_failure})"
 
