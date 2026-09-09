@@ -6,3 +6,4 @@ submission.zip
 *.pgn
 local-opponents/sunfish/sunfish.py
 !logs/*.pgn
+tools/book/cache/
