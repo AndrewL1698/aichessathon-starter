@@ -131,8 +131,11 @@ Node rate 1.2 to 3.3 M/s against the python-chess engine's 49 to 69 k/s on the s
 25 to 30x, measured under a competing benchmark at load 4 to 6. Depth at 10 s + 0.1 s: median 6,
 range 6 to 7, against the python engine's median 4, range 4 to 5. At 120 s + 0.5 s: median 8,
 range 7 to 8, against median 6, range 4 to 6. Two plies at both controls. Import with warm-up
-3.9 to 4.4 s, RSS after import 216 to 222 MB, peak RSS in a game 226 MB (the table is a fixed
-33 MB, so it does not grow with the game the way the dict did).
+3.7 to 4.4 s, RSS after import 215 to 225 MB, peak RSS 224 to 226 MB across every gauntlet run
+here. The `make zip` smoke game has been seen anywhere between 202 and 244 MB, because numba's
+compilation allocations live in the same process and are not returned tidily; the search's own
+footprint is what does not move, since the table is a fixed 33 MB array rather than a dict that
+grows with the game.
 
 Opponents: `../eval-agent` is prod with the evaluation (v2.4), `../memory-agent` is prod before
 it (v2.1). Two games at a time, load 4 to 6 from another benchmark on the same machine.

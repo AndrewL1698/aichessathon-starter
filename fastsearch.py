@@ -381,8 +381,12 @@ def make_null(st: np.ndarray, undo: np.ndarray) -> None:
         key ^= ZOB_EP[(st[2] - 21) % 10]
     key ^= ZOB_SIDE
     st[2] = 0
-    # A pass is a ply like any other for the fifty move count, and counting it can only
-    # shorten the repetition lookback, never lengthen it wrongly.
+    # A pass counts as a ply for the fifty-move clock, which *lengthens* the repetition
+    # lookback below rather than shortening it. Zeroing it instead was measured and is worse:
+    # it suppresses the fifty-move and the repetition cutoffs for the whole null subtree,
+    # which then balloons. What the lookback must never reach is the null node itself, which
+    # is not a position the game could have stood in; `negamax` blanks its path slot so that
+    # a real node below, of the same parity, cannot match a position that never occurred.
     st[3] += 1
     if st[0] == 1:
         st[4] += 1
@@ -477,7 +481,18 @@ def store(
     move: int,
     ply: int,
 ) -> None:
-    """Write what this node proved. Replace-always: the slot belongs to whoever wrote last."""
+    """Write what this node proved. Replace-always: the slot belongs to whoever wrote last.
+
+    The packing needs `to_table(score, ply) + INFINITY` to fit in the 22 unsigned bits at
+    `TT_SCORE_SHIFT`. A mate-in-`ply` against us is the smallest value that reaches here, and
+    it packs as exactly 1, so the field is safe by one ply and no more: a `-INFINITY` score,
+    which `negamax` holds only before its first child returns, would pack as `-ply` and its
+    sign bits would run back down through the bound, the depth and the move. It cannot reach
+    here today, because a node with no legal move returns before storing and a node with one
+    always improves on `-INFINITY`. This refuses it rather than trusting that to stay true.
+    """
+    if score <= -INFINITY or score >= INFINITY:
+        return
     slot = key & TT_MASK
     tt[slot, 0] = key
     tt[slot, 1] = (
@@ -800,7 +815,11 @@ def negamax(
                 return score
 
     checked = is_square_attacked(board, st[5 + side], other)
-    path[ply] = key
+    # The path is what the repetition scan reads, so it may only hold positions the game
+    # could really have stood in. A node reached by a null move is not one, and leaving the
+    # slot as it was would leave a stale key from a sibling line there, so it is blanked: no
+    # real Zobrist key is zero, and the scan compares equal keys only.
+    path[ply] = 0 if undo[st[8] - 1, 0] == NULL_MARKER else key
 
     # Null-move pruning. Pass, and search the reply two plies shallower against a window one
     # wide at beta. If passing still does not reach beta, no real move will, and the node is
@@ -1065,13 +1084,38 @@ def remember(key: int) -> None:
         STATS[GAME_COUNT] = played + 1
 
 
+def remember_played(fen: str, uci: str) -> None:
+    """Record the move that actually went out, whichever engine chose it.
+
+    This is the commit, and it has to be called for *every* move the agent plays, not only the
+    ones this engine chose. The fallback in `agent.py` plays a different move from the one
+    `think` proposed, and if that move never reaches here then `_EXPECTED` still describes a
+    position the game never entered: next move `reachable` is false, `observe` decides it is
+    looking at another game, and the table and the whole game history are thrown away. One
+    fallback would cost every repetition this engine knows about for the rest of the game.
+
+    The position itself is appended only when it is not already the last entry, because on the
+    ordinary path `observe` has already recorded it and on the path where `think` never ran it
+    has not. A position and the position one move later always differ, if only in the side to
+    move, so the comparison cannot confuse the two.
+    """
+    global _EXPECTED
+    board, st, undo = fb.from_fen(fen)
+    key = int(st[7])
+    played = int(STATS[GAME_COUNT])
+    if played == 0 or int(GAME_KEYS[played - 1]) != key:
+        remember(key)
+    make_move(board, st, undo, fb.uci_to_move(board, st, undo, uci))
+    remember(int(st[7]))
+    _EXPECTED = fb.to_fen(board, st)
+
+
 def think(fen: str, time_left_ms: int) -> str:
     """Deepen until the budget is spent, keeping the best move proven so far.
 
     Returns a UCI move, or `0000` when the position has none. Raises on a fen `fastboard`
     cannot parse, which is the caller's cue to fall back.
     """
-    global _EXPECTED
     started = time.perf_counter()
     board, st, undo = fb.from_fen(fen)
     moves = fb.legal_moves(board, st, undo)
@@ -1158,12 +1202,9 @@ def think(fen: str, time_left_ms: int) -> str:
         flush=True,
     )
 
-    # We are handed the position after the opponent's reply next, so both this position and
-    # the one we are about to make are part of the game's history.
-    after_board, after_st, after_undo = fb.from_fen(fen)
-    make_move(after_board, after_st, after_undo, best)
-    remember(int(after_st[7]))
-    _EXPECTED = fb.to_fen(after_board, after_st)
+    # The move this returns is not the move that gets played until the caller has checked it
+    # against python-chess, so the game history is not written here. `remember_played` is the
+    # commit, and the caller makes it once it knows which move actually went out.
     return fb.move_to_uci(best)
 
 

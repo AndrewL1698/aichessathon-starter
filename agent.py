@@ -1118,7 +1118,9 @@ def _think_python(fen: str, time_left_ms: int) -> str:
     if not moves:
         return "0000"
 
-    _observe(board)
+    # `get_move` has already called `_observe` for this position, for both engines. Calling it
+    # again here would halve the history a second time on exactly the moves where the fallback
+    # is running, which is when the ordering it holds is most worth keeping.
     soft_ms, hard_ms = _budgets(time_left_ms)
     mask = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone. Reading it off the
@@ -1213,6 +1215,10 @@ def _think_fast(fen: str, time_left_ms: int) -> str:
     move = fastsearch.think(fen, time_left_ms)
     if move not in {candidate.uci() for candidate in chess.Board(fen).legal_moves}:
         raise ValueError(f"the numba engine returned {move!r}, which is not legal in {fen!r}")
+    # Only now, once the move is known to be one that can actually be played. Committing it
+    # inside `think` would write a position the game never entered into the history whenever
+    # this check is the thing that fails.
+    fastsearch.remember_played(fen, move)
     return move
 
 
@@ -1238,14 +1244,22 @@ def get_move(fen: str, time_left_ms: int) -> str:
         return move
     except Exception:
         traceback.print_exc()
+    # Every path below plays a different move from the one the numba engine proposed, so each
+    # one has to tell both engines what actually went out. Leaving the fast engine's history
+    # describing a move that was never played is not a lost move, it is a lost game: on the
+    # next move `reachable` fails, `observe` concludes it is watching a different game, and
+    # the table and every position the game has stood in are cleared.
     try:
-        # `_think_python` calls `_observe` itself, and calling it twice for one position is
-        # harmless: `seen` is a set and the history halving is the price of the fallback.
-        return _think_python(fen, time_left_ms)
+        move = _think_python(fen, time_left_ms)
+        fastsearch.remember_played(fen, move)
+        return move
     except Exception:
         traceback.print_exc()
     try:
-        return next(iter(chess.Board(fen).legal_moves)).uci()
+        move = next(iter(chess.Board(fen).legal_moves)).uci()
+        _remember_python(fen, move)
+        fastsearch.remember_played(fen, move)
+        return move
     except Exception:
         traceback.print_exc()
         return "0000"

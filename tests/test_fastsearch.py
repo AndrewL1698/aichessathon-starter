@@ -17,6 +17,7 @@ leaving the board corrupted after a timeout. Each of those has cost a game somew
 """
 
 import argparse
+import itertools
 import random
 import sys
 import time
@@ -24,6 +25,7 @@ from types import ModuleType
 
 import chess
 
+import agent
 import fastboard as fb
 import fastsearch as fs
 from tests.test_fastboard import STRESS_SEEDS, positions
@@ -151,11 +153,11 @@ def check_null_move(fens: list[str], depth: int) -> str:
     the positions and the bench is what decides whether it is worth having.
     """
     for fen, _ in MATE_IN_ONE:
-        _, score, _ = fs.search_fixed(fen, 3)
+        _, score, _ = fs.search_fixed(fen, 3, null_move=True)
         if score != fs.MATE - 1:
             raise Failure(f"with null move on, mate in one from {fen!r} scored {score:+d}")
     for fen in MATE_IN_TWO:
-        _, score, _ = fs.search_fixed(fen, 3)
+        _, score, _ = fs.search_fixed(fen, 3, null_move=True)
         if score != fs.MATE - 3:
             raise Failure(f"with null move on, mate in two from {fen!r} scored {score:+d}")
     on_nodes = off_nodes = 0
@@ -174,6 +176,85 @@ def check_null_move(fens: list[str], depth: int) -> str:
         f"mates unaffected; over {len(fens)} positions at d{depth} it searched "
         f"{on_nodes:,} nodes against {off_nodes:,} ({saved:.0%} fewer) and chose the same "
         f"move {agreed}/{len(fens)} times"
+    )
+
+
+def check_fallback() -> str:
+    """A fallback must not cost the fast engine everything it knows about the game.
+
+    `fastsearch` decides whether it is still in the same game by asking whether the position
+    it has been handed is one legal move on from the one it expects. Only the move that was
+    actually played can set that expectation, so if the python-chess engine plays a move and
+    nobody tells the fast engine, the next position looks like a different game: the table is
+    cleared and every position the game has stood in is forgotten, for the rest of the game.
+    One fallback, and no repetition is ever seen again.
+
+    So this plays a short game through `agent.get_move` with the fast engine broken on one
+    move, and asserts the game history only ever grows. Before the fix it went 2, 4, 2, 4:
+    two entries is a game that has just started.
+    """
+    # A quiet middlegame, so the game lasts long enough to have a middle to fall back in.
+    # The winning fixture below mates in two or three and never gets that far.
+    opening = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
+    fen = "6k1/5ppp/8/8/8/8/5PPP/Q5KR w - - 8 30"
+    fs.reset()
+    agent._MEMORY.table.clear()
+    agent._MEMORY.seen.clear()
+    agent._MEMORY.expected = None
+
+    def broken(fen: str, time_left_ms: int) -> str:
+        raise RuntimeError(f"injected: the numba engine failed on {fen!r} at {time_left_ms}")
+
+    board = chess.Board(opening)
+    real_think = fs.think
+    counts, fell_back = [], 0
+    for index in range(3):
+        if index == 1:  # mid-sequence, so there is a history to lose on both sides of it
+            fs.think = broken
+        before = int(fs.STATS[fs.GAME_COUNT])
+        move = agent.get_move(board.fen(), 2_000)
+        if fs.think is broken:
+            fs.think = real_think
+            fell_back += 1
+            if int(fs.STATS[fs.GAME_COUNT]) <= before:
+                raise Failure("the fallback move was never recorded in the game history")
+        if move not in [candidate.uci() for candidate in board.legal_moves]:
+            raise Failure(f"get_move returned {move}, which is not legal in {board.fen()!r}")
+        counts.append(int(fs.STATS[fs.GAME_COUNT]))
+        board.push(chess.Move.from_uci(move))
+        replies = list(board.legal_moves)
+        if not replies:
+            break
+        board.push(replies[0])  # a fixed opponent, so the fens are one legal move on
+    fs.think = real_think
+    # Three moves is the minimum that says anything: one before the fallback, the fallback
+    # itself, and the one after it, which is the move that used to find the history gone.
+    if len(counts) < 3:
+        raise Failure(f"the fixture ended after {len(counts)} moves; it needs at least 3")
+    if fell_back != 1:
+        raise Failure(f"the test never forced a fallback: {fell_back}")
+    for earlier, later in itertools.pairwise(counts):
+        if later <= earlier:
+            raise Failure(f"the game history was thrown away across the fallback: {counts}")
+    if fs._EXPECTED is None:
+        raise Failure("nothing set the expected position after the last move")
+
+    # And the repetition it knows about still binds afterwards. Same construction as
+    # `check_repetition`, run on the history this game actually built rather than a fresh one.
+    seen_before = int(fs.STATS[fs.GAME_COUNT])
+    wanted, _, _ = fs.search_fixed(fen, 5)
+    board2, st2, undo2 = fb.from_fen(fen)
+    fb.make_move(board2, st2, undo2, fb.uci_to_move(board2, st2, undo2, wanted))
+    fs.reset()
+    fs.GAME_KEYS[0] = int(st2[7])
+    fs.STATS[fs.GAME_COUNT] = 1
+    avoided, _, _ = fs.search_fixed(fen, 5, fresh=False, contempt=-fs.CONTEMPT)
+    fs.reset()
+    if avoided == wanted:
+        raise Failure("after a fallback the engine walked into a position it had seen")
+    return (
+        f"{fell_back} forced fallback, history grew {counts} and was never reset "
+        f"(it held {seen_before} positions after); still refuses {wanted} for {avoided}"
     )
 
 
@@ -260,6 +341,27 @@ def check_timed(fens: list[str], reference: ModuleType) -> str:
         _, hard_ms = fs.budgets(clock_ms)
         if hard_ms > 0.0:
             worst_overrun = max(worst_overrun, spent_ms - hard_ms)
+    # The clocks above give hard budgets the iteration gate simply does not overrun, so on a
+    # quiet machine none of them may actually abort. The abort path is the one that always
+    # runs in a real game, so it is forced here: a depth nothing finishes, against a deadline
+    # a few milliseconds out, has to come back aborted, legal, and with the partial-iteration
+    # rule intact - anything in ROOT_BEST has been proven better than the move it replaced.
+    forced = 0
+    for fen in fens[:6]:
+        legal = [candidate.uci() for candidate in chess.Board(fen).legal_moves]
+        move, _, _ = fs.search_fixed(
+            fen, 40, deadline=time.perf_counter() + 0.02, first=0
+        )
+        if not fs.STATS[fs.ABORTED]:
+            raise Failure(f"depth 40 from {fen!r} in 20 ms did not abort")
+        forced += 1
+        if move not in legal:
+            raise Failure(f"an aborted search from {fen!r} returned {move}, not legal")
+        root_best = int(fs.STATS[fs.ROOT_BEST])
+        if root_best and fb.move_to_uci(root_best) not in legal:
+            raise Failure(f"an aborted search left an illegal move in ROOT_BEST from {fen!r}")
+    fs.reset()
+
     again_move, again_score, _ = fs.search_fixed(probe, 4)
     if again_score != clean_score:
         raise Failure(
@@ -272,8 +374,8 @@ def check_timed(fens: list[str], reference: ModuleType) -> str:
     fs.reset()
     return (
         f"{len(fens)} timed searches, {aborts} of them aborted on the clock, worst overrun "
-        f"of the hard budget {worst_overrun:.0f} ms; depth-4 score unchanged at "
-        f"{again_score:+d} playing {again_move}"
+        f"of the hard budget {worst_overrun:.0f} ms; {forced} forced mid-iteration aborts all "
+        f"legal; depth-4 score unchanged at {again_score:+d} playing {again_move}"
     )
 
 
@@ -320,6 +422,15 @@ def main() -> None:
     print(f"\nsame root score as {reference.__file__}")
     started = time.perf_counter()
     tally = check_against_reference(reference, against, depths)
+    if not arguments.full:
+        # Depths two to four barely engage the table, the killers or the history, so the
+        # default run would establish the equality claim only for a search that has not
+        # started using its memory yet. `--full` does depth five over everything; this does
+        # it over enough positions that the default run says something about it too.
+        deep = check_against_reference(reference, against[:8], (5,))
+        for name in tally:
+            tally[name] += deep[name]
+        depths = (*depths, 5)
     print(
         f"  {tally['searches']} searches over {len(against)} positions at depths "
         f"{depths}, all scores equal, in {time.perf_counter() - started:.0f} s"
@@ -336,6 +447,7 @@ def main() -> None:
     print(f"mates at depth three: {ones} mates in one and {twos} mates in two, all found")
 
     print(f"null move: {check_null_move(sample[:20], 6)}")
+    print(f"fallback: {check_fallback()}")
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
     print(f"timeouts: {check_timed(sample[:24], reference)}")
