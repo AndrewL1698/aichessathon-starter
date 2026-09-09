@@ -124,8 +124,15 @@ def run_epoch(
     order: np.ndarray,
     batch_size: int,
     device: torch.device,
+    l1_clip: float | None = None,
 ) -> float:
-    """Run one pass. ``optimiser`` None means evaluation. Returns mean MSE in WDL space."""
+    """Run one pass. ``optimiser`` None means evaluation. Returns mean MSE in WDL space.
+
+    ``l1_clip`` clamps the layer-1 weights and biases to ``[-l1_clip, l1_clip]`` after every
+    step. export.py proves the int16 accumulator safe from the 32 largest weights per neuron
+    plus the bias, so a clip of c bounds it by 33 * c * qa: c <= 1.9 always exports at qa=512
+    and c <= 3.8 at qa=256. Unconstrained nets pass 2.4 within 30 epochs and keep growing.
+    """
     total = 0.0
     seen = 0
     training = optimiser is not None
@@ -140,6 +147,10 @@ def run_epoch(
             optimiser.zero_grad(set_to_none=True)
             loss.backward()
             optimiser.step()
+            if l1_clip is not None:
+                with torch.no_grad():
+                    model.l1.weight.clamp_(-l1_clip, l1_clip)
+                    model.l1.bias.clamp_(-l1_clip, l1_clip)
         total += float(loss.item()) * rows.size
         seen += rows.size
     return total / max(seen, 1)
@@ -167,7 +178,14 @@ def train(arguments: argparse.Namespace) -> None:
         started = time.monotonic()
         generator.shuffle(training_rows)
         train_loss = run_epoch(
-            model, optimiser, indices, target, training_rows, arguments.batch_size, device
+            model,
+            optimiser,
+            indices,
+            target,
+            training_rows,
+            arguments.batch_size,
+            device,
+            arguments.l1_clip,
         )
         val_loss = run_epoch(
             model, None, indices, target, validation, arguments.batch_size, device
@@ -206,6 +224,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=16384)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--l1-clip",
+        type=float,
+        default=None,
+        help="clamp layer-1 weights and biases to +-this after every step; 1.9 keeps qa=512",
+    )
     parser.add_argument("--cp-scale", type=float, default=DEFAULT_CP_SCALE)
     parser.add_argument("--val-fraction", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=1)
