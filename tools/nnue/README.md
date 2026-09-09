@@ -5,10 +5,23 @@ ships.** It is not imported by `agent.py`, `fastboard.py`, `fastsearch.py` or `h
 not in `submission.zip`, and it never runs on the clock. The only thing that crosses the line
 is one file of weights, `weights/nnue.npz`, and that arrives by a deliberate later PR.
 
-Runtime inference will be written in numba, not torch, in a separate PR. That is why the export
-is plain numpy integer arrays and why `nnue_ref.py` exists: it is the executable specification
-that PR has to reproduce. Read `nnue_ref.py` and the quantisation section below and you can
-write the runtime without reading anything else here.
+Runtime inference is `fastnnue.py`, numba over the exported integer arrays, and no shipped
+module imports torch. That is why the export is plain numpy integer arrays and why
+`nnue_ref.py` exists: it is the executable specification `fastnnue.py` reproduces, exactly,
+and `tests/test_nnue.py` is the test that says so.
+
+## torch is an extra, not a dependency
+
+Only this directory needs torch, so it is not in `[project] dependencies`; a plain `uv sync`
+does not download two hundred megabytes for a repo whose runtime is numba. To train or export:
+
+```bash
+uv sync --extra nnue          # adds torch==2.13.0, matching the platform image
+```
+
+Everything under `tools/nnue` needs that extra. Everything else in the repo — the engine, the
+tests, `make gate`, `make zip` — runs on a plain `uv sync`. `uv run --extra nnue python -m ...`
+works too, if you would rather not leave torch in the environment.
 
 ## Why this is allowed
 
@@ -158,7 +171,7 @@ Run everything from the repo root (these are namespace packages; `python -m` is 
 the files directly will not resolve the imports).
 
 ```bash
-uv sync                                   # installs zstandard into the dev group
+uv sync --extra nnue                      # torch, plus zstandard from the dev group
 
 # --- Path A: lichess evals (no Stockfish needed) ---
 curl -sI https://database.lichess.org/lichess_db_eval.jsonl.zst      # check the size
@@ -328,8 +341,18 @@ a deliberately truncated `curl -r` prefix (stops cleanly), the `zstd -dc` fallba
 `tools/nnue/data/`, `tools/nnue/checkpoints/` and `weights/*.npz` are gitignored. Data, shards,
 checkpoints and weights are never committed; the real weights ship later by a deliberate PR.
 
-One thing the later PR should know: `harness/package.py` already has `DEFAULT_INCLUDES =
-("weights",)`, so a `weights/` directory is packaged into `submission.zip` automatically and no
-packaging change is needed. The flip side is that **any** `weights/nnue.npz` sitting in the tree
-gets packaged, smoke net included, so this branch deliberately leaves no weight file behind —
-re-run `export.py` when you want one.
+`harness/package.py` has `DEFAULT_INCLUDES = ("weights",)`, so a `weights/` directory is
+packaged into `submission.zip` automatically and no packaging change was needed. The flip side
+is that **any** `.npz` sitting in `weights/` gets packaged, a smoke net included, which is why
+`weights/*.npz` is gitignored with a comment saying so and why the net that ships arrives by
+its own PR. Before an upload, check that `weights/` holds `nnue.npz` and nothing else.
+
+### What the runtime needs from a weight file
+
+`fastnnue.py` reads `hidden`, `qa`, `qb`, `qc` and `cp_scale` out of the file and hardcodes
+none of them, so a re-export at a different hidden width or a different `qa` needs no code
+change — `tests/test_nnue.py` checks every `weights/nnue*.npz` it finds, at whatever width. It
+re-proves the int16 accumulator bound `_check_accumulator` proves here, because the file is
+what ships and the export is what ran once, and it refuses to load a file that fails it: a net
+whose accumulator can wrap would play plausible-looking chess and lose endgames. A refused file
+is not a crash, it is the hand evaluation and a line in the init log saying so.
