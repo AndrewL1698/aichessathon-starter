@@ -76,9 +76,40 @@ LAYER3_WIDTH = 32
 MAX_ACTIVE = 32
 INT16_MAX = 32767
 
-# A module-level switch so tests and the bench can run either evaluation. `active()` is what
-# anything else should ask: this on its own says nothing about whether there are weights.
-USE_NNUE = True
+# --------------------------------------------------------------------------------------
+# The switch, and the four ways a leaf can be scored.
+#
+# Off by default. No network measured so far beats the hand evaluation -- `docs/BENCH_LOG.md`
+# has the rows -- so what ships is v3.2's evaluation and this file is mechanics waiting for a
+# net worth turning on. Flipping `USE_NNUE` is the whole change when one arrives.
+# --------------------------------------------------------------------------------------
+
+USE_NNUE = False
+
+# How a leaf is scored. `HAND` is `fasteval` alone, and it is also what every position past
+# `bare_endgame` gets whatever else is set.
+HAND = 0
+# The net's centipawns alone. What an absolute net -- one trained to predict the evaluation
+# itself -- is for.
+ABSOLUTE = 1
+# The mean of the two, `(hand + net) // 2`. An experiment rather than a design: if the net is
+# noisy but carries signal the hand evaluation lacks, averaging should beat both, and if it
+# lands between them the net carries nothing new. `docs/BENCH_LOG.md` has the measurement.
+BLEND = 2
+# `hand + net`, for a net trained on the *residual* -- Stockfish's centipawns minus
+# `fasteval`'s. Such a file says so itself, with `target='residual'` in the npz, because
+# scoring a residual net as though it were absolute produces an evaluation that is wrong by
+# the whole hand evaluation and still looks like centipawns.
+RESIDUAL = 3
+
+POLICY_NAMES = {HAND: "hand", ABSOLUTE: "absolute", BLEND: "blend", RESIDUAL: "residual"}
+
+# The two things an npz may say it was trained to predict.
+TARGETS = {"absolute": ABSOLUTE, "residual": RESIDUAL}
+
+# Overrides what the weight file asks for. `None` means "whatever the file says", which is the
+# only setting that ships; the bench sets `BLEND` to measure it.
+POLICY: int | None = None
 
 # --------------------------------------------------------------------------------------
 # The feature index, precomputed. Read-only, so numba holds it as a constant.
@@ -387,6 +418,19 @@ def _check(condition: bool, message: str) -> None:
         raise WeightError(message)
 
 
+def target(path: Path) -> str:
+    """What the weight file says it was trained to predict: `absolute` or `residual`.
+
+    A file with no `target` key is absolute. That is not a guess about the future -- every file
+    exported before the key existed is absolute, and the key was added when the first residual
+    net was trained -- but it does mean a *new* absolute export need not carry it.
+    """
+    with np.load(path) as data:
+        if "target" not in data.files:
+            return "absolute"
+        return str(data["target"])
+
+
 def load(path: Path) -> Net:
     """Read and validate `weights/nnue.npz`, or raise `WeightError` saying what is wrong.
 
@@ -420,6 +464,16 @@ def load(path: Path) -> Net:
         l2_bias = data["l2_bias"]
         l3_weight = data["l3_weight"]
         l3_bias = int(data["l3_bias"])
+        # Refused rather than defaulted: a marker this runtime does not understand means the
+        # file was trained against something it cannot compose correctly, and scoring it the
+        # wrong way round is an evaluation wrong by the whole hand evaluation.
+        if "target" in data.files:
+            marker = str(data["target"])
+            _check(
+                marker in TARGETS,
+                f"the weight file says target={marker!r}, which this runtime does not know "
+                f"how to score; it understands {sorted(TARGETS)}",
+            )
         for name, array, shape, dtype in (
             ("l1_weight", l1_weight, (NUM_FEATURES, hidden), np.int16),
             ("l1_bias", l1_bias, (hidden,), np.int16),
@@ -482,13 +536,15 @@ def _stand_in(hidden: int = 128) -> Net:
 
 
 LOADED = False
+FILE_TARGET = "absolute"
 STATUS = ""
 try:
     NET = load(WEIGHTS_PATH)
+    FILE_TARGET = target(WEIGHTS_PATH)
     LOADED = True
     STATUS = (
         f"nnue h{NET[1].shape[0]} qa{NET[6]} qb{NET[7]} qc{NET[8]} cp{NET[9]} "
-        f"from {WEIGHTS_PATH.name}"
+        f"{FILE_TARGET} from {WEIGHTS_PATH.name}"
     )
 except FileNotFoundError:
     NET = _stand_in()
@@ -504,6 +560,18 @@ HIDDEN = int(NET[1].shape[0])
 def active() -> bool:
     """Is the learned evaluation the one that will be used? Both halves have to be true."""
     return USE_NNUE and LOADED
+
+
+def file_policy() -> int:
+    """How to score a leaf when the net is on: what the file asks for, or the override."""
+    if POLICY is not None:
+        return POLICY
+    return TARGETS[FILE_TARGET]
+
+
+def policy() -> int:
+    """How a leaf will actually be scored. `HAND` when there is no net or the switch is off."""
+    return file_policy() if active() else HAND
 
 
 def accumulators(plies: int, hidden: int = HIDDEN) -> np.ndarray:

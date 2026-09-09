@@ -36,6 +36,7 @@ import chess
 import numpy as np
 
 import fastboard as fb
+import fasteval as fe
 import fastnnue as fn
 import fastsearch as fs
 import tests.test_fastsearch as tfs
@@ -326,6 +327,108 @@ def check_increments(path: Path, rng: random.Random, wanted: int) -> dict[str, i
     return tally
 
 
+def check_policies(fens: list[str]) -> str:
+    """Each of `leaf`'s four ways of scoring a leaf composes the two evaluations as claimed.
+
+    Composition is the whole content of the policies, and getting it wrong is not a crash: an
+    absolute net scored as a residual one is out by the entire hand evaluation and still reads
+    like centipawns. So each is checked against the arithmetic done in Python, over positions
+    that include the bare endgames -- because the handover overrides every policy and that has
+    to be true of each of them, not just of the one that shipped first.
+
+    `//` on the blend is floor division. Both inputs are side-to-move relative and both are
+    mirror-invariant, so their mean is too, and the search never needs the evaluation to be an
+    odd function; there is nothing for a floor to break here.
+    """
+    acc = fn.accumulators(1)
+    tally = {"positions": 0, "bare": 0}
+    for fen in fens:
+        board, st, _ = fb.from_fen(fen)
+        hand = int(fe.evaluate(board, st))
+        bare = bool(fn.bare_endgame(board))
+        fn.refresh(board, acc, 0, fn.NET)
+        net = int(fn.infer(acc, 0, int(st[0]), fn.NET))
+        wanted = {
+            fn.HAND: hand,
+            fn.ABSOLUTE: hand if bare else net,
+            fn.BLEND: hand if bare else (hand + net) // 2,
+            fn.RESIDUAL: hand if bare else hand + net,
+        }
+        for chosen, want in wanted.items():
+            fs.STATS[fs.NNUE_POLICY] = chosen
+            fs.refresh_root(board)
+            fn.refresh(board, fs.ACC, 0, fn.NET)
+            got = int(fs.leaf(board, st, fs.ACC, 0, fs.STATS, fn.NET))
+            if got != want:
+                raise Failure(
+                    f"policy {fn.POLICY_NAMES[chosen]} scores {fen!r} at {got}, the "
+                    f"composition of hand {hand} and net {net} is {want}"
+                )
+        tally["positions"] += 1
+        tally["bare"] += bare
+    fs.STATS[fs.NNUE_POLICY] = fn.policy()
+    return (
+        f"{len(fn.POLICY_NAMES)} policies over {tally['positions']:,} positions "
+        f"({tally['bare']} of them past the bare-endgame handover), all compose exactly"
+    )
+
+
+def check_target_marker() -> str:
+    """A weight file says what it was trained to predict, and the loader believes only two.
+
+    A residual net scored as an absolute one is wrong by the whole hand evaluation, so the
+    marker is not something to infer from the numbers. This builds the files rather than
+    waiting for one: an absolute file with no key at all (every file exported before the key
+    existed), one that says so explicitly, a residual one, and one with a marker from the
+    future, which has to be refused rather than defaulted.
+    """
+    source = fn.load(ROOT / "weights" / "nnue.npz")
+    hidden = source[1].shape[0]
+    base: dict[str, Any] = {
+        "version": np.int32(fn.SCHEME_VERSION),
+        "hidden": np.int32(hidden),
+        "qa": np.int32(source[6]),
+        "qb": np.int32(source[7]),
+        "qc": np.int32(source[8]),
+        "cp_scale": np.int32(source[9]),
+        "l1_weight": source[0],
+        "l1_bias": source[1],
+        "l2_weight": np.ascontiguousarray(source[2].T),
+        "l2_bias": source[3],
+        "l3_weight": source[4],
+        "l3_bias": np.int32(source[5]),
+    }
+    workspace = ROOT / ".test_nnue_targets"
+    workspace.mkdir(exist_ok=True)
+    checked = []
+    try:
+        for label, extra, want in (
+            ("no key", {}, "absolute"),
+            ("absolute", {"target": np.str_("absolute")}, "absolute"),
+            ("residual", {"target": np.str_("residual")}, "residual"),
+        ):
+            path = workspace / "marked.npz"
+            np.savez_compressed(path, **(base | extra))
+            fn.load(path)  # a legal marker must not be refused
+            got = fn.target(path)
+            if got != want:
+                raise Failure(f"a {label} file reads as target={got!r}, want {want!r}")
+            checked.append(f"{label} -> {got}")
+        path = workspace / "marked.npz"
+        np.savez_compressed(path, **(base | {"target": np.str_("wdl")}))
+        try:
+            fn.load(path)
+        except fn.WeightError:
+            checked.append("unknown marker refused")
+        else:
+            raise Failure("a file with an unknown target marker was accepted")
+    finally:
+        for leftover in workspace.glob("*"):
+            leftover.unlink()
+        workspace.rmdir()
+    return "; ".join(checked)
+
+
 def check_bare_endgames(depth: int) -> str:
     """Past `fastnnue.bare_endgame` the hand evaluation scores the leaf, and these convert.
 
@@ -532,7 +635,7 @@ def check_import() -> str:
         "divisor = 1024.0 * 1024.0 if sys.platform == 'darwin' else 1024.0\n"
         "peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / divisor\n"
         "import fastnnue\n"
-        "print(f'RESULT {elapsed:.2f} {peak:.0f} {fastnnue.active()}', file=sys.stderr)\n"
+        "print(f'RESULT {elapsed:.2f} {peak:.0f} {fastnnue.LOADED}', file=sys.stderr)\n"
     )
     finished = subprocess.run(
         [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, check=False
@@ -546,7 +649,7 @@ def check_import() -> str:
         raise Failure(f"the import probe printed no result:\n{finished.stderr}")
     _, seconds, megabytes, enabled = line.split()
     if enabled != "True":
-        raise Failure("the import probe ran without the network active, so it measures nothing")
+        raise Failure("the import probe found no weight file, so it measures the wrong thing")
     return f"{float(seconds):.1f} s with warm-up, {float(megabytes):.0f} MB peak resident"
 
 
@@ -579,6 +682,8 @@ def main() -> None:
     files = weight_files(arguments.weights)
     print(f"weight files: {', '.join(path.name for path in files)}")
     print(f"loaded by the engine: {fn.STATUS}")
+    print(f"shipped switch: USE_NNUE={fn.USE_NNUE}, so a leaf is scored "
+          f"{fn.POLICY_NAMES[fn.policy()]!r} unless a test says otherwise")
     print(f"\nfloor division: {check_floor_division()}")
     print(f"rejection: {check_rejection()}")
 
@@ -607,6 +712,8 @@ def main() -> None:
             print(f"    {name:<14} {moved[name]:,}")
         print(f"  sanity: {check_sanity(path)}")
 
+    print(f"\npolicies: {check_policies(fens[:400] + [fen for _, fen in BARE_ENDGAMES])}")
+    print(f"target marker: {check_target_marker()}")
     print(f"\nbare endgames: {check_bare_endgames(6)}")
 
     reference_module = load_reference()

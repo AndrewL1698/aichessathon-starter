@@ -47,15 +47,14 @@ store overwrites whatever shares the slot, which is what `agent.py` effectively 
 the entire dictionary when it fills, which is strictly worse) and costs nothing on the store
 path, where depth-preferred costs a load and a compare on every store.
 
-**The evaluation.** A leaf is scored by `fastnnue`, the learned evaluation, when there is a
-weight file and `fastnnue.USE_NNUE` is set, and by `fasteval`, the hand tables, when there is
-not -- and by `fasteval` regardless once either side is down to a king and two men, which is
-where the net has no training data and the hand endgame terms do the work. See `leaf`.
-
-The choice is `stats[NNUE_ENABLED]`, read per node rather than compiled in, because numba
-freezes a module global into a compiled function as a constant and a switch that only takes
-effect at the next import is no switch at all. With it off this file searches exactly the tree
-v3.1 searched, which is what `tests/test_fastsearch.py`'s equality against `agent.py` needs.
+**The evaluation.** A leaf is scored one of four ways -- the hand tables alone, the network
+alone, their mean, or their sum -- and `stats[NNUE_POLICY]` says which. `leaf` has all of it,
+including why a residual net has to declare itself and why a bare endgame is scored by the hand
+tables whatever the policy says. The switch is read per node rather than compiled in, because
+numba freezes a module global into a compiled function as a constant and a switch that only
+takes effect at the next import is no switch at all. Set to `HAND` -- which is the default,
+because no network has beaten the hand evaluation yet -- this file searches exactly the tree
+v3.2 searched, which is what `tests/test_fastsearch.py`'s equality against `agent.py` needs.
 
 The net's accumulators are the one piece of state the search has to maintain itself: `acc[ply]`
 holds both perspectives, `push` builds `acc[ply + 1]` from it before each `make_move`, and
@@ -99,7 +98,18 @@ from fastboard import (
 
 # `PIECE_VALUES` is the evaluation's, read here only for MVV-LVA ordering.
 from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate
-from fastnnue import NET, Net, bare_endgame, infer, push, push_null, refresh
+from fastnnue import (
+    ABSOLUTE,
+    BLEND,
+    HAND,
+    NET,
+    Net,
+    bare_endgame,
+    infer,
+    push,
+    push_null,
+    refresh,
+)
 
 # Spans this module's own compilation; `fasteval` has already recorded its own by here.
 _STARTED = time.perf_counter()
@@ -204,7 +214,8 @@ CONTEMPT_AT, CHECK_MASK, BEST_MOVE, ROOT_BEST = 4, 5, 6, 7
 TT_PROBES, TT_HITS, TT_STORES, GAME_COUNT = 8, 9, 10, 11
 NULL_ENABLED, NULL_CUTOFFS = 12, 13
 EXPIRED = 14
-NNUE_ENABLED = 15
+# `fastnnue.HAND`, `ABSOLUTE`, `BLEND` or `RESIDUAL`: how a leaf is scored, see `leaf`.
+NNUE_POLICY = 15
 STATS_SIZE = 16
 
 # Read-only, so numba can hold it as a global constant.
@@ -556,18 +567,34 @@ def leaf(
 ) -> int:
     """Score a leaf with whichever evaluation is switched on.
 
-    The branch is a read of `stats[NNUE_ENABLED]`, one int64 load and a compare against the
-    thousands of operations on either side of it, and it is read per node so that the switch
-    is a switch: numba would freeze a module-level flag into the compiled function.
+    `stats[NNUE_POLICY]` says which of the four, and it is read per node rather than compiled
+    in so that the switch is a switch: numba freezes a module-level flag into a compiled
+    function as a constant. One int64 load and a compare against the thousands of operations
+    on either side of it.
 
-    `bare_endgame` is the second half of the policy and it is not an optimisation: a position
-    where either side is down to a king and two men is scored by the hand tables whatever the
-    switch says. `fastnnue.bare_endgame` has the measurements. It is a dozen loads on a full
-    board, which is what makes it affordable at every leaf.
+    - `HAND`: `fasteval` alone. This is v3.2's evaluation, and with it set the search is
+      v3.2's search over v3.2's tree, which `tests/test_fastsearch.py` still proves.
+    - `ABSOLUTE`: the net alone, for a net trained to predict the evaluation.
+    - `BLEND`: the mean of the two. An experiment; `docs/BENCH_LOG.md` has the row.
+    - `RESIDUAL`: the sum, for a net trained on Stockfish's centipawns *minus* `fasteval`'s.
+      A weight file declares this itself with `target='residual'`, because scoring a residual
+      net as an absolute one is wrong by the whole hand evaluation and still looks plausible.
+
+    `bare_endgame` overrides every one of them and is not an optimisation: a position where
+    either side is down to a king and two men is scored by the hand tables whatever the policy
+    says, because the net has no training data there. `fastnnue.bare_endgame` has the
+    measurements. It is a dozen loads on a full board, which is what makes it affordable here.
     """
-    if stats[NNUE_ENABLED] != 0 and not bare_endgame(board):
-        return infer(acc, ply, st[0], net)
-    return evaluate(board, st)
+    policy = stats[NNUE_POLICY]
+    if policy == HAND or bare_endgame(board):
+        return evaluate(board, st)
+    learned = infer(acc, ply, st[0], net)
+    if policy == ABSOLUTE:
+        return learned
+    hand = evaluate(board, st)
+    if policy == BLEND:
+        return (hand + learned) // 2
+    return hand + learned
 
 
 # --------------------------------------------------------------------------------------
@@ -795,7 +822,7 @@ def quiescence(
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
         move = out[index]
-        if stats[NNUE_ENABLED] != 0:
+        if stats[NNUE_POLICY] != HAND:
             push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
         score = -quiescence(
@@ -912,7 +939,7 @@ def negamax(
         and undo[st[8] - 1, 0] != NULL_MARKER
         and has_non_pawn_material(board, side)
     ):
-        if stats[NNUE_ENABLED] != 0:
+        if stats[NNUE_POLICY] != HAND:
             push_null(acc, ply, net)
         make_null(st, undo)
         undo[st[8] - 1, 0] = NULL_MARKER
@@ -944,7 +971,7 @@ def negamax(
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
         move = out[index]
-        if stats[NNUE_ENABLED] != 0:
+        if stats[NNUE_POLICY] != HAND:
             push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
         score = -negamax(
@@ -1064,7 +1091,7 @@ def search_root(
     for index in range(count):
         pick_best(bufs, scores, 0, index, count)
         move = out[index]
-        if stats[NNUE_ENABLED] != 0:
+        if stats[NNUE_POLICY] != HAND:
             push(board, st[0], acc, 0, move, net)
         make_move(board, st, undo, move)
         score = -negamax(
@@ -1272,7 +1299,7 @@ def think(fen: str, time_left_ms: int) -> str:
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
-    STATS[NNUE_ENABLED] = 1 if fastnnue.active() else 0
+    STATS[NNUE_POLICY] = fastnnue.policy()
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
     # reading it off the previous iteration's score feeds back on itself, and `root_contempt`
@@ -1368,6 +1395,7 @@ def search_fixed(
     first: int = 0,
     null_move: bool | None = None,
     nnue: bool | None = None,
+    policy: int | None = None,
 ) -> tuple[str, int, int]:
     """Search one position to a fixed depth. For tests, benchmarks and the position suite.
 
@@ -1378,8 +1406,9 @@ def search_fixed(
     long it takes. `first` is the move to try first, as the iteration loop passes the previous
     depth's answer. `null_move` overrides `NULL_MOVE_PRUNING`, which is what lets the
     score-equality test measure the search `agent.py` describes rather than this one, and
-    `nnue` overrides `fastnnue.USE_NNUE` the same way, so one process can measure both
-    evaluations. The abort flag is left in `STATS[ABORTED]` for the caller to read.
+    `nnue` overrides `fastnnue.USE_NNUE` the same way and `policy` overrides which of `leaf`'s
+    four ways of scoring a leaf is used, so one process can measure all of them. The abort flag
+    is left in `STATS[ABORTED]` for the caller to read.
     """
     if fresh:
         reset()
@@ -1390,12 +1419,13 @@ def search_fixed(
         STATS[counter] = 0
     STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
     with_nnue = fastnnue.active() if nnue is None else (nnue and fastnnue.LOADED)
-    STATS[NNUE_ENABLED] = int(with_nnue)
+    chosen = fastnnue.file_policy() if policy is None else policy
+    STATS[NNUE_POLICY] = chosen if with_nnue else HAND
     STATS[CHECK_MASK] = NODE_CHECK_MASK
     STATS[CONTEMPT_AT] = contempt
     KILLERS.fill(0)
     remember(int(st[7]))
-    if with_nnue:
+    if STATS[NNUE_POLICY] != HAND:
         refresh(board, ACC, 0, NET)
     score = int(
         search_root(
@@ -1414,8 +1444,8 @@ def warm() -> None:
     the two recursive specialisations, which is where a first call on the clock would cost
     the most. The bare-king position at the end runs the mop-up, the quiescence stalemate
     check and the insufficient-material return, so a failure in any of them shows up here
-    rather than in a game. Both settings of `NNUE_ENABLED` are run, so neither evaluation's
-    path through `leaf` and `push` first executes on the clock.
+    rather than in a game. Every setting of `NNUE_POLICY` is run, so no way of scoring a leaf
+    first executes on the clock.
     """
     far = time.perf_counter() + 3_600.0
     board, st, undo = fb.from_fen(fb.START_FEN)
@@ -1437,15 +1467,15 @@ def warm() -> None:
     score_captures(board, BUFS, SCORES, 0, 1)
     pick_best(BUFS, SCORES, 0, 0, 1)
     arrays = (TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS, ACC)
-    for enabled in (0, 1):
-        STATS[NNUE_ENABLED] = enabled
+    for chosen in sorted(fastnnue.POLICY_NAMES):
+        STATS[NNUE_POLICY] = chosen
         refresh(board, ACC, 0, NET)
         leaf(board, st, ACC, 0, STATS, NET)
         quiescence(board, st, undo, BUFS, SCORES, STATS, ACC, NET, far, QUIESCENCE_MAX_PLY, 0,
                    -INFINITY, INFINITY)
         negamax(board, st, undo, *arrays, NET, far, 2, 1, -INFINITY, INFINITY)
         search_root(board, st, undo, *arrays, NET, far, 2, 0)
-    STATS[NNUE_ENABLED] = 1 if fastnnue.active() else 0
+    STATS[NNUE_POLICY] = fastnnue.policy()
     board, st, undo = fb.from_fen("8/8/8/4k3/8/8/8/R3K3 w - - 0 1")
     refresh(board, ACC, 0, NET)
     search_root(board, st, undo, *arrays, NET, far, 3, 0)
