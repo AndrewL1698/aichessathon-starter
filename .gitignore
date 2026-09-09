@@ -15,3 +15,5 @@ tools/book/cache/
 # by its own PR from the machine that trained it, and only that PR removes this line.
 # `weights/book.bin` is committed on `prod` and is not matched by this.
 weights/*.npz
+# The one weight file that ships is tracked; every other npz stays out of the tree.
+!weights/nnue.npz

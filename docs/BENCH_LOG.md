@@ -623,3 +623,22 @@ and insufficient material return `draw_score` directly — and the `fastnnue.bar
 handover is a count of men on the board, not a score, so a cp offset cannot move it either. The
 h128 and h256-e87 rows above were measured *before* that change, with the network feeding
 contempt; the fix can only have helped, and it is one line if it needs re-measuring.
+
+## v4.0, 2026-09-09: the learned evaluation switched on (nnue/v4.0)
+
+The runtime is PR #14's; this is the file and the switch. Weights `nnue-h256-52m-e60.npz`
+(sha ed74493b) as `weights/nnue.npz`, leaf = (hand + net) / 2. Re-run from scratch by the
+orchestrator, then the platform proxy and the 120 s games, all against `local-opponents/v3.2`.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| nnue-blend-confirm96 | v3.2 | 10s+0.1s | 96 | +68 =18 -10 | 80.2% | +243 | +177 to +329 | 0 / 0 / 0 / 0 | 1.26s | 256 MB |
+| nnue-blend-proxy45 | v3.2 | 45s+0.2s | 24 | +19 =3 -2 | 85.4% | +307 | +172 to +668 | 0 / 0 / 0 / 0 | 5.65s | 256 MB |
+
+120 s + 0.5 s, one game per colour: both won by checkmate (32 and 30 moves). Depth over the
+first 40 moves 6.69 / 6.20 against v3.2's 7.97 / 8.07 on the other side of the same boards: the
+net costs about a ply and a half at 1.3M nodes/s against 2.4M, and wins anyway. Worst overshoot
+of the hard budget 1 ms; slowest moves 11.9 s at a 13.4 s hard budget and 9.8 s at 10.6 s;
+clock minima 24.4 s and 41.0 s. Pooled with the doer's 64-game row the blend is +112 =26 -22
+over 160 games, 78.1%.
+

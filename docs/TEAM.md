@@ -73,6 +73,16 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-09 morning · **v4.0**: PR #14 (`nnue/runtime`, the compiled learned evaluation, merged with
+  the switch off after an independent audit; the one CRITICAL, a damaged weight file failing the
+  import, fixed before merge) plus `nnue/v4.0`, which commits `weights/nnue.npz` and sets
+  `USE_NNUE = True`. Leaf = (hand + net) / 2; residual nets and the net alone both measured worse.
+  vs v3.2: 80.2% over 96 games (+243, +177 to +329), 85.4% at the 45 s proxy, two 120 s wins, no
+  disqualifiers. Bench baseline is v4.0 (`local-opponents/v4.0`). Weights come from the M5 session
+  (branch `nnue/weights-v1`, run notes in `tools/nnue/runs/`); the M5 is training a 256 net on 100M
+  positions exported at qa=512 as the next candidate. Deferred audit findings, as candidates: the
+  3-man handover is a step of up to ~880 cp in the leaf score; the HAND path costs ~9% more per
+  node than v3.2. Next: search cycle 4 (null move, PVS, LMR, futility) on v4.0.
 - 2026-09-09 · **In progress** `nnue/runtime`: `fastnnue.py`, the shipped half of the learned
   evaluation. numba inference of the exported integer weights, exact against
   `tools/nnue/nnue_ref.py` on 2,000 positions for all three weight files on `nnue/weights-v1`
