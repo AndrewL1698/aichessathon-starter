@@ -73,6 +73,12 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-08 late · **v3.1** `search/clock-backstop`: the timer-thread backstop from PR #11 on
+  top of v3.0, with `STATS[EXPIRED]` read at every node, `nogil` on the three search functions,
+  and the thread joined on exit (the PR #11 audit found `Timer.cancel()` cannot stop a callback
+  whose sleep has ended). Tree unchanged; 16 fast games vs v3.0 clean of disqualifiers; the new
+  `backstop` test stops depth-40 searches with the clock read disabled within 5 ms. PR #11 is
+  superseded by v3.0 + v3.1 and can be closed.
 - 2026-09-08 late · **PR #10 merged** to `prod` = **v3.0**: `fasteval.py` and `fastsearch.py`, the
   v2.4 evaluation and search compiled by numba over `fastboard.py`; `agent.py` plays the numba move
   after a python-chess legality check and keeps the python engine as the fallback. Equality-tested

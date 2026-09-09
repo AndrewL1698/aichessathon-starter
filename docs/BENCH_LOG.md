@@ -285,3 +285,26 @@ with null move off, 2/12 with it on.** Depth reached went from d5-d6 to d7-d9, s
 plies are real and they are not what those twelve positions need. Read that as evidence about
 the evaluation rather than the search: `r73 m11` and `r73 m40` swap places between the two
 engines, and the rest are missed at every depth either engine reaches.
+
+## v3.1, 2026-09-08 late: the timer-thread backstop (search/clock-backstop)
+
+The one idea carried over from the parallel v3.0 port in PR #11. v3.0 reads the clock every
+1024 nodes through `objmode`, so it stops as regularly as nodes come; a thread now sleeps until
+the hard deadline and sets `STATS[EXPIRED]`, which every node reads before the clock check, and
+the search functions release the interpreter lock so the thread can run. The search tree is
+unchanged, so the fast bench is a disqualifier check, not an Elo claim; the test that matters is
+`tests.test_fastsearch`'s `backstop`, which disables the clock read and asks for depth 40: six
+searches all stopped on the thread within 5 ms of the deadline.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| backstop | v3.0 | 10s+0.1s | 16 | +6 =3 -7 | 46.9% | -22 | -199 to +144 | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+
+120 s + 0.5 s against v3.0, one game per colour: won as White by checkmate (54 moves), lost as
+Black by checkmate (29 moves); the tree is identical, so the split is the coin toss it looks
+like. Depth over the first 40 moves 8.55 / 8.83 against v3.0's 8.70 / 7.62 on the other side
+of the same boards, so the flag read per node and `nogil` cost nothing measurable. Worst
+overshoot of the hard budget 1 ms on both sides (the clock-check slice, as before); slowest
+move 13.9 s at a 13.9 s hard budget; clock minima 15.5 s and 28.4 s. The thread never had to
+fire in play, which is the expected case; the test is where it is exercised.
+
