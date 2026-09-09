@@ -149,6 +149,11 @@ PROMOTION_BONUS = 500_000
 KILLER_BONUS = 400_000
 HISTORY_CAP = KILLER_BONUS - 3
 
+# The promotion piece type a move carries in bits 14-16; `fastboard.PROMO_CHARS` is the whole
+# map. Only the queen is named here, because only the queen is what an under-promotion of an
+# equal score has to give way to; see `queen_first`.
+PROMO_QUEEN = 5
+
 EXACT, LOWER, UPPER = 0, 1, 2
 
 CONTEMPT = 50
@@ -1280,6 +1285,28 @@ def _arm_backstop(deadline: float) -> threading.Timer:
     return backstop
 
 
+def queen_first(move: int, moves: list[int]) -> int:
+    """The move to hand `search_root` as `first`, with an under-promotion swapped for a queen.
+
+    `first` is ranked `TABLE_BONUS`, so it is searched before every other move, and
+    `search_root` compares with a strict `>`: a move that only equals its score never takes
+    the slot from it. So an under-promotion that reaches the slot once is played for the rest
+    of the search even where the queen promotion is exactly as good. That is what happened in
+    rated round 85 at move 56: a depth-two iteration preferred `g2g1r`, every deeper iteration
+    inherited it as `first`, and at depth nine `g2g1q`, `g2g1r` and `f1e1` all scored +21, so
+    the rook was returned and the game was drawn. Half a point for nothing.
+
+    Demoting the under-promotion only moves it out of the slot; it stays in the move list at
+    its own rank, so a promotion that is genuinely better still wins on the strict comparison,
+    and the knight promotion that forks or mates is untouched. Only the tie changes hands.
+    """
+    promotion = (move >> 14) & 7
+    if promotion == 0 or promotion == PROMO_QUEEN:
+        return move
+    queen = (move & ~(7 << 14)) | (PROMO_QUEEN << 14)
+    return queen if queen in moves else move
+
+
 def think(fen: str, time_left_ms: int) -> str:
     """Deepen until the budget is spent, keeping the best move proven so far.
 
@@ -1318,6 +1345,9 @@ def think(fen: str, time_left_ms: int) -> str:
         stored = int(TT[slot, 1] & TT_MOVE_MASK)
         if stored in moves:
             best = stored
+    # Neither the static rank nor the table entry is a move this search has proven anything
+    # about, so an under-promotion has no claim on the slot it would then hold for good.
+    best = queen_first(best, moves)
 
     best_score = 0
     reached = 0
@@ -1343,7 +1373,7 @@ def think(fen: str, time_left_ms: int) -> str:
             score = int(
                 search_root(
                     board, st, undo, TT, BUFS, SCORES, KILLERS, HISTORY, PATH, GAME_KEYS, STATS,
-                    ACC, NET, deadline, depth, best,
+                    ACC, NET, deadline, depth, queen_first(best, moves),
                 )
             )
             if STATS[ABORTED] != 0:
