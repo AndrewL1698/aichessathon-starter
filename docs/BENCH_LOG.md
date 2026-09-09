@@ -677,6 +677,7 @@ in both engines; the soft budget is unchanged.
 |---|---|---|---|---|---|---|---|---|---|---|
 | hard-divisor-6 | baseline | 10s+0.1s | 96 | +30 =21 -45 | 42.2% | -55 | -120 to +6 | 0 / 0 / 0 / 0 | 1.70s | 254 MB |
 | hard-divisor-6-proxy45 | baseline | 45s+0.2s | 48 | +18 =19 -11 | 57.3% | +51 | -25 to +133 | 0 / 0 / 0 / 0 | 7.60s | 254 MB |
+| hard-divisor-6-120s | baseline | 120s+0.5s | 16 | +6 =5 -5 | 53.1% | +22 | -129 to +182 | 0 / 0 / 0 / 0 | 20.25s | 252 MB |
 
 **The fast control measures an artifact here, and the PGN clocks show which.** At 10 s + 0.1 s
 the hard budget is 1.67 s instead of 1.25 s, the gate starts bigger iterations from the first
@@ -697,3 +698,16 @@ The cost shows in the PGN clocks: the candidate's lowest clock per game had a me
 of a median 66 moves. It spends what it is given and arrives at the ending with less; at 45 s that
 stayed above the 1 s panic floor in every game. The 120 s + 0.5 s row below is the one that says
 whether the same holds at the platform's control, where v4.0's rated games ended with 8 to 50 s.
+
+**120 s + 0.5 s, 16 games: 53.1%, +22, -129 to +182.** Sixteen games decide nothing about Elo; what
+they decide is safety at the platform's control. The slowest move was 20.25 s with 121.5 s on the
+clock, the new hard budget exactly. The candidate's lowest clock per game had a median of 6.7 s and
+a minimum of 5.5 s against v4.0's 11.5 s and 7.4 s, over games of 35 to 85 moves; none under 5 s
+on either side, no disqualifiers, peak RSS 252 MB. Round 82's 125-move game would end lower than
+that, still above the 1 s panic floor by construction (`hard = min(clock / 6, clock - 300 ms)`).
+
+**Verdict: not proven on the ship rule.** Fast row negative (artifact), proxy +51 with the lower
+bound at -25, 120 s +22 on a sample too small to read. The mechanism it targets is on record in
+three rated games (34.Qc6 in round 82, 16...Bg7 in round 86, 28.bxc4 in round 87: decisive depth-6
+moves with 44 to 89 s on the clock), and the cost is a thinner clock at the end. What settles it is
+the proxy at 144 games or more; the 96-game extension is queued and its row goes below.
