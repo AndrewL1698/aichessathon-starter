@@ -668,3 +668,23 @@ rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / k
 `check_kpk` and the round 82 positions at depth 10: the three game positions score 0 with
 contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
 attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
+## Cycle 4, small fixes, 2026-09-09: `time/hard-divisor-6`
+
+Baseline `local-opponents/v4.0`, four games at a time, `harness.bench`. `HARD_DIVISOR` 8 to 6
+in both engines; the soft budget is unchanged.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hard-divisor-6 | baseline | 10s+0.1s | 96 | +30 =21 -45 | 42.2% | -55 | -120 to +6 | 0 / 0 / 0 / 0 | 1.70s | 254 MB |
+
+**The fast control measures an artifact here, and the PGN clocks show which.** At 10 s + 0.1 s
+the hard budget is 1.67 s instead of 1.25 s, the gate starts bigger iterations from the first
+move, and the candidate's clock ran under `PANIC_MS` (1 s, where the engine searches one ply)
+in **19 of 96 games against 0 for v4.0** on the other side of the same boards; under 1.5 s in
+75 games against 15. v4.0 against itself at this control (the `kpk-rook-pawn-draw` run, whose
+budgets are v4.0's) never went under 1 s on either side. So the row is mostly the cost of
+playing one-ply moves at the end of a 10 s game, a regime a 120 s + 0.5 s game does not enter
+(rounds 76 to 86 ended with 8 to 50 s on the clock). The same pattern is on record for
+`time/growth-cap` (42.2% fast, 60.4% at the 45 s proxy). The rows that decide this candidate are
+the 45 s + 0.2 s proxy (48 games) and 120 s + 0.5 s (16 games), below when they land; the fast
+row stands as measured.

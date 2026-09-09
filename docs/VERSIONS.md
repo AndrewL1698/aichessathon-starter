@@ -29,6 +29,7 @@ The current baseline for the bench is the newest shipped version (v4.0 as of 202
 | Branch | Commit | What | Why not |
 |---|---|---|---|
 | `eval/kpk-rook-pawn-draw` | v4.1 candidate, PR open | King and rook pawn against a bare king scores 0 when the defender is in front, in both evaluations. | Not a strength change the bench can see: fired in 3 of 96 games (all drawn, all correctly). 45.8%, -88 to +28, no disqualifiers. Decided on the position tests and the round 82 shuffle it removes. |
+| `time/hard-divisor-6` | v4.1 candidate | Hard budget a sixth of the clock instead of an eighth; soft budget unchanged. | Fast control 42.2% (-120 to +6), but the candidate's clock fell under the 1 s panic threshold in 19 of 96 games there against 0 for v4.0, an artifact of a 10 s game; decided on the 45 s proxy and 120 s rows in `docs/BENCH_LOG.md`. |
 | `cand/null-move` | 132a964 | Null move pruning | 53.6% vs v2.2 over 88 games, lower bound below zero. The only pruning candidate with a consistent positive sign; worth 300+ games. |
 | `cand/lmr` | 5990f59 | Late move reductions | 48.4% vs v2.2. Needs principal variation search underneath it to pay. |
 | `cand/futility` | 4d8f361 | Frontier futility pruning | 50.0% vs v2.2. No effect at 32 games. |
