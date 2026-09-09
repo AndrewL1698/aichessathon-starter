@@ -322,4 +322,11 @@ The gauntlet on the final code, two at a time alongside the 120 s games and then
 | v3-final-gauntlet | minimax | 10s+0.1s | 16 | +16 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 1.25s | 264 MB |
 | v3-final-gauntlet | overall | 10s+0.1s | 64 | +59 =3 -2 | 94.5% | +495 | +374 to +909 | 0 / 0 / 0 / 0 | 1.25s | 266 MB |
 
-Every worst move in the gauntlet is now the 1.25 s hard budget. The proxy follows.
+Every worst move in the gauntlet is now the 1.25 s hard budget.
+
+`make zip` on the final code: `submission.zip` is 37,368 bytes, 124,805 unzipped, three files
+(`agent.py`, `fastboard.py`, `fastsearch.py`), no native binaries, nothing from `tools/`,
+`tests/`, `logs/` or `local-opponents/`. Both smoke games out of the zip played their 20 plies
+clean at 120 s + 0.5 s (depth 8 to 9 on the first moves, 3.0M and 2.4M nps, peak RSS 266 MB).
+`make gate`: ruff and mypy strict clean, 2-0 against `baselines/random` at 5 s. The proxy
+follows.
