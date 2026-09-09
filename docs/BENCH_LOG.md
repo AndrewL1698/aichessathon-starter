@@ -150,6 +150,13 @@ it (v2.1). Two games at a time, load 4 to 6 from another benchmark on the same m
 | v3.0 null move on | v3.0 null move off | 10s+0.1s | 32 | +13 =7 -12 | 51.6% | +11 | -100 to +124 | 0 / 0 / 0 / 0 | 1.26s | 225 MB |
 
 | v3.0 shipped | sunfish | 120s+0.5s | 2 | +2 =0 -0 | 100.0% | +inf | +inf to +inf | 0 / 0 / 0 / 0 | 13.89s | 224 MB |
+| v3.0 after audit fixes | eval-agent v2.4 | 10s+0.1s | 32 | +31 =1 -0 | 98.4% | +720 | +526 to +inf | 0 / 0 / 0 / 0 | 1.25s | 226 MB |
+
+The last row is the confirmation run after the audit fixes. It is nominally better than the
+93.8% above it, but the two intervals overlap almost entirely and 32 games cannot tell them
+apart; what it establishes is that nothing regressed, not that anything improved. The fix that
+matters cannot show up here at all: the fallback never fired in any of these games, and the
+history loss it caused only bites in a game where it does.
 
 Also 16 games at 2 s + 0.1 s and 60 at 3 s + 0.1 s against `baselines/random`: 76 wins, 76 by
 checkmate, no failed terminations.
