@@ -1068,3 +1068,36 @@ same bound across all 3,072 rows reads 42,313, past int16, and would have refuse
 provably safe. And the test that compares the runtime's bucket table against the offline one,
 square by square, caught a mailbox-orientation error on its first run -- which is exactly the bug
 that trains on one bucketing and plays another with every other test still green.
+
+### 2026-09-10, round 102: v4.2 beat Magician from Riga in 114 moves as Black, and drifted to 94 plies on the fifty-move clock doing it.
+
+Banner and depth profile: v4.2 (depth 8 to 14, median 9, at 0.52M nps). Stockfish 19 at depth 18:
+our ACPL 100, three real blunders and ten cosmetic ones; the opponent's ACPL 133 with thirteen real
+mistakes, the weakest opponent in the reviewed games. 160.9 s used, **12.6 s left after 107
+moves**, and 54 of the 107 lines are lost to the 4 KB cap (moves 33 to 86), so the middle is read
+from the PGN and Stockfish.
+
+**The middlegame.** Won from move 10 (10.O-O-O, +97 to +300 by Stockfish) and never in doubt. The
+three real errors all gave back part of a +500 to +600 advantage and all stayed won: 18...Be5
+(+605 to +395, depth 8, 6.2 s), 31...a5 (+603 to +446, depth 8, 0.7 s of 2.9 s), 40...Qb8 (+508
+to +329, in the gap). The v4.2 pattern again: nothing at depth 9 or deeper went wrong in the 35
+surviving lines at those depths; the two visible slips were the depth-8 moves.
+
+**The ending, which is the finding.** From move 45 Stockfish had +595 and from 53 more than
++1,000; from move 67 it saw forced mates repeatedly (67, 78, 83, 92, 93, 101) that we did not play.
+Our score sat at +700 to +800 from move 55 to move 100, forty-five moves of rook and king
+shuffling against a bishop, and **the halfmove clock reached 94 plies after 100.Bb7**; 100...Rxf3
+reset it six plies short of the fifty-move draw, and the win took fourteen more moves. Why: both
+sides had pawns, so the leaves were scored by the network (the hand-table handover in
+`fastnnue.bare_endgame` needs a side down to three men), and the network does not prefer
+progress over a stable material count. The search reads the halfmove clock in exactly one place,
+`fastsearch.negamax` returning a draw when `st[3] >= FIFTY_MOVE_PLIES`; neither `leaf` nor
+`fasteval` scales the evaluation by it, so a +750 stays +750 at ply 94 and the draw appears only
+when the horizon touches ply 100. The standard remedy is to scale the static score by the counter
+(`(100 - halfmove) / 100` or gentler) at the leaf, in both engines for the equality test, so the
+search sees the advantage shrinking and reaches for a capture or pawn move long before. Small, and
+measured by a bench plus a replay of this ending. This is the third v4.x game to end with 5 to 13 s
+on the clock (82, 90, 102); here the length was self-inflicted.
+
+Three positions are in `tests/positions`, now 66. Blunders per game, real only, v4.2: 2, 6, 0,
+1, 3 over rounds 98 to 102 (4 W 1 D).
