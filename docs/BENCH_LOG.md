@@ -1393,3 +1393,42 @@ the thing to measure alongside is the 172-move replay, to test whether the endga
 above is the real mechanism.
 
 **Verdict: rejected, and not extended.** The branch and every PGN and log are kept.
+
+## The Stockfish anchor, 2026-09-10: v4.4 against Stockfish 19 at a fixed depth (tooling/stockfish-anchor)
+
+Above Sunfish (1465) there was no local anchor, so a change that beats every frozen version could
+not be placed on the ladder except by uploading it. `local-opponents/stockfish` is Stockfish 19
+at a fixed depth, wrapped in the agent contract the way Sunfish is (GPL, never committed, never
+shipped; `brew install stockfish`, depth from `$STOCKFISH_DEPTH`). Fixed depth rather than a
+clock so that it is the same opponent on every machine and never runs short of time. All rows are
+v4.4 (tag `v4.4`) on the M5, one arena at a time, 16 games over the eight openings, both colours.
+No flag, illegal move or crash on either side in any row.
+
+| Stockfish depth | Time control | Score for v4.4 | Elo | 95% interval | Terminations |
+|---|---|---|---|---|---|
+| 10 | 10 s + 0.1 s | 31.2% +- 12.2% (+0 =10 -6) | -137 | -252 to -45 | checkmate 6, threefold 9, fifty-move 1 |
+| 8 | 10 s + 0.1 s | 31.2% +- 15.2% (+1 =8 -7) | -137 | -287 to -25 | checkmate 8, threefold 7, fifty-move 1 |
+| 8 | 20 s + 0.2 s | 46.9% +- 14.1% (+2 =11 -3) | -22 | -124 to +77 | checkmate 5, threefold 8, insufficient 2, ply cap 1 |
+
+### The clock is the confound at 10 s + 0.1 s
+
+Depth 10 and depth 8 gave the same score, which says the losses were not about how deep
+Stockfish looked. `tools/analyse_game.py` at depth 18 over the six depth-10 losses (ACPL 50 to 91,
+27 real blunders) puts 23 of them after move 40, where our clock was down to about 1.5 s and the
+engine played thirty or more moves on the 0.1 s increment while its opponent, at fixed depth,
+never runs short: game 1 reached move 45 with 1.8 s against Stockfish's 13.7 s. Doubling the base
+and the increment moved the same matchup from -137 to -22. The platform's 120 s + 0.5 s is five
+times the increment again, so read the 20 s row as the closer of the two, and neither as the
+platform figure.
+
+The four blunders that came with a full clock are evaluation and search errors, not clock, and
+are in `tests/positions/positions.epd` as `sf10-g01 move 14` (Rd1, -490), `sf10-g04 move 15`
+(Bh3, -188), `sf10-g07 move 18` (Qd1, -174) and `sf10-g11 move 17` (Qxg7 into a forced mate).
+
+### How to use it
+
+Depth 8 at 20 s + 0.2 s is the row to repeat for the next version: 16 games put v4.4 at parity
+with an interval of +-100, so 48 games are needed before a change reads as anything. Keep the
+depth fixed across versions; move the clock only when the platform's does. The many threefold
+draws are structural: our contempt takes repetitions when behind and Stockfish at contempt zero
+accepts them in positions it reads as level, so a draw here is a held position, not a failed one.

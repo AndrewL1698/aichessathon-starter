@@ -24,6 +24,7 @@ local Minimax Three, so scores against it have to come from the ladder itself.
 | Minimax Two | 1064 | `baselines/minimax` | two plies on material and mobility |
 | Minimax Three | 1153 | none | three plies; ladder only |
 | Sunfish | 1465 | `local-opponents/sunfish` | Sunfish, wrapped in the agent contract |
+| Stockfish, fixed depth | none | `local-opponents/stockfish` | Stockfish 19 at `$STOCKFISH_DEPTH` plies (default 10); the anchor above Sunfish |
 
 `local-opponents/v1.0` has no ladder counterpart: it is our own v1.0, frozen at prod
 `29e6dc1`. `v2.2` and `v2.3` are the later shipped builds, frozen the same way; `docs/VERSIONS.md`
@@ -49,6 +50,22 @@ That downloads `sunfish.py` from thomasahle/sunfish at commit
 `local-opponents/sunfish/`. The wrapper raises an `ImportError` naming this script if the file is
 not there. The harness puts the agent directory first on `sys.path`, so the wrapper's
 `import sunfish` finds it and nothing else on the machine does.
+
+## Stockfish at a fixed depth
+
+Stockfish is GPL-3 and it is somebody else's engine, so it is never committed and never
+shipped, the same rule as Sunfish, and the hyphenated directory name keeps it out of
+`submission.zip` structurally. The wrapper finds the binary on `PATH` or in `$STOCKFISH`:
+
+```
+brew install stockfish
+STOCKFISH_DEPTH=8 uv run python -m harness.arena --opponent local-opponents/stockfish --games 16
+```
+
+Fixed depth rather than a clock, so its strength is the same on every machine and in every run,
+and it never runs short of time: a score against it is about our play alone. Depth is the one
+knob; one engine process per game, single thread, 64 MB hash. Above Sunfish there was no local
+anchor, and this is it. Rows are in `docs/BENCH_LOG.md` under the Stockfish anchor.
 
 ## Benchmarking
 

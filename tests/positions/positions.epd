@@ -86,3 +86,8 @@ r2qrbk1/2pb1ppp/p1np1n2/1p6/P2PP3/1B3N2/1P1N1PPP/R1BQR1K1 w - - 1 13; bm e4e5; i
 # Round 102 (v4.2, won vs Magician from Riga in 114 moves after 47 shuffled ones). Not Stockfish-flagged blunders but the bare-endgame seam: the winning move is a capture across `fastnnue.bare_endgame`, which v4.2 refused because the two sides of the line were scored on different scales.
 8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b - - 2 54; bm c3d3; id "r102 m54 Kxd3"
 8/8/4B3/2r5/3p1p2/3PkP2/8/6K1 b - - 78 92; bm e3d3; id "r102 m92 Kxd3"
+# v4.4 vs Stockfish 19 at depth 10, 10 s + 0.1 s (local-opponents/stockfish, 2026-09-10). The four losses that started with a full clock; the other blunders came on the 0.1 s increment after move 40.
+1r3rk1/Q3ppbp/2pq2p1/2p2b2/8/4P1P1/PP1P1PBP/R1B2RK1 w - - 1 14; bm f1e1; id "sf10-g01 move 14 Rd1 -490"
+r3k1r1/ppqbn2p/2n2p2/P1ppP3/8/2P2N2/2PBBPPP/R1Q2RK1 b q - 0 15; bm f6e5; id "sf10-g04 move 15 Bh3 -188"
+r3q1k1/ppp2pPp/8/3p1b2/8/1N6/PPnQ1PPP/1RB3K1 w - - 7 18; bm h2h3; id "sf10-g07 move 18 Qd1 -174"
+r1b1k2r/p4ppp/q1n1p3/3pP3/5PQ1/bp1PBN2/1P2N1PP/1K1R3R w kq - 0 17; bm b2a3; id "sf10-g11 move 17 Qxg7 mated"
