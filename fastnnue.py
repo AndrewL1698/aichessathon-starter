@@ -27,11 +27,23 @@ to the men that moved, and `evaluate` reads the accumulator of the side to move 
 exactly the side-to-move-relative set the net was trained on. `FEATURE` below is that index,
 precomputed for every (perspective, piece, mailbox square).
 
-**The stack.** `acc[ply, perspective, hidden]` is int16 and allocated once. `push` copies
+**King buckets.** The feature set is 3,072 inputs, not 768: four blocks of the old scheme,
+selected by a bucket read off the *perspective-oriented friendly king square*. Each perspective
+is conditioned on its own king, so a White king move changes which block the White accumulator
+lives in and leaves the Black one alone. `docs/NNUE_KING_BUCKETS.md` is the spec, and
+`tools/nnue/features.py` is the definition of record this file copies; `KING_OFFSET` below is
+the bucket, precomputed per (perspective, mailbox square), and the offset is simply added to
+`FEATURE`'s index. A 768-input weight file still loads: its one block is copied into all four,
+which changes no evaluation it produces and teaches it nothing about kings.
+
+**The stack.** `acc[ply, perspective, hidden + META]` is int16 and allocated once. `push` copies
 `acc[ply]` into `acc[ply + 1]` and applies the deltas for the men the move touched; unmaking
 needs no work at all, because `acc[ply]` was never written. A null move moves nothing, so it
 is the copy alone. `refresh` builds a perspective pair from the board, and the root does that
-once per search; every node below it is incremental.
+once per search; every node below it is incremental. The one extra column past the hidden units
+holds that perspective's king square, which is what tells `push` which block it is working in
+and whether the move it is applying leaves that block -- the only case that costs a rebuild, and
+then only of the perspective whose king moved.
 
 **Where the net stops.** `bare_endgame` is the one position class this evaluation refuses, and
 `fastsearch.leaf` scores it with the hand tables instead. A network trained on positions games
@@ -66,14 +78,25 @@ WEIGHTS_PATH = Path(__file__).resolve().parent / "weights" / "nnue.npz"
 
 # `tools/nnue/nnue_ref.SCHEME_VERSION`. A weight file from a different feature scheme or a
 # different quantisation layout has to be refused, not read with the wrong shapes.
-SCHEME_VERSION = 1
-# 12 planes of 64 squares, and the second and third layers' widths, all fixed by the scheme.
-NUM_FEATURES = 768
+SCHEME_VERSION = 2
+# The 768-input scheme v4.1 ships. Such a file is still readable here: `_load` copies its single
+# block into all four buckets, which is `tools/nnue/bucketize.py`'s warm start done in memory,
+# and it then evaluates every position to the integer the 768 net returned. That makes it a
+# starting point for fine-tuning, not a king-relative net.
+FLAT_SCHEME_VERSION = 1
+# 12 planes of 64 squares: one bucket's worth of features.
+BASE_FEATURES = 768
+# King buckets, read off the perspective-oriented friendly king square.
+# `docs/NNUE_KING_BUCKETS.md` is the spec and `tools/nnue/features.py` the definition of record.
+NUM_BUCKETS = 4
+# The whole first layer, and the second and third layers' widths, all fixed by the scheme.
+NUM_FEATURES = BASE_FEATURES * NUM_BUCKETS
 LAYER2_WIDTH = 32
 LAYER3_WIDTH = 32
 # The export proves the int16 accumulator cannot overflow by bounding it with the 32 largest
-# weights in each neuron's column; at most 32 men can stand on a board. Checked again here,
-# because the file is the thing that ships and the export is the thing that ran once.
+# weights in each neuron's column *within one bucket block*; at most 32 men can stand on a board
+# and a perspective's features all carry the same bucket. Checked again here, because the file
+# is the thing that ships and the export is the thing that ran once.
 MAX_ACTIVE = 32
 INT16_MAX = 32767
 
@@ -153,9 +176,45 @@ for _persp in range(2):
             _plane = (0 if _colour == _persp else 6) + _kind - 1
             FEATURE[_persp, _piece, _mb] = _plane * 64 + _square
 
+# --------------------------------------------------------------------------------------
+# The king bucket, precomputed the same way.
+#
+# KING_OFFSET[perspective, mailbox square] is `bucket * BASE_FEATURES` for a friendly king of
+# that perspective standing on that square: the number added to every one of that perspective's
+# feature indices. Squares off the board are 0, which is bucket 0, because a king is never on
+# one and numba does not bounds-check.
+#
+# The formula is `tools/nnue/features.py`'s, on the same flipped square the feature index uses,
+# and `tests/test_king_buckets.py` checks the two tables square by square rather than trusting
+# that two copies of it agree.
+# --------------------------------------------------------------------------------------
+
+KING_OFFSET = np.zeros((2, 120), dtype=np.int16)
+for _persp in range(2):
+    for _mb in range(21, 99):
+        if FILE_OF[_mb] < 0:
+            continue
+        _square = int(RANK_OF[_mb]) * 8 + int(FILE_OF[_mb])
+        if _persp == 1:
+            _square ^= 56
+        _bucket = 2 * (_square // 8 >= 4) + (_square % 8 >= 4)
+        KING_OFFSET[_persp, _mb] = _bucket * BASE_FEATURES
+
+# The kings as `fastboard` numbers pieces: 1..6 white pawn..king, 7..12 black pawn..king.
+WHITE_KING = 6
+BLACK_KING = 12
+
 _BOARD_T = nbt.int8[::1]
 _ST_T = nbt.int64[::1]
-# acc[ply, perspective, hidden].
+# acc[ply, perspective, hidden + META].
+#
+# The accumulator stack carries one extra int16 column per perspective, at index `hidden`,
+# holding the mailbox square of *that perspective's own king*. It is state the bucketed scheme
+# needs and the flat one did not: `push` has to know which block the accumulator it is copying
+# was built from, and whether the move it is applying leaves that block. Keeping it inside the
+# stack is what lets `fastsearch.py` stay exactly as it was -- the search threads one array
+# through the tree either way, and it never looks inside it.
+META = 1
 ACC_T = nbt.int16[:, :, ::1]
 
 # The whole net as one argument. numba freezes a module-level array into a compiled function
@@ -164,7 +223,7 @@ ACC_T = nbt.int16[:, :, ::1]
 # transposed to [32, hidden] so the second layer walks contiguous memory.
 NET_T = nbt.Tuple(  # type: ignore[no-untyped-call]
     (
-        nbt.int16[:, ::1],  # l1_weight [768, hidden]
+        nbt.int16[:, ::1],  # l1_weight [3072, hidden], four bucket blocks of 768
         nbt.int16[::1],  # l1_bias   [hidden]
         nbt.int16[:, ::1],  # l2_weight [32, hidden], transposed
         nbt.int32[::1],  # l2_bias   [32]
@@ -205,25 +264,109 @@ def refresh(board: np.ndarray, acc: np.ndarray, ply: int, net: Net) -> None:
     Once per search is also cheap enough to check that the stack is the right width for the
     net, which nothing on the incremental path can afford to. Getting that wrong writes past
     the end of a perspective row, and numba does not bounds-check.
+
+    This is also where each perspective's king square is found and written into the stack's
+    meta column, so everything below the root can read the bucket it was built in rather than
+    hunting for a king on every move.
     """
     l1_weight = net[0]
     l1_bias = net[1]
     hidden = l1_bias.shape[0]
-    if acc.shape[2] != hidden:
+    if acc.shape[2] != hidden + META:
         raise ValueError("fastnnue: the accumulator stack is not this net's hidden width")
+    white_king = 0
+    black_king = 0
+    for square in range(21, 99):
+        piece = board[square]
+        if piece == WHITE_KING:
+            white_king = square
+        elif piece == BLACK_KING:
+            black_king = square
+    acc[ply, 0, hidden] = white_king
+    acc[ply, 1, hidden] = black_king
     for perspective in range(2):
+        offset = KING_OFFSET[perspective, acc[ply, perspective, hidden]]
         target = acc[ply, perspective]
         for unit in range(hidden):
             target[unit] = l1_bias[unit]
-    for square in range(21, 99):
-        piece = board[square]
-        if piece == 0 or piece == 13:
-            continue
-        for perspective in range(2):
-            row = l1_weight[FEATURE[perspective, piece, square]]
-            target = acc[ply, perspective]
+        for square in range(21, 99):
+            piece = board[square]
+            if piece == 0 or piece == 13:
+                continue
+            row = l1_weight[offset + FEATURE[perspective, piece, square]]
             for unit in range(hidden):
                 target[unit] += row[unit]
+
+
+@njit(
+    nbt.void(_BOARD_T, nbt.int64, nbt.int64, nbt.int32, nbt.int64, ACC_T, nbt.int64, NET_T),
+    cache=False,
+)
+def _rebuild_crossed(
+    board: np.ndarray,
+    side: int,
+    perspective: int,
+    move: int,
+    offset: int,
+    acc: np.ndarray,
+    ply: int,
+    net: Net,
+) -> None:
+    """Build `acc[ply + 1, perspective]` from the board with `move` applied, in bucket `offset`.
+
+    The one case the incremental path cannot serve: this perspective's king has crossed a
+    bucket boundary, so every one of its features has moved to a different block and there is
+    no delta to apply. Only this perspective is rebuilt; the other one's king did not move, so
+    its offset did not change and it stays incremental.
+
+    `board` is the position *before* the move, like `push`'s, so the move is applied as the
+    scan runs: the square left behind is skipped, the square landed on is skipped and then
+    added with whatever arrived there, a pawn taken in passing is skipped, and a castling rook
+    is skipped at its old square and added at its new one. Written for any move rather than
+    only a king move, so it stays correct if it is ever called from somewhere else.
+    """
+    l1_weight = net[0]
+    l1_bias = net[1]
+    hidden = l1_bias.shape[0]
+    frm = move & 127
+    to = (move >> 7) & 127
+    promotion = (move >> 14) & 7
+    piece = board[frm]
+    landed = promotion + 6 * side if promotion != 0 else piece
+    ep_square = -1
+    if (move & FLAG_EP) != 0:
+        ep_square = to + 10 if side == 0 else to - 10
+    rook_from = -1
+    rook_to = -1
+    if (move & FLAG_CASTLE) != 0:
+        if to > frm:
+            rook_from = frm + 3
+            rook_to = frm + 1
+        else:
+            rook_from = frm - 4
+            rook_to = frm - 1
+
+    target = acc[ply + 1, perspective]
+    for unit in range(hidden):
+        target[unit] = l1_bias[unit]
+    for square in range(21, 99):
+        standing = board[square]
+        if standing == 0 or standing == 13:
+            continue
+        # left behind, replaced by whatever landed, taken in passing, or the castling rook
+        if square in (frm, to, ep_square, rook_from):
+            continue
+        row = l1_weight[offset + FEATURE[perspective, standing, square]]
+        for unit in range(hidden):
+            target[unit] += row[unit]
+    arrived = l1_weight[offset + FEATURE[perspective, landed, to]]
+    for unit in range(hidden):
+        target[unit] += arrived[unit]
+    if rook_to >= 0:
+        rook = board[rook_from]
+        row = l1_weight[offset + FEATURE[perspective, rook, rook_to]]
+        for unit in range(hidden):
+            target[unit] += row[unit]
 
 
 @njit(nbt.void(_BOARD_T, nbt.int64, ACC_T, nbt.int64, nbt.int32, NET_T), cache=False)
@@ -239,6 +382,14 @@ def push(
     Every intermediate state written here is one a board could really stand in (the same men,
     one of them on a different square, or one fewer), so the export's bound on the int16
     accumulator covers each of them and not merely the final value.
+
+    Under the bucketed scheme each perspective also carries its own king square and so its own
+    block of the first layer. A move that is not a king move leaves both offsets alone and
+    costs exactly what it did before. A king move changes one of them: if the king stays in its
+    bucket the update is the ordinary one, because the king is a piece in the 768 half of the
+    feature like any other; if it crosses, that perspective is rebuilt and the other one is not.
+    Castling arrives here as a king move of two files and takes whichever path its two squares
+    say -- `e1g1` stays in bucket 1, `e1c1` crosses to bucket 0 -- with the rook handled on both.
     """
     l1_weight = net[0]
     hidden = net[1].shape[0]
@@ -248,47 +399,54 @@ def push(
     piece = board[frm]
     # `make_move`'s own arithmetic: a promotion lands as that piece type in this side's range.
     landed = promotion + 6 * side if promotion != 0 else piece
+    king_moved = piece in (WHITE_KING, BLACK_KING)
 
-    # Every move has a piece leaving one square and arriving on another, so the copy from
-    # `acc[ply]` is fused with that pair rather than run as a pass of its own. The captures
-    # and the castling rook below are the rare cases and stay as their own loops.
     for perspective in range(2):
-        left = l1_weight[FEATURE[perspective, piece, frm]]
-        arrived = l1_weight[FEATURE[perspective, landed, to]]
+        king_before = acc[ply, perspective, hidden]
+        king_after = king_before
+        # Only the side that moved can move its own king, and only its own king selects its
+        # own block. That is the whole reason the other perspective survives incrementally.
+        if king_moved and perspective == side:
+            king_after = np.int16(to)
+        acc[ply + 1, perspective, hidden] = king_after
+        offset = KING_OFFSET[perspective, king_after]
+        if KING_OFFSET[perspective, king_before] != offset:
+            _rebuild_crossed(board, side, perspective, move, offset, acc, ply, net)
+            continue
+
+        # Every move has a piece leaving one square and arriving on another, so the copy from
+        # `acc[ply]` is fused with that pair rather than run as a pass of its own. The captures
+        # and the castling rook below are the rare cases and stay as their own loops.
+        left = l1_weight[offset + FEATURE[perspective, piece, frm]]
+        arrived = l1_weight[offset + FEATURE[perspective, landed, to]]
         source = acc[ply, perspective]
         target = acc[ply + 1, perspective]
         for unit in range(hidden):
             target[unit] = np.int16(source[unit] + arrived[unit] - left[unit])
 
-    if (move & FLAG_EP) != 0:  # the victim is not on the square landed on
-        captured_square = to + 10 if side == 0 else to - 10
-        captured = board[captured_square]
-        for perspective in range(2):
-            row = l1_weight[FEATURE[perspective, captured, captured_square]]
-            target = acc[ply + 1, perspective]
+        if (move & FLAG_EP) != 0:  # the victim is not on the square landed on
+            captured_square = to + 10 if side == 0 else to - 10
+            captured = board[captured_square]
+            row = l1_weight[offset + FEATURE[perspective, captured, captured_square]]
             for unit in range(hidden):
                 target[unit] -= row[unit]
-    else:
-        captured = board[to]
-        if captured != 0:
-            for perspective in range(2):
-                row = l1_weight[FEATURE[perspective, captured, to]]
-                target = acc[ply + 1, perspective]
+        else:
+            captured = board[to]
+            if captured != 0:
+                row = l1_weight[offset + FEATURE[perspective, captured, to]]
                 for unit in range(hidden):
                     target[unit] -= row[unit]
 
-    if (move & FLAG_CASTLE) != 0:  # the rook moves too
-        if to > frm:
-            rook_from = frm + 3
-            rook_to = frm + 1
-        else:
-            rook_from = frm - 4
-            rook_to = frm - 1
-        rook = board[rook_from]
-        for perspective in range(2):
-            left = l1_weight[FEATURE[perspective, rook, rook_from]]
-            arrived = l1_weight[FEATURE[perspective, rook, rook_to]]
-            target = acc[ply + 1, perspective]
+        if (move & FLAG_CASTLE) != 0:  # the rook moves too
+            if to > frm:
+                rook_from = frm + 3
+                rook_to = frm + 1
+            else:
+                rook_from = frm - 4
+                rook_to = frm - 1
+            rook = board[rook_from]
+            left = l1_weight[offset + FEATURE[perspective, rook, rook_from]]
+            arrived = l1_weight[offset + FEATURE[perspective, rook, rook_to]]
             for unit in range(hidden):
                 target[unit] += arrived[unit] - left[unit]
 
@@ -298,13 +456,15 @@ def push_null(acc: np.ndarray, ply: int, net: Net) -> None:
     """A null move moves no men, so both perspectives carry over unchanged.
 
     The side to move changes, but neither accumulator depends on that; which of the two
-    `infer` reads does, and that is decided at the leaf.
+    `infer` reads does, and that is decided at the leaf. No man moving also means neither king
+    moved, so the meta column is copied along with the hidden units and both perspectives stay
+    in the buckets they were already in.
     """
     hidden = net[1].shape[0]
     for perspective in range(2):
         source = acc[ply, perspective]
         target = acc[ply + 1, perspective]
-        for unit in range(hidden):
+        for unit in range(hidden + META):
             target[unit] = source[unit]
 
 
@@ -482,9 +642,9 @@ def _load(path: Path) -> Net:
         _check(not missing, f"the weight file is missing {sorted(missing)}")
         version = int(data["version"])
         _check(
-            version == SCHEME_VERSION,
+            version in (SCHEME_VERSION, FLAT_SCHEME_VERSION),
             f"the weight file is scheme version {version}, this runtime speaks "
-            f"{SCHEME_VERSION}",
+            f"{SCHEME_VERSION} and warm starts {FLAT_SCHEME_VERSION}",
         )
         hidden = int(data["hidden"])
         _check(0 < hidden <= 4096, f"a hidden width of {hidden} is not believable")
@@ -511,8 +671,9 @@ def _load(path: Path) -> Net:
                 f"the weight file says target={marker!r}, which this runtime does not know "
                 f"how to score; it understands {sorted(TARGETS)}",
             )
+        rows = BASE_FEATURES if version == FLAT_SCHEME_VERSION else NUM_FEATURES
         for name, array, shape, dtype in (
-            ("l1_weight", l1_weight, (NUM_FEATURES, hidden), np.int16),
+            ("l1_weight", l1_weight, (rows, hidden), np.int16),
             ("l1_bias", l1_bias, (hidden,), np.int16),
             ("l2_weight", l2_weight, (hidden, LAYER2_WIDTH), np.int16),
             ("l2_bias", l2_bias, (LAYER2_WIDTH,), np.int32),
@@ -527,12 +688,21 @@ def _load(path: Path) -> Net:
                 f"{name} has dtype {array.dtype}, this runtime wants {np.dtype(dtype).name}",
             )
 
+    if version == FLAT_SCHEME_VERSION:
+        # `tools/nnue/bucketize.py`'s warm start, done in memory: the one block copied into all
+        # four buckets. Every position reads 32 rows from a single block, so four identical
+        # blocks return exactly what the 768 net returned, whichever bucket the king selects.
+        l1_weight = np.tile(l1_weight, (NUM_BUCKETS, 1))
+
     # The int16 accumulator, proved rather than hoped for: for every hidden neuron the bias
     # plus the 32 largest weight magnitudes in its column has to fit. At most 32 men can stand
-    # on a board, so that bound covers every position a search can reach.
+    # on a board, so that bound covers every position a search can reach. The 32 are taken
+    # within one bucket block, because a perspective's features all carry the same bucket and
+    # a bound drawn across blocks would describe a position that cannot happen.
     magnitudes = np.abs(l1_weight.astype(np.int32))
+    blocks = magnitudes.reshape(NUM_BUCKETS, BASE_FEATURES, hidden)
     worst = int(
-        (np.sort(magnitudes, axis=0)[-MAX_ACTIVE:].sum(axis=0)
+        (np.sort(blocks, axis=1)[:, -MAX_ACTIVE:, :].sum(axis=1).max(axis=0)
          + np.abs(l1_bias.astype(np.int32))).max()
     )
     _check(
@@ -591,6 +761,21 @@ def target(path: Path) -> str:
     return str(_guarded(_target, path))
 
 
+def _scheme(path: Path) -> int:
+    with _open(path) as data:
+        return int(data["version"])
+
+
+def scheme(path: Path) -> int:
+    """The feature scheme the file declares.
+
+    `SCHEME_VERSION` is a king-bucketed file. `FLAT_SCHEME_VERSION` is a 768-input one, which
+    `load` warm starts into four identical buckets -- readable, and exactly as strong as it was,
+    but carrying no king information until it has been fine-tuned.
+    """
+    return int(_guarded(_scheme, path))
+
+
 def load(path: Path) -> Net:
     """The validated network from `path`; see `_load`. Raises `WeightError` on any damage."""
     net: Net = _guarded(_load, path)
@@ -599,15 +784,21 @@ def load(path: Path) -> Net:
 
 LOADED = False
 FILE_TARGET = "absolute"
+FILE_SCHEME = SCHEME_VERSION
 STATUS = ""
 try:
     NET = load(WEIGHTS_PATH)
     FILE_TARGET = target(WEIGHTS_PATH)
+    FILE_SCHEME = scheme(WEIGHTS_PATH)
     LOADED = True
     STATUS = (
-        f"nnue h{NET[1].shape[0]} qa{NET[6]} qb{NET[7]} qc{NET[8]} cp{NET[9]} "
+        f"nnue h{NET[1].shape[0]} k{NUM_BUCKETS} qa{NET[6]} qb{NET[7]} qc{NET[8]} cp{NET[9]} "
         f"{FILE_TARGET} from {WEIGHTS_PATH.name}"
     )
+    if FILE_SCHEME == FLAT_SCHEME_VERSION:
+        # Said out loud in the init line, because a warm-started file plays exactly like the
+        # 768 net and a bench row that forgets it would be attributed to king buckets.
+        STATUS += " (768 file warm started into 4 identical buckets, not fine-tuned)"
 except FileNotFoundError:
     NET = _stand_in()
     STATUS = f"hand: no weight file at {WEIGHTS_PATH}"
@@ -644,7 +835,11 @@ def policy() -> int:
 
 
 def accumulators(plies: int, hidden: int = HIDDEN) -> np.ndarray:
-    """The accumulator stack for a search `plies` deep: `acc[ply, perspective, hidden]`.
+    """The accumulator stack for a search `plies` deep: `acc[ply, perspective, hidden + META]`.
+
+    The extra column past the hidden units holds that perspective's own king square, which is
+    what tells `push` which bucket block the accumulator it is copying was built from. `infer`
+    reads only the first `hidden` of each row, so the column is invisible to the evaluation.
 
     `hidden` defaults to the width of the net that loaded, which is what the search wants. It
     is an argument because a caller can hold a net this module did not load -- the tests
@@ -652,7 +847,7 @@ def accumulators(plies: int, hidden: int = HIDDEN) -> np.ndarray:
     wrong answer, it is a write past the end of a row into the next perspective's memory.
     `refresh` refuses that outright rather than leaving it to be found as a wrong evaluation.
     """
-    return np.zeros((plies, 2, hidden), dtype=np.int16)
+    return np.zeros((plies, 2, hidden + META), dtype=np.int16)
 
 
 def warm() -> None:

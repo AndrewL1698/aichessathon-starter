@@ -7,11 +7,13 @@ Two data paths, one shard format.
   * ``selfplay`` generates or reads games and labels sampled positions with a local
                  Stockfish over a pool of worker processes, one engine per worker.
 
-Both write ``.npz`` shards holding exactly three arrays:
+Both write ``.npz`` shards holding exactly four arrays:
 
     indices  int16 [N, 32]   active feature indices, padded with -1 (see features.py)
     cp       int16 [N]       target, side-to-move relative centipawns, clipped to +-2000
     wdl      int8  [N]       game result from the side to move: +1 win, 0 draw/unknown, -1 loss
+    scheme   int32          the feature scheme ``indices`` is in, so training cannot read a
+                             shard built under a different one as though it matched
 
 ``wdl`` is zero for every position whose game result is unknown, which is every position on the
 lichess path. train.py does not use it today; it is stored because collecting it later would
@@ -44,6 +46,7 @@ import chess.pgn
 import numpy as np
 
 from tools.nnue.features import MAX_ACTIVE, PAD, features
+from tools.nnue.nnue_ref import SCHEME_VERSION
 
 # Targets are clipped here. Past a couple of queens the position is simply winning and the exact
 # number carries no signal the search needs; clipping also keeps the target inside int16.
@@ -104,6 +107,11 @@ class ShardWriter:
             indices=self._indices[: self._fill],
             cp=self._cp[: self._fill],
             wdl=self._wdl[: self._fill],
+            # Which feature scheme these indices are in. A shard written before king buckets
+            # holds 768-input indices, and training a 3,072-input model on those would quietly
+            # learn a net whose bucket blocks 1 to 3 never saw a position. Nothing downstream
+            # could tell the difference; this marker is how `train.py` can.
+            scheme=np.int32(SCHEME_VERSION),
         )
         self.shards += 1
         self._fill = 0
