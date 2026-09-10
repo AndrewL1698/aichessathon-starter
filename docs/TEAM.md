@@ -85,6 +85,13 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 midday · **v4.3** = v4.2 + PR #24 (`time/soft-floor`, from the M5 session): a reserve of
+  the first clock / 8 kept out of the soft budget so long games floor near 17 s instead of 5 s. Proxy
+  within noise (+22), four 120 s games with minima 22 to 48 s, 0 disqualifiers. Frozen at
+  `local-opponents/v4.3`, tag `v4.3`; **upload candidate**. In flight on the M5: `eval/bare-endgame-blend`
+  (round 102: the 3-man handover seam stalled a mate-in-14 for 47 moves; policy: blend + mop-up past the
+  seam except pure pawn endings; five conversions green) and the e36 net (+55 at 10 s, +51 at 45 s,
+  neither lower bound above zero; 200 more games pending).
 - 2026-09-10 · **Built, not benched** `nnue/king-buckets-4` (011e75c, worktree
   `../nnue-king-buckets-4`, branched from `prod` afb34f4): four king buckets, 3,072 inputs, the
   experiment cycle 7's rejection pointed at. **Deliberately not HalfKAv2_hm** -- four buckets,
