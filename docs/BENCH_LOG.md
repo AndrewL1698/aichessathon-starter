@@ -841,3 +841,42 @@ run reported 35.9% **with one flag** -- the termination class these rules call p
 and it was not real. Game 14 was replayed from the same index, which is the same pairing
 because the arena's game order is a pure function of the index, and it is a win. The row in the
 table above is the clean 32. The rule this produced is in `docs/TEAM.md`.
+
+## Cycle 4 (M5), 2026-09-10: the spend ceiling on v4.1, alone
+
+515cc62 caps the iteration gate at `min(hard, 1.5 x soft)` instead of the hard budget. It was
+written against rated round 85, where 16 of 73 moves ran past 1.5x the soft budget and 34 s of
+149 s went into iterations the deadline threw away. This branch is v4.1 plus that commit and
+nothing else, so the rows below are the ceiling's own sign. Every run is on the M5, one bench at
+a time, machine otherwise idle, against `local-opponents/v4.1`.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| platform-spend-alone | v4.1 | 10s+0.1s | 200 | +68 =59 -73 | 48.8% | -9 | -50 to +32 | 0 / 0 / 0 / 0 | 1.29s | 261 MB |
+| platform-spend-alone | v4.1 | 45s+0.2s | 48 | +12 =13 -23 | 38.5% | -81 | -175 to +2 | 0 / 0 / 0 / 0 | 5.65s | 255 MB |
+
+The 10 s row says little by construction: below a ~9.2 s clock `budgets` already clamps soft to
+hard, so `min(hard, 1.5 x soft)` is the hard budget and the change cannot fire. **The 45 s row is
+the one that binds** -- soft 2200 ms, hard 5625 ms, ceiling 3300 ms -- and it is negative, 38.5%
+and -81 with an interval of -175 to +2 that only just fails to exclude zero. Worst move 5.65 s,
+which is the design: an iteration started under the 3.3 s ceiling still runs to the 5.6 s
+deadline. Clean of all four disqualifiers at both controls.
+
+At 120 s + 0.5 s, one game per colour, it scored 1.5/2 (draw by insufficient material as White,
+win by checkmate as Black) at v4.1's depth, which is what a pure time change should look like.
+`harness/sandbox.py` keeps only a head and a tail of each game's stderr, mirroring the platform's
+4 KB + 4 KB, so the clocks below come from the PGN, which is complete; `%clk` is the clock after
+the move including the increment and matches the engine's own logged `clock` for the next move to
+a millisecond. Depth can only come from the log, so its column says how many of our opening moves
+it covers.
+
+| game | result | our moves | depth over our first N logged | clock minimum | slowest move | worst spend minus hard |
+|---|---|---|---|---|---|---|
+| white | draw, insufficient material | 72 (to move 78) | 7 / 8 / 9 over 27 | 17.24 s at move 77 | 8430 ms | +1 ms |
+| black | win by checkmate | 50 (to move 55) | 6 / 7 / 9 over 40 | 40.26 s at move 52 | 7351 ms | -1967 ms |
+
+Over all 122 of our moves in the two games the worst exceeded its hard budget by 1 ms and none
+reached a quarter of its clock, and the 1.5x ceiling was below the hard budget on every one of
+them. So what is in question here is strength, not safety. On 48 games at the proxy the sign is
+against shipping this alone. `stack/v42` carries the same commit under the cycle 4 search and wins
+there; the ceiling's own sign inside that stack is measured on `stack/noceiling`.
