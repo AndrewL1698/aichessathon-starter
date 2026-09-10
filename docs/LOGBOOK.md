@@ -977,3 +977,127 @@ all lines survive. The one inaccuracy was 9.Ng5 (91 cp, e4 was better), under th
 The evaluation's scale again: from move 11 our score sat 160 to 800 cp below Stockfish's in a
 position that was won throughout (+137 against +298 at move 11, +354 against +791 at move 19).
 It changed nothing here. Blunders per game, real only, v4.2: 2, 6, 0 (rounds 98 to 100).
+
+### 2026-09-10, round 101: v4.2 beat Yumo by mate in 48 as Black. One gate-refused slip in a won game.
+
+Banner and depth profile: v4.2 (depth 6 to 10, median 8, at 0.41M nps, the slowest node rate of
+its four games). Stockfish 19 at depth 18: our ACPL 39, one real blunder and two cosmetic ones
+inside a +1,600 position; Yumo's ACPL 67 with five real mistakes. 100.8 s used, 40.2 s left over
+42 moves, all lines survive. The score never dipped: Stockfish had us ahead from the first move
+and past +300 by move 28.
+
+**The one real error.** 28...Rb8 (+313 to +138; ...Rc5 keeps it) was played at depth 7 after 872
+ms of a 2,862 ms soft budget with 61 s on the clock: the gate refused depth 8. It is the same shape
+as 34.Qc6 in round 82 and 16...Bg7 in round 86, one ply deeper because this is v4.2, and it cost
+nothing here because the position stayed won. Fourteen of the 42 moves stopped under half the soft
+budget; this was the only one that cost anything.
+
+**Calibration.** Level positions read 13 cp from Stockfish's on average; from move 30 the score
+trailed by 200 to 440 cp in a position Stockfish had at +345 to +750, the compression seen in every
+v4.x win. The position is in `tests/positions`, now 63. Blunders per game, real only, v4.2: 2, 6,
+0, 1 over rounds 98 to 101 (3 W 1 D).
+### 2026-09-10, cycle 7: the 163M-position net on the same features. Rejected on 144 games.
+
+Asked as the baseline read on the 768-input architecture, before any king-relative feature work
+starts. `prod` at afb34f4 is byte-identical to `local-opponents/v4.1`, so the experiment is the
+weight file and nothing else: the shipped `nnue-h256-52m-e60` against `nnue-h256-100m-e71` from
+`nnue/weights-v1`, both 768-256-32-1, both absolute, both blended into the hand evaluation.
+
+**Theory.** The 163M-position run is trained on a superset of the shipped file's data, stops on
+patience at epoch 71 with a validation loss 6.1e-4 lower, and exports at qa=512 rather than 256 --
+twice the layer-1 precision, and the most accurate export the project has produced (1.65 cp mean
+against 2.93). Everything measurable offline says it is the better net. The absolute rows in
+cycle "the learned evaluation" were monotone in validation loss, so the ordering had earned some
+trust within a policy.
+
+**Measured.** 43.8% over 96 games at 10 s + 0.1 s (Elo -44, -106 to +16) and 46.9% over 48 at
+20 s + 0.2 s (-22, -95 to +50); pooled 144 games, 44.8%, -36, **-84 to +10**. Both controls below
+50%, both colours below 50% at the fast control. Not a cost: 1.367M nodes/s at depth 7 against
+1.363M, the same width and the same accumulator, and the hand-only sweep searched an identical
+205,733,319 nodes on both builds. Suite 26/47 against 27/47, mean nominal depth 8.55 against 8.57.
+Zero illegal moves, exceptions, flag falls or over-budget moves in 214 games.
+
+**Verdict: does not ship.** No interval excludes zero, so the file is not proven worse; the
+number that decides is the pooled upper bound of +10 Elo. Nothing there is worth an upload slot
+the day before the deadline, and the shipped weights stay.
+
+**What it teaches.** Validation loss did not order strength, and this time the two nets shared an
+architecture, a policy and a training pipeline -- the case where the metric was supposed to work.
+The epoch-11 file from this same run had already benched at parity over 96 games, so the 163M run
+has now produced two files and 240 games without getting ahead of a file trained on a third of
+the data. The blend, on the other hand, reproduced exactly: with the new weights the net alone
+scored 28.1% and the hand evaluation alone 21.9% over 32 games each, roughly +119 and +177 Elo
+for averaging them. The composition is where the Elo lives, not the size of the training set.
+
+For the next cycle: more data on the same 768 features has failed twice, which is the argument
+that the feature set is what binds, and the argument king-relative features are the thing to try.
+
+### 2026-09-10, cycle 8: four king buckets. Built, proved exact, not yet trained.
+
+Cycle 7 said more data on the same 768 features buys nothing, twice. The feature set is what is
+left, and the thing it cannot express is where our own king stands. This is the smallest test of
+that: branch `nnue/king-buckets-4` off `prod` afb34f4.
+
+**Theory.** Condition the feature index on the friendly king's square, so the net can learn that
+a knight on f5 means one thing with the king castled on g1 and another with the king on e4. Four
+buckets, `2 * (rank >= 4) + (file >= 4)` on the perspective-oriented square: file half separates
+a kingside castle from a queenside one, rank half separates a sheltered king from one that has
+left home. Not the 32 of HalfKAv2_hm, on purpose -- 32 buckets divide the same corpus 32 ways,
+and a bucket with too few positions learns noise. Each perspective is conditioned on its own
+king, which is what keeps one side's king move from disturbing the other accumulator.
+
+**Measured, of what can be measured.** The node rate costs 3.4% (1.341M against 1.390M at depth
+7) at *identical node counts*, so that figure is a pure timing difference rather than two
+different trees compared. A crossing push costs 641 ns against a normal one's 520, and crossings
+are rare; `infer` is unchanged, which is the number that matters most because it runs at every
+leaf. The first layer is 1.50 MiB against 0.38 and the platform core has 1 MiB of L2, so this
+was the gate that could have ended the experiment before any training; it did not, because a
+search touches at most one block per perspective. Exactness is 11,000 warm-start positions,
+11,000 reference comparisons, 30,000 randomised sequences with 3,175 crossings, and a repeat of
+all of it on a net whose blocks differ.
+
+**Verdict: nothing yet.** The warm start returns the shipped net's integer on every position, by
+construction, so there is no strength result and a bench today would report 50% and mean
+nothing. What this cycle bought is that the expensive question -- does king conditioning pay --
+can now be answered by one fine-tuning run rather than by a week of runtime work, and that the
+answer will not be confounded by a speed regression, because the speed is already measured and
+small.
+
+**Two things worth carrying.** The int16 accumulator bound had to be taken per bucket block: the
+same bound across all 3,072 rows reads 42,313, past int16, and would have refused a file that is
+provably safe. And the test that compares the runtime's bucket table against the offline one,
+square by square, caught a mailbox-orientation error on its first run -- which is exactly the bug
+that trains on one bucketing and plays another with every other test still green.
+
+### 2026-09-10, round 102: v4.2 beat Magician from Riga in 114 moves as Black, and drifted to 94 plies on the fifty-move clock doing it.
+
+Banner and depth profile: v4.2 (depth 8 to 14, median 9, at 0.52M nps). Stockfish 19 at depth 18:
+our ACPL 100, three real blunders and ten cosmetic ones; the opponent's ACPL 133 with thirteen real
+mistakes, the weakest opponent in the reviewed games. 160.9 s used, **12.6 s left after 107
+moves**, and 54 of the 107 lines are lost to the 4 KB cap (moves 33 to 86), so the middle is read
+from the PGN and Stockfish.
+
+**The middlegame.** Won from move 10 (10.O-O-O, +97 to +300 by Stockfish) and never in doubt. The
+three real errors all gave back part of a +500 to +600 advantage and all stayed won: 18...Be5
+(+605 to +395, depth 8, 6.2 s), 31...a5 (+603 to +446, depth 8, 0.7 s of 2.9 s), 40...Qb8 (+508
+to +329, in the gap). The v4.2 pattern again: nothing at depth 9 or deeper went wrong in the 35
+surviving lines at those depths; the two visible slips were the depth-8 moves.
+
+**The ending, which is the finding.** From move 45 Stockfish had +595 and from 53 more than
++1,000; from move 67 it saw forced mates repeatedly (67, 78, 83, 92, 93, 101) that we did not play.
+Our score sat at +700 to +800 from move 55 to move 100, forty-five moves of rook and king
+shuffling against a bishop, and **the halfmove clock reached 94 plies after 100.Bb7**; 100...Rxf3
+reset it six plies short of the fifty-move draw, and the win took fourteen more moves. Why: both
+sides had pawns, so the leaves were scored by the network (the hand-table handover in
+`fastnnue.bare_endgame` needs a side down to three men), and the network does not prefer
+progress over a stable material count. The search reads the halfmove clock in exactly one place,
+`fastsearch.negamax` returning a draw when `st[3] >= FIFTY_MOVE_PLIES`; neither `leaf` nor
+`fasteval` scales the evaluation by it, so a +750 stays +750 at ply 94 and the draw appears only
+when the horizon touches ply 100. The standard remedy is to scale the static score by the counter
+(`(100 - halfmove) / 100` or gentler) at the leaf, in both engines for the equality test, so the
+search sees the advantage shrinking and reaches for a capture or pawn move long before. Small, and
+measured by a bench plus a replay of this ending. This is the third v4.x game to end with 5 to 13 s
+on the clock (82, 90, 102); here the length was self-inflicted.
+
+Three positions are in `tests/positions`, now 66. Blunders per game, real only, v4.2: 2, 6, 0,
+1, 3 over rounds 98 to 102 (4 W 1 D).

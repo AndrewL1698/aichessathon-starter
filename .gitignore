@@ -17,3 +17,9 @@ tools/book/cache/
 weights/*.npz
 # The one weight file that ships is tracked; every other npz stays out of the tree.
 !weights/nnue.npz
+
+.DS_Store
+nnue-env/
+nnue-train/data/
+nnue-train/runs/*/
+*.pt
