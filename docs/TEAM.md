@@ -73,7 +73,7 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
-- 2026-09-09 afternoon · **In review** `eval/mobility` (PR: mobility): the first evaluation
+- 2026-09-09 evening · **Rejected** `eval/mobility` (PR #19): the first evaluation
   *term* added since v2.4. Knight, bishop, rook and queen mobility, counted as the squares a
   piece attacks that none of our men occupy and no enemy pawn covers, scored against a typical
   count for that piece so a full board sits near zero rather than paying for owning pieces.
@@ -83,8 +83,15 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   symmetry intact, 47 constants checked (was 44); ruff and mypy clean. The note in `_pieces`
   saying mobility was deliberately absent because python-chess movegen is too expensive was
   written when `agent.py` was the engine and is now removed: `fasteval.py` is what plays.
-  **Benched: 53.1% over 64 games vs `prod` df8f1fb at 10 s + 0.1 s, Elo +22, interval -54 to
-  +100, 0/0/0/0 disqualifiers.** 59.4% as White and 46.9% as Black over 32 games each. Right
+  **Verdict: does not ship.** 53.1% over 64 games at 10 s + 0.1 s (+22, -54 to +100) but
+  **39.1% over 32 at the 45 s proxy (-77, -188 to +19)**, pooling to 48.4% over 96 games. The
+  two controls disagree in sign and the platform-like one is negative, which is the wrong way
+  round: the net already encodes mobility, so the term re-states what the leaf has while the
+  12% node-rate cost is paid at every control. **New benchmarking rule, learned the hard way:
+  never `SIGSTOP` a running arena.** The referee times moves against the wall clock, so a
+  suspended in-flight game is charged the whole pause and records a `flag` -- this run reported
+  one until the game was replayed, and `flag` is the termination the rules call priority zero.
+  Original 64-game fast row, for the record: 59.4% as White and 46.9% as Black over 32 games each. Right
   sign, lower bound below zero, so **not proven and not for promotion**. The cost is smaller
   than first reported: 12% of the node rate at depth 7 (1.464M to 1.291M) against a 7% smaller
   tree, so 5% more time to the same depth, about a tenth of a ply. The earlier 22% figure was

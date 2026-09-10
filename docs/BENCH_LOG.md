@@ -742,3 +742,39 @@ searches all stopping within 5 ms, node rate at depth 7 on the hand path 2.79M o
 position and 2.14M on Kiwipete against prod's 3.85M and 2.59M. `tests.test_nnue` green, 1.48M
 nodes/s mean with the network on, import 4.4 s, 218 MB peak. `make gate` and `make zip` both
 pass; the packaged build plays a 120 s game to depth 8 at 254 MB.
+
+### `eval/mobility` at the 45 s + 0.2 s platform proxy: the term does not pay
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|
+| mobility | `prod` df8f1fb | 45s+0.2s | 32 | +7 =11 -14 | 39.1% | -77 | -188 to +19 | 0 / 0 / 0 / 0 |
+
+By colour: 25.0% as White (+2 =4 -10), 53.1% as Black (+5 =7 -4). The fast control split the
+other way (59.4% White, 46.9% Black), so the asymmetry is not a systematic White-side fault in
+the term; it is 16 games a side on 8 openings.
+
+**The two controls disagree in sign and the platform-like one is negative.** 53.1% at 10 s and
+39.1% at 45 s, pooling to 48.4% over 96 games. Neither interval excludes zero on its own, and
+that is the point: after 96 games the honest summary is that mobility buys nothing measurable
+and costs 12% of the node rate to not buy it. **Recommendation: do not ship. Leave it on the
+branch.**
+
+The mechanism that best fits the split is that the net already knows this. A 256-wide network
+trained on 52M evaluated positions encodes mobility implicitly -- it is one of the easiest
+things for a piece-square net to learn -- so the hand term re-states information the leaf
+already has, at full price. That price is a fixed fraction of the node rate at every control,
+while whatever the term adds is largest when the search is shallowest. A fast control hides
+the cost behind a shallower tree; the proxy does not. That ordering is what the two rows show,
+and it is the wrong way round for shipping.
+
+**One game in this run was corrupted and was replayed, and the reason is worth writing down.**
+The proxy run was suspended with `SIGSTOP` partway through to free the machine and resumed
+later. Game 14 was in flight at the time. The referee measures every move against the wall
+clock, so the suspension was charged to the agent as thinking time: the PGN shows our side with
+**43.4 s of its 45 s clock** and then a `flag` on the next move. That flag was an artifact of
+the suspension, not an engine defect, and the first scoring of this run reported it as a real
+disqualifier (`+6 =11 -15`, 35.9%, one flag). Game 14 was replayed cleanly from the same index
+-- the arena's game order is a pure function of the index, so the replay is the same pairing --
+and it is a win, giving the row above. **Never suspend a running arena.** A stopped process
+looks like a free pause and silently manufactures a flag in whatever game is in flight, which
+is the one termination class this log treats as priority zero.
