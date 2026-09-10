@@ -27,25 +27,6 @@ run while they do; `clock()` takes the lock back for its 340 nanoseconds and rel
 two stops are independent: the node-counted read is the one that fires in nearly every game,
 and the thread is there for the move where it does not.
 
-**Principal variation search.** Every node searches its first move at the window it was
-given and every later move at a window one wide, re-searching a move that beats the window
-only when the real window is wider than one. It is not a pruning and it gives nothing up: a
-node whose value lies inside its window still returns that value exactly, because the move
-that carries the value is always searched at a window that contains it -- the first move at
-the full window, and a later move at the full window again as soon as the one-wide search
-says it beat the bound. So the score equality against `agent.py` in
-`tests/test_fastsearch.py` covers it, and it has no off-switch to cover it with instead.
-What it buys is cheaper refutations: proving a move is not better than the best one is a
-much shallower question than scoring it, and most moves in most nodes are not better.
-
-**Late move reductions.** From the fourth move of a node onward, a quiet move that is not
-the table move or a killer, in a node that is not in check, and which does not give check, is
-searched two plies short. Beating the bound at that depth only earns it a search at the real
-one; nothing is ever skipped, so unlike null move this cannot lose a line outright, and unlike
-the principal variation search it does change what the tree is worth, because the ordering it
-trusts is a heuristic. `stats[LMR_ENABLED]` turns it off and the score equality runs with it
-off, for the same reason null move's does.
-
 **Aborting.** A timeout cannot unwind through a `raise` here, so `stats[ABORTED]` is set and
 every frame returns as soon as it sees it, *after* unmaking its move. The board, the undo stack
 and the ply-indexed buffers are all consistent when the abort reaches Python, unlike
@@ -160,7 +141,6 @@ PANIC_MS = 1_000
 GROWTH_MIN = 2.0
 GROWTH_MAX = 8.0
 GROWTH_UNKNOWN = 5.0
-SOFT_OVERRUN = 1.5
 NPS_FLOOR_MS = 5
 
 TABLE_BONUS = 4_000_000
@@ -193,8 +173,7 @@ RSS_DIVISOR = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
 # in exactly one place, zugzwang, where passing is better than any legal move, so it is
 # switched off when the side to move has nothing but pawns and a king.
 #
-# This is the only reason the search is not score-identical to `agent.py` -- the principal
-# variation search above it changes the cost of a node and not its value -- which is why it is
+# This is the only reason the search is not score-identical to `agent.py`, which is why it is
 # a flag rather than a fact: `stats[NULL_ENABLED]` turns it off, `tests/test_fastsearch.py`
 # runs the score-equality test with it off, and the bench measures both settings.
 # --------------------------------------------------------------------------------------
@@ -215,33 +194,6 @@ NULL_MOVE_MIN_DEPTH = 3
 # Written into the captured-piece slot of a null move's undo record, where a real move can
 # only ever write 0 to 12, so the next node can tell it was reached by a pass.
 NULL_MARKER = -1
-
-# --------------------------------------------------------------------------------------
-# Late move reductions. A well-ordered node puts the moves worth searching first, so by the
-# fourth one the odds are the move is not best; searching it two plies shallower asks the
-# same question for a quarter of the cost, and a move that answers yes anyway is searched
-# again at the full depth before anything is believed. The re-search is what makes this a
-# reduction rather than a pruning: nothing is skipped, so a move that really is best is
-# always found, just twice as expensively as if it had been ordered first.
-#
-# Reduced only where the reduction is cheap to be wrong about: quiet moves (a capture or a
-# promotion changes material and is exactly what a shallow search cannot judge), not in
-# check, not giving check, and never the table move or either killer -- those three are the
-# node's own evidence about what is worth looking at, and reducing them would be reducing
-# the ordering.
-#
-# Like null move, it is a flag: `stats[LMR_ENABLED]` turns it off and
-# `tests/test_fastsearch.py`'s score equality against `agent.py` runs with it off, because
-# a reduction that is never re-searched is allowed to miss a line and the equality is not.
-# --------------------------------------------------------------------------------------
-
-LATE_MOVE_REDUCTIONS = True
-# Below this a reduction lands in quiescence and saves a node or two.
-LMR_MIN_DEPTH = 3
-# The index of the first move that may be reduced: the fourth in the ordering.
-LMR_FIRST_MOVE = 3
-# Two plies, which is the reduction the brief and every engine that does this start from.
-LMR_REDUCTION = 2
 
 # --------------------------------------------------------------------------------------
 # The transposition table's packing. A move occupies bits 0..19 (`fastboard` puts its
@@ -269,8 +221,7 @@ NULL_ENABLED, NULL_CUTOFFS = 12, 13
 EXPIRED = 14
 # `fastnnue.HAND`, `ABSOLUTE`, `BLEND` or `RESIDUAL`: how a leaf is scored, see `leaf`.
 NNUE_POLICY = 15
-LMR_ENABLED, LMR_REDUCED = 16, 17
-STATS_SIZE = 18
+STATS_SIZE = 16
 
 # Read-only, so numba can hold it as a global constant.
 PIECE_VALUE_BY_KIND = np.array(PIECE_VALUES, dtype=np.int32)
@@ -1019,80 +970,35 @@ def negamax(
     out = bufs[ply]
     draws_before = stats[DRAWS]
     window_alpha = alpha
-    # A node asked about a window wider than one is on the principal variation, and the
-    # principal variation is the line the engine is going to play: it is not a line to be
-    # economical about. Everything else is a null-window node being asked only whether it
-    # refutes something, which is exactly the question a shallower search answers well, and
-    # the principal variation search below means nearly every node in the tree is one of
-    # those -- so this exemption costs a few per cent of the saving and buys back the whole
-    # of the search's exactness along the line that matters. Without it, `tests`'s Saavedra
-    # study picks a king move over the winning under-promotion at depths 5 and 6, because a
-    # reduction that fails low is never re-searched and the win is a quiet king move deep in
-    # a quiet line. The node's *original* window decides this, not the running `alpha`, so
-    # that a node does not stop being a principal variation node halfway down its move list.
     best = -INFINITY
     best_move = out[0]
-    pv_node = beta - window_alpha > 1
     score_moves(board, st, bufs, scores, killers, history, ply, count, table_move)
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
         move = out[index]
-        # Whether this move may be reduced, decided before the move is made: "quiet" is a
-        # claim about the board as it stands, since after `make_move` the square a capture
-        # emptied looks exactly like a square that was always empty.
-        late = (
-            stats[LMR_ENABLED] != 0
-            and not pv_node
-            and index >= LMR_FIRST_MOVE
-            and depth >= LMR_MIN_DEPTH
-            and not checked
-            and move != table_move
-            and move != killers[ply, 0]
-            and move != killers[ply, 1]
-            and board[(move >> 7) & 127] == 0
-            and (move & (FLAG_EP | (7 << 14))) == 0
-        )
         if stats[NNUE_POLICY] != HAND:
             push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
-        reduced = depth - 1
-        # The last condition, and the only one that needs the move made: a move that gives
-        # check is a forcing move, and the reply to it is not a quiet line at all.
-        if late and not is_square_attacked(board, st[5 + other], side):
-            reduced = depth - 1 - LMR_REDUCTION
-            stats[LMR_REDUCED] += 1
-        if index == 0:
-            # The first move of a well-ordered node is the one that is probably best, so it
-            # is the only one worth the full window. It is never reduced either: `late`
-            # requires an index of at least `LMR_FIRST_MOVE`.
-            score = -negamax(
-                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
-                net, deadline, depth - 1, ply + 1, -beta, -alpha,
-            )
-        else:
-            # Every later move is asked the cheaper question first: is it better than what we
-            # already have? A window one wide cuts far sooner than the real one, and the
-            # answer is almost always no. When it is yes the null window has only proven a
-            # bound, so the move is searched again for its real score -- unless the window we
-            # were given is already one wide, in which case the bound *is* the answer and the
-            # re-search would repeat the search we just did.
-            score = -negamax(
-                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
-                net, deadline, reduced, ply + 1, -alpha - 1, -alpha,
-            )
-            # A reduced search that beat the bound has proven nothing yet: it beat it two
-            # plies short. The same question at the real depth comes first, and only a move
-            # that survives that is worth the full window.
-            if stats[ABORTED] == 0 and score > alpha and reduced != depth - 1:
-                score = -negamax(
-                    board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
-                    acc, net, deadline, depth - 1, ply + 1, -alpha - 1, -alpha,
-                )
-            if stats[ABORTED] == 0 and score > alpha and beta - alpha > 1:
-                score = -negamax(
-                    board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
-                    acc, net, deadline, depth - 1, ply + 1, -beta, -alpha,
-                )
+        score = -negamax(
+            board,
+            st,
+            undo,
+            tt,
+            bufs,
+            scores,
+            killers,
+            history,
+            path,
+            game,
+            stats,
+            acc,
+            net,
+            deadline,
+            depth - 1,
+            ply + 1,
+            -beta,
+            -alpha,
+        )
         unmake_move(board, st, undo, move)
         if stats[ABORTED] != 0:
             return 0
@@ -1193,25 +1099,26 @@ def search_root(
         if stats[NNUE_POLICY] != HAND:
             push(board, st[0], acc, 0, move, net)
         make_move(board, st, undo, move)
-        if index == 0:
-            score = -negamax(
-                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
-                net, deadline, depth - 1, 1, -INFINITY, -best_score,
-            )
-        else:
-            # The same trade as `negamax` makes, and the root is where it saves the most: the
-            # previous iteration's best move is searched first, and every other root move only
-            # has to be shown not to beat it. `best_score` is a real score by here, because
-            # the first move is searched at the full window and no search returns -INFINITY.
-            score = -negamax(
-                board, st, undo, tt, bufs, scores, killers, history, path, game, stats, acc,
-                net, deadline, depth - 1, 1, -best_score - 1, -best_score,
-            )
-            if stats[ABORTED] == 0 and score > best_score:
-                score = -negamax(
-                    board, st, undo, tt, bufs, scores, killers, history, path, game, stats,
-                    acc, net, deadline, depth - 1, 1, -INFINITY, -best_score,
-                )
+        score = -negamax(
+            board,
+            st,
+            undo,
+            tt,
+            bufs,
+            scores,
+            killers,
+            history,
+            path,
+            game,
+            stats,
+            acc,
+            net,
+            deadline,
+            depth - 1,
+            1,
+            -INFINITY,
+            -best_score,
+        )
         unmake_move(board, st, undo, move)
         if stats[ABORTED] != 0:
             stats[BEST_MOVE] = best_move
@@ -1243,13 +1150,7 @@ def reset() -> None:
 
 
 def budgets(time_left_ms: int) -> tuple[float, float]:
-    """The soft and hard budgets in milliseconds, as `_budgets` computes them.
-
-    The soft budget is what an average move is meant to cost and the only thing the iteration
-    gate tests against elapsed time; the hard budget is the deadline the search aborts on, and
-    it is what the backstop thread is armed for. Neither changed here. `SOFT_OVERRUN` in
-    `think` is what now stands between them.
-    """
+    """The soft and hard budgets in milliseconds, as `_budgets` computes them."""
     soft = time_left_ms / SOFT_DIVISOR + SOFT_BONUS_MS
     hard = max(min(time_left_ms / HARD_DIVISOR, time_left_ms - SAFETY_MARGIN_MS), 0.0)
     return min(soft, hard), hard
@@ -1295,15 +1196,7 @@ def contempt_for(root_score: int) -> int:
 
 
 def projected(last_ms: float, previous_ms: float) -> float:
-    """What the next iteration costs, from the last one and how fast cost is growing.
-
-    An estimate, and a low one: over round 85's 73 moves the iteration that actually ran last
-    cost a median 1.28 times what this returned, and 63% of them cost more than it said. The
-    floor is what does it -- a table-warmed iteration that came in barely dearer than the one
-    before it clamps growth to `GROWTH_MIN`, and the next depth is nothing like twice the last.
-    Raising the floor was measured and is not the fix (see `think`); the fix is to stop
-    trusting this number all the way out to the hard deadline.
-    """
+    """What the next iteration costs, from the last one and how fast cost is growing."""
     growth = last_ms / previous_ms if previous_ms > 0.0 else GROWTH_UNKNOWN
     return last_ms * min(max(growth, GROWTH_MIN), GROWTH_MAX)
 
@@ -1429,12 +1322,10 @@ def think(fen: str, time_left_ms: int) -> str:
     observe(int(st[7]))
     soft_ms, hard_ms = budgets(time_left_ms)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS,
-        EXPIRED, LMR_REDUCED,
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
-    STATS[LMR_ENABLED] = 1 if LATE_MOVE_REDUCTIONS else 0
     STATS[NNUE_POLICY] = fastnnue.policy()
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
@@ -1463,9 +1354,6 @@ def think(fen: str, time_left_ms: int) -> str:
     partial = False
     last_ms, previous_ms = 0.0, 0.0
 
-    # How far past the soft budget an iteration is allowed to be projected to run. See the gate.
-    ceiling_ms = min(hard_ms, SOFT_OVERRUN * soft_ms)
-
     # A zero budget means the clock is under the safety margin, and then even the first
     # hundred nodes are time we do not have: the ordered first move is the whole reply.
     deepest = 0 if hard_ms <= 0.0 else 1 if time_left_ms < PANIC_MS else MAX_DEPTH
@@ -1473,29 +1361,12 @@ def think(fen: str, time_left_ms: int) -> str:
         for depth in range(1, deepest + 1):
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             # Start an iteration while the soft budget is not yet spent and the whole iteration
-            # is projected to finish inside `ceiling_ms`. The first condition keeps the average
-            # move near the soft budget; the second refuses iterations that would be cut off by
-            # the deadline and wasted, rather than every iteration that might end past the soft
-            # budget, which left most of the clock unspent (v2.2's problem, and v2.3's fix).
-            #
-            # `ceiling_ms` is `SOFT_OVERRUN * soft_ms`, not the hard budget, and that is what
-            # rated round 85 changed. Gating on the hard budget alone means a move that starts
-            # its last iteration a hair under the soft budget may then run all the way to the
-            # deadline: at a 99.3 s clock, soft 4.4 s and hard 12.4 s, move 5 spent 9.7 s, and
-            # 16 of the game's 73 moves spent more than one and a half times their soft budget.
-            # The projection is not good enough to carry that much rope -- it reads a median
-            # 1.28x low (see `projected`) -- so iterations kept being started that could not
-            # finish, and 34 s of the 149 s spent went into iterations the deadline threw away.
-            # Replaying the game with the gate capped at 1.5x soft: the clock at move 60 rises
-            # from 9.6 s to 23.9 s, the slowest move falls from 14.1 s to 8.6 s, wasted
-            # iterations from 11 to 2, and mean depth over the first 40 moves moves 7.00 to
-            # 6.92. Raising `GROWTH_MIN` instead only reached 11 s at move 60, and a reserve in
-            # the hard budget cost a third of a ply for the same clock. The hard budget and the
-            # abort path are untouched; below a ~9.2 s clock `soft_ms` is already clamped to
-            # `hard_ms` and this ceiling cannot bind. `agent.py`'s gate is v2.3's and no longer
-            # matches this one; it is the fallback engine and its budgets are its own.
+            # is projected to finish inside the hard budget. The first condition keeps the average
+            # move near the soft budget; the second refuses only iterations that would be cut off
+            # by the deadline and wasted, rather than every iteration that might end past the soft
+            # budget, which left most of the clock unspent. This is `agent.py`'s gate exactly.
             if depth > 1 and (
-                elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > ceiling_ms
+                elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > hard_ms
             ):
                 break
             iteration_started = time.perf_counter()
@@ -1534,8 +1405,7 @@ def think(fen: str, time_left_ms: int) -> str:
         f"{depth_text} {move_text} nodes {STATS[NODES]} "
         f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {hit_rate} cut {STATS[CUTOFFS]} "
-        f"null {STATS[NULL_CUTOFFS]} lmr {STATS[LMR_REDUCED]} "
-        f"contempt {STATS[CONTEMPT_AT]:+d} "
+        f"null {STATS[NULL_CUTOFFS]} contempt {STATS[CONTEMPT_AT]:+d} "
         f"peakrss {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR:.0f}MB",
         flush=True,
     )
@@ -1554,7 +1424,6 @@ def search_fixed(
     deadline: float | None = None,
     first: int = 0,
     null_move: bool | None = None,
-    late_moves: bool | None = None,
     nnue: bool | None = None,
     policy: int | None = None,
 ) -> tuple[str, int, int]:
@@ -1565,10 +1434,9 @@ def search_fixed(
     caller has set up by hand, which is how the repetition tests reach this path. `deadline`
     is a `time.perf_counter()` value, and with none given the search runs to the depth however
     long it takes. `first` is the move to try first, as the iteration loop passes the previous
-    depth's answer. `null_move` overrides `NULL_MOVE_PRUNING` and `late_moves` overrides
-    `LATE_MOVE_REDUCTIONS`, which is what lets the score-equality test measure the search
-    `agent.py` describes rather than this one, and `nnue` overrides `fastnnue.USE_NNUE`
-    the same way and `policy` overrides which of `leaf`'s
+    depth's answer. `null_move` overrides `NULL_MOVE_PRUNING`, which is what lets the
+    score-equality test measure the search `agent.py` describes rather than this one, and
+    `nnue` overrides `fastnnue.USE_NNUE` the same way and `policy` overrides which of `leaf`'s
     four ways of scoring a leaf is used, so one process can measure all of them. The abort flag
     is left in `STATS[ABORTED]` for the caller to read.
     """
@@ -1576,12 +1444,10 @@ def search_fixed(
         reset()
     board, st, undo = fb.from_fen(fen)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS,
-        EXPIRED, LMR_REDUCED,
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
-    STATS[LMR_ENABLED] = int(LATE_MOVE_REDUCTIONS if late_moves is None else late_moves)
     with_nnue = fastnnue.active() if nnue is None else (nnue and fastnnue.LOADED)
     chosen = fastnnue.file_policy() if policy is None else policy
     STATS[NNUE_POLICY] = chosen if with_nnue else HAND

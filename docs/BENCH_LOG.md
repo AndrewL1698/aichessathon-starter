@@ -642,3 +642,338 @@ of the hard budget 1 ms; slowest moves 11.9 s at a 13.4 s hard budget and 9.8 s 
 clock minima 24.4 s and 41.0 s. Pooled with the doer's 64-game row the blend is +112 =26 -22
 over 160 games, 78.1%.
 
+
+## Cycle 4, small fixes, 2026-09-09: what the rated-game reviews pointed at
+
+Baseline `local-opponents/v4.0`, 96 games at 10 s + 0.1 s per candidate, four at a time, the
+disqualifier counts and peak RSS from `harness.bench`. These are the three "small" items from the
+reviews of rounds 76 to 86 in `docs/LOGBOOK.md`: a rule the evaluation lacks, one time constant,
+one blend weight. One change per branch off `prod`.
+
+### `eval/kpk-rook-pawn-draw`: king and rook pawn against a bare king is a draw
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kpk-rook-pawn-draw | baseline | 10s+0.1s | 96 | +28 =32 -36 | 45.8% | -29 | -88 to +28 | 0 / 0 / 0 / 0 | 1.29s | 256 MB |
+
+**The bench is not the instrument for this one, and the row says why.** The rule can only fire
+in king-and-one-pawn positions with the pawn on a rook file and the defender in front; scanning
+the 96 PGNs, 7 games reached a king-and-pawn ending of any kind and **3 reached the rule's
+position, all three with the candidate defending, all three drawn**, which is what those
+positions are. The other 93 games ran code that is byte-for-byte v4.0's apart from a handful of
+integer compares at the leaf, so the -29 is the timing noise of two identical engines playing
+four at a time on a laptop; the interval is the honest statement and it includes zero. Node
+rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / kiwipete against
+3.93M / 2.61M on the sibling branch). What the change is measured by is `tests.test_fasteval`'s
+`check_kpk` and the round 82 positions at depth 10: the three game positions score 0 with
+contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
+attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
+
+## Cycle 4 (M5), 2026-09-09: the round 85 fixes
+
+Two branches off `prod` (v4.0) from the M5, one change each, against `local-opponents/v4.0`.
+A training job (`tools.nnue.train`, one core plus the GPU) was running on the same machine
+throughout both benches; games ran one at a time.
+
+### `search/promo-tiebreak`: an equal-scoring promotion resolves to the queen
+
+Round 85 move 56 (`8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b - - 0 56`): `g2g1q`, `g2g1r` and `f1e1`
+all scored +21 at depth 9 and the engine played the rook. The mechanism is ordering, not
+evaluation: `think` hands the previous iteration's answer to `search_root` as `first`, which is
+ranked `TABLE_BONUS` and searched before everything, and `search_root` improves on it only with
+a strict `>`. A depth-2 iteration returned the rook, every deeper iteration inherited it, and no
+equal score could take it back. `queen_first` swaps an under-promotion out of that slot for the
+queen promotion of the same move when both are legal; the under-promotion stays in the list at
+its own rank, so Saavedra's `c7c8r` is still found (it is strictly better), which the new test
+asserts alongside the round 85 position at four clocks. The search and the evaluation are
+otherwise byte-identical to v4.0; the scores are unchanged, only the tie changes hands.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-promo-tiebreak | v4.0 | 10s+0.1s | 64 | +25 =21 -18 | 55.5% | +38 | -32 to +111 | 0 / 0 / 0 / 0 | 1.26s | 257 MB |
+
+A disqualifier run, not a strength claim: the change fires only on a promotion tie, so the
+interval is v4.0 against itself plus noise. `uv run ruff check .`, `uv run mypy`,
+`tests.test_fastsearch` (with the new `promotion tie-break` check) and `tests.test_nnue` all
+green on the rebased branch.
+
+## Cycle 5, 2026-09-09 night: the two candidates from the rounds 73 to 90 review
+
+Two branches off `prod` at 2354ff5 (v4.1 plus the cross-game review), one change each, against
+`local-opponents/v4.1`, 96 games at 10 s + 0.1 s four at a time with nothing else running; the
+check extension also at the 45 s + 0.2 s proxy and re-run from scratch. Regression suite: prod's
+47 positions, `--engine fast`, depth 11, 20 s. `ruff`, `mypy` and `tests.test_fastsearch` (plus
+`tests.test_nnue` for the contempt branch) green on both.
+
+### `search/check-extension`: a node in check is searched one ply deeper
+
+Round 90's ending, a rook against two rooks and a pawn, was drawn by perpetual as long as the
+checks came from the h-file; the engine played the f-file check at moves 69 and 70 and was mated,
+because every check cost a full ply and the perpetual never repeated inside the horizon. With the
+extension the drawing `Rh8+` is chosen from depth 8 instead of 12 at move 69 and `Rh7+` from
+depth 6 instead of 9 at move 70, still scored as a rook down at every depth to 12 either way:
+what changes is that the checks are searched to their replies. Cost: 4.6 to 7.4x the nodes in
+those endings, about 6% of all nodes extended in a middlegame, and half a ply of nominal depth in
+20 s on the suite (7.89 against 8.40).
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-check-extension | v4.1 | 10s+0.1s | 96 | +42 =23 -31 | 55.7% | +40 | -21 to +103 | 0 / 0 / 0 / 0 | 1.28s | 257 MB |
+| search-check-extension | v4.1 | 45s+0.2s | 48 | +19 =17 -12 | 57.3% | +51 | -28 to +136 | 0 / 0 / 0 / 0 | 5.65s | 253 MB |
+| search-check-extension, re-run from scratch | v4.1 | 10s+0.1s | 96 | +35 =24 -37 | 49.0% | -7 | -69 to +54 | 0 / 0 / 0 / 0 | 1.29s | 256 MB |
+| pooled, all three | v4.1 | both | 240 | +96 =64 -80 | 53.3% | +23 | -14 to +61 | 0 / 0 / 0 / 0 | | |
+
+Suite 26/47 against v4.1's 27/47: solves `r74 m21` (a mate horizon) and `r90 m69`, which v4.1
+misses, and misses `r77 m14`, `r78 m16` and `r84 m23`, which v4.1 solved at exactly the depth the
+extension no longer reaches in 20 s; nine other positions are solved at a lower nominal depth
+(`r90 m39` at d6 against d9). Clock minimum at the proxy 2.5 s on both sides. **Not proven**: the
+first run's +40 did not reproduce from scratch, the pool's lower bound is -14, and the suite says
+it buys one class at the price of half a ply everywhere else. Branch pushed for a PR.
+
+### `eval/contempt-quiescence`: contempt from the hand evaluation resolved through quiescence
+
+`root_contempt` fed the raw static evaluation to the threshold, so a pending recapture read a
+piece down and set contempt to +50 (a draw worth half a pawn to us) in level positions: round 90's
+11...Nxa6, 19...Qxe4 and 20...Rxe4 read -359, -381 and -947 against a search score of -35, and
+v4.0's rated games did that on 22 level moves. The hand evaluation is now read through
+`quiescence` with the leaf policy forced to `HAND`: same threshold, same scale, one quiescence
+search per move.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| eval-contempt-quiescence | v4.1 | 10s+0.1s | 96 | +41 =15 -40 | 50.5% | +4 | -61 to +69 | 0 / 0 / 0 / 0 | 1.29s | 258 MB |
+
+A disqualifier run, like PR #17's: the change only matters when a draw is on offer with a
+capture pending. Measured directly over the 24,127 positions of two benches: contempt changes on
+8.4%, draw-seeking dropped on 1,313 (5.4%), draw-averse dropped on 58, and 713 positions where we
+are about to win material now refuse a draw. Suite unchanged at 27/47. Branch pushed for a PR, to
+be judged on the mechanism.
+
+
+## Cycle 6, 2026-09-10: mobility in the hand evaluation. Rejected over 128 games
+
+Branch `eval/mobility`, PR #19, **not merged and not shipped**. The engine change is not in
+this commit; only the record is. The branch keeps the code if the evaluation ever changes
+enough to make the term worth retesting.
+
+The term: for each knight, bishop, rook and queen, the squares it attacks that none of our own
+men stand on and no enemy pawn covers, scored against a typical count for that piece so a full
+board sits near zero rather than paying a bonus for owning pieces. Kings and pawns excluded.
+Weights per square, tapered mg/eg: knight 4/4, bishop 3/4, rook 2/4, queen 1/2, against
+baselines 4/6/7/13. Written into both evaluations, because `tests/test_fasteval.py` holds them
+to the same integer: `agent.py` by `attacks_mask` and a popcount, `fasteval.py` by walking the
+move generator's rays with two mailbox reads per target for the pawn cover.
+
+The note in `agent.py`'s `_pieces` saying mobility was "deliberately absent" because
+python-chess has to generate moves to count it was written when `agent.py` was the engine. It
+is the fallback now, so that reasoning had expired and the term was worth measuring. It was
+measured, and it does not pay.
+
+### The three runs
+
+| run | opponent | openings | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|---|
+| arena | `prod` df8f1fb | 8 | 10s+0.1s | 64 | +27 =14 -23 | 53.1% | +22 | -54 to +100 | 0 / 0 / 0 / 0 |
+| arena | `prod` df8f1fb | 8 | 45s+0.2s | 32 | +7 =11 -14 | 39.1% | -77 | -188 to +19 | 0 / 0 / 0 / 0 |
+| bench h2h | `prod` b508b37 | 28 | 10s+0.1s | 32 | +10 =8 -14 | 43.8% | -44 | -158 to +62 | 0 / 0 / 0 / 0 |
+| **pooled** | | | | **128** | **+44 =33 -51** | **47.3%** | **-19** | **-72 to +33** | **0 / 0 / 0 / 0** |
+
+Both baselines predate v4.1's promotion tie-break (PR #20): df8f1fb is v4.0 plus the rook-pawn
+rule, b508b37 is the same plus docs. The candidate is v4.0-plus-rook-pawn with mobility added,
+so each row is still one variable against its own baseline, which is what the rows claim. None
+of them is a comparison against v4.1 as shipped.
+
+Only the first row is above 50%, and it is the one on the narrowest opening set. Pooling across
+two controls and two opening sets is not clean arithmetic; read the direction, which is
+consistent and downward, rather than the third digit.
+
+### The head-to-head, and the finding that closes the question
+
+32 games, both engines pinned to exact commits in separate detached worktrees so neither could
+change mid-run, one game at a time, paired openings with colours reversed, nothing else on the
+machine. `fastsearch.py` byte-identical between the two trees, so the only difference was the
+evaluation. PGNs and both agents' logs kept.
+
+| metric | candidate | baseline `prod` b508b37 | delta |
+|---|---|---|---|
+| depth, real searches, mean | 7.14 | 7.18 | **-0.04** |
+| depth, real searches, median | 7.0 | 7.0 | **0** |
+| aggregate nodes/s | 1.405M | 1.519M | **-7.5%** |
+| nodes searched | 574.0M | 614.1M | -6.5% |
+| total think time | 408.7 s | 404.4 s | +1.1% |
+| slowest move | 1.26 s | 1.27 s | - |
+| clock floor | 1.00 s of 10 s | 1.00 s of 10 s | - |
+| peak RSS | 255 MB | 254 MB | - |
+
+Failures on the candidate side across all 128 games: **illegal 0, exception 0, timeout 0,
+over-budget 0, tracebacks 0.** The rejection is on strength alone; the code is sound.
+
+**There is no depth loss, and that is what settles it.** The term costs 7.5% of the node rate
+and hands back a 6.5% smaller tree, landing on the same median depth 7.0 and within 0.04 ply on
+the mean. So the loss cannot be attributed to the cost of computing it -- in real games the
+better ordering very nearly pays for the extra work. What is left is the evaluation term
+itself, and it is not adding anything.
+
+The mechanism that fits: a 256-wide network trained on 52M evaluated positions already encodes
+mobility. It is one of the easiest things for a piece-square net to learn, and the leaf is
+`(hand + net) // 2`, so the hand term re-states at half weight what the other half of the leaf
+already knows, while the node-rate cost is paid in full. **A hand-authored term that duplicates
+something the net has learned is not free; it is a tax.** That is the transferable result here,
+and it applies to the next hand-authored term someone proposes on top of a learned evaluation.
+
+Statistically, no interval excludes zero, the pooled one included (-72 to +33). This is not
+proof the term is harmful. It is firm evidence it is not an improvement, which is the question
+that was asked. Resolving a genuinely small effect would need 200+ games at one control, and
+there is no case for spending them after three runs failed to find a positive signal.
+
+### A flag in the 45 s run was an artifact, not the engine
+
+The 45 s proxy run was suspended with `SIGSTOP` partway through to free the machine, then
+resumed. Game 14 was in flight. The referee measures every move against the wall clock, so the
+suspension was billed to our agent as thinking time, and the PGN shows it:
+
+```
+11... Bxb2 { [%clk 0:00:43.432] }  12. Rb1 { [%clk 0:00:40.272] }  1-0  [Termination "flag"]
+```
+
+An agent with 43.4 s of a 45 s clock does not flag on the next move. The first scoring of that
+run reported 35.9% **with one flag** -- the termination class these rules call priority zero --
+and it was not real. Game 14 was replayed from the same index, which is the same pairing
+because the arena's game order is a pure function of the index, and it is a win. The row in the
+table above is the clean 32. The rule this produced is in `docs/TEAM.md`.
+
+## Cycle 4 (M5), 2026-09-10: the over-budget moves were the laptop, not the engine
+
+Cycle 4's late move reductions measured +74 Elo on the laptop and were disqualified anyway, by
+three moves of 396 to 758 ms against hard budgets of 191 to 229 ms. Every run below is on the
+M5, one bench at a time, machine otherwise idle. The baseline is `local-opponents/v4.1`.
+
+### The probe: `think` and `get_move` against the hard budget, in process
+
+50 positions (26 rated-game blunders from `tests/positions/positions.epd`, 6 from this repo's
+bench and endgame sets, 18 from the round 73-90 PGNs at plies 24/40/56/72), none of them a book
+position, at four short clocks, with reductions on and off, measuring both `fastsearch.think` and
+the `agent.get_move` the harness actually calls. `think` was not edited: an instrumented
+line-for-line copy stamped every stage of its python driver and was installed over
+`fastsearch.think`, which `get_move` calls too. The table clears before every measurement, so a
+cold table is what the projection has to work with. 800 measurements.
+
+| clock | LMR | entry | median over hard | p95 | max | over 50 ms |
+|---|---|---|---|---|---|---|
+| 1200 ms | on | think | -64.9 ms | +0.1 ms | +0.2 ms | 0/50 |
+| 1200 ms | on | get_move | -62.6 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 1200 ms | off | think | -73.2 ms | +0.1 ms | +0.1 ms | 0/50 |
+| 1200 ms | off | get_move | -73.5 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 1500 ms | on | think | -69.2 ms | +0.1 ms | +0.2 ms | 0/50 |
+| 1500 ms | on | get_move | -69.6 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 1500 ms | off | think | -85.2 ms | +0.1 ms | +0.2 ms | 0/50 |
+| 1500 ms | off | get_move | -86.5 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 2000 ms | on | think | -92.9 ms | +0.2 ms | +0.2 ms | 0/50 |
+| 2000 ms | on | get_move | -94.4 ms | +0.5 ms | +0.6 ms | 0/50 |
+| 2000 ms | off | think | -100.5 ms | +0.2 ms | +0.2 ms | 0/50 |
+| 2000 ms | off | get_move | -100.0 ms | +0.5 ms | +0.9 ms | 0/50 |
+| 2500 ms | on | think | -140.8 ms | +0.6 ms | +0.9 ms | 0/50 |
+| 2500 ms | on | get_move | -143.7 ms | +0.6 ms | +1.2 ms | 0/50 |
+| 2500 ms | off | think | -132.0 ms | +0.7 ms | +0.9 ms | 0/50 |
+| 2500 ms | off | get_move | -132.5 ms | +1.2 ms | +1.3 ms | 0/50 |
+
+The worst of the 800 is `get_move` at **+1.27 ms** past the hard budget. Where the milliseconds
+go, as medians: the setup before the loop (`from_fen`, `legal_moves`, `observe`, the contempt
+evaluation, the from-scratch accumulator) 0.32 ms, the backstop's cancel and join 0.03 ms, the
+log line 0.02 ms, and the whole `agent.py` wrapper around `think` (the python-chess board, the
+fallback memory's reachable scan, the book probe, the legality check, `remember_played`) 0.34 ms.
+62 of the 400 moves ended on an abort, and those are the tight ones: median +0.13 ms, p95
++0.68 ms, max +0.90 ms past the deadline. Quiescence nodes count toward the clock-check mask
+exactly as negamax's do, so there is no unchecked region of the tree. The engine's problem at
+these clocks is the opposite of an overshoot: the median move spends 51-63% of its hard budget.
+
+Repeating the 1500 ms probe with 36 spinning processes on 18 cores, about twice oversubscribed,
+moved the maximum from +0.2 ms to **+6.2 ms with reductions on and +22.9 ms with them off**, and
+still put no move past a quarter of its clock. So contention is the mechanism and it points the
+right way, but twice oversubscribed does not reach 396 ms; the laptop's runs were two four-job
+benches on ten cores, with a 260 MB engine per game and a five-second numba compile as each new
+game's process imports. **No time-management fix was made.** Every cause the probe could have
+found is under a millisecond, and the 200-game row below is the same measurement that
+disqualified the cycle, run on an idle machine.
+
+### The rows
+
+`time/platform-spend-v41` is v4.1 plus 515cc62 alone (the iteration gate capped at 1.5x the soft
+budget). `stack/v42` is `search/lmr` (PVS, late move reductions, and "never reduce at a principal
+variation node") plus that same commit. The middle row is the intermediate build the probe was
+run against, kept because its 200 games are the direct answer to the disqualifier.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| platform-spend + PVS, LMR off | v4.1 | 10s+0.1s | 200 | +84 =44 -72 | 53.0% | +21 | -22 to +64 | 0 / 0 / 0 / 0 | 1.26s | 262 MB |
+| A `time/platform-spend-v41` | v4.1 | 10s+0.1s | 200 | +68 =59 -73 | 48.8% | -9 | -50 to +32 | 0 / 0 / 0 / 0 | 1.29s | 261 MB |
+| A `time/platform-spend-v41` | v4.1 | 45s+0.2s | 48 | +12 =13 -23 | 38.5% | -81 | -175 to +2 | 0 / 0 / 0 / 0 | 5.65s | 255 MB |
+| B `stack/v42` | v4.1 | 10s+0.1s | 200 | +115 =48 -37 | 69.5% | +143 | +101 to +190 | 0 / 0 / 0 / 0 | 1.28s | 263 MB |
+| B `stack/v42` | v4.1 | 45s+0.2s | 48 | +26 =15 -7 | 69.8% | +145 | +66 to +243 | 0 / 0 / 0 / 0 | 5.63s | 257 MB |
+| C `stack/noceiling` | v4.1 | 10s+0.1s | 200 | +121 =41 -38 | 70.8% | +153 | +110 to +202 | 0 / 0 / 0 / 0 | 1.29s | 263 MB |
+| C `stack/noceiling` | v4.1 | 45s+0.2s | 48 | +27 =16 -5 | 72.9% | +172 | +94 to +270 | 0 / 0 / 0 / 0 | 5.68s | 257 MB |
+
+**Not one over-budget move in 1,096 games**, the 10 s rows at `--jobs 9`, the 45 s rows at
+`--jobs 4`. The worst move of every run is its hard budget plus a clock-check slice. That closes
+the disqualifier: it was the laptop.
+
+**The search is the gain and the ceiling is not.** B and C both clear zero at both controls and
+are the same measurement within noise at 10 s (+143 and +153), which is the check that the
+ceiling really is inert below a ~9.2 s clock, since the two builds differ only by 515cc62. At
+45 s, where it does bind, C without it scores 72.9% against B's 69.8%, a point estimate 27 Elo
+apart on heavily overlapping intervals. That is not significant on 48 games a side, but it is the
+same sign as the ceiling measured alone: A is -9 [-50, +32] fast, which says little for the same
+inertness reason, and **-81 [-175, +2] at 45 s**. Two independent measurements of one commit,
+both negative on strength.
+
+### 120 s + 0.5 s, one game per colour
+
+`harness/sandbox.py` keeps a head and a tail of each game's stderr with `[N bytes dropped]`
+between them, mirroring the platform's 4 KB + 4 KB, so a long game's middle is never logged. The
+clocks below therefore come from the PGN, which is complete: `%clk` is the clock after the move
+including the increment, and it matches the engine's own logged `clock` for the next move to a
+millisecond, so a spend derived from it is the engine's spend plus the harness round trip. Depth
+can only come from the log, so its column says how many of our opening moves it covers.
+
+| cand | game | result | our moves | depth over our first N logged | clock minimum | slowest move | worst spend minus hard |
+|---|---|---|---|---|---|---|---|
+| A | white | draw, insufficient material | 72 (to move 78) | 7 / 8 / 9 over 27 | 17.24 s at move 77 | 8430 ms | +1 ms |
+| A | black | win by checkmate | 50 (to move 55) | 6 / 7 / 9 over 40 | 40.26 s at move 52 | 7351 ms | -1967 ms |
+| B | white | draw, fifty moves | 166 (to move 172) | 9 / 10 / 12 over 25 | 5.06 s at move 116 | 7785 ms | +1 ms |
+| B | black | win by checkmate | 56 (to move 61) | 8 / 11 / 14 over 25 | 24.98 s at move 56 | 6078 ms | -210 ms |
+| C | white | win by checkmate | 39 (to move 45) | 10 / 10 / 13 over 39 | 21.43 s at move 40 | 10694 ms | +1 ms |
+| C | black | draw, insufficient material | 80 (to move 85) | 8 / 10 / 11 over 25 | 7.16 s at move 81 | 9719 ms | +1 ms |
+
+All three candidates scored 1.5/2. **Over all 463 of our moves in the six games the worst
+exceeded its hard budget by 1 ms, and none reached a quarter of its clock**; the handful of moves
+that read as "past hard" are 0.4 to 1.4 ms over on a figure derived from the PGN, which includes
+the harness round trip. A holds v4.1's depth, which is what a pure time change should do; B and C
+are two to three plies deeper over the same opening moves, which is the reductions.
+
+All six games start from `harness.play`'s default opening, so they are matched, and the clock
+trajectory separates the ceiling where the Elo cannot. Our clock in seconds after our move N:
+
+| cand | side | our moves | m20 | m30 | m40 | m60 | m80 | minimum | at move |
+|---|---|---|---|---|---|---|---|---|---|
+| A | white | 72 | 75.0 | 59.0 | 48.1 | 28.5 | end | 17.24 | 77 |
+| B | white | 166 | 85.6 | 64.1 | 43.1 | 26.6 | 11.6 | 5.06 | 116 |
+| C | white | 39 | 58.0 | 36.3 | 21.4 | end | end | 21.43 | 40 |
+| A | black | 50 | 91.4 | 67.9 | 51.0 | end | end | 40.26 | 52 |
+| B | black | 56 | 84.8 | 63.7 | 44.1 | 26.7 | end | 24.98 | 56 |
+| C | black | 80 | 54.3 | 35.3 | 25.7 | 11.8 | 7.2 | 7.16 | 81 |
+
+**At matched move numbers C spends far faster than B, in both colours and from move 20 on**: by
+move 40 C holds 21.4 s and 25.7 s where B holds 43.1 s and 44.1 s. The ceiling is worth about
+20 s of clock by move 40, which is what it was written to do. B's 5.06 s minimum is not B
+spending faster; it is a 166-move game, and at every matched move number B is the most
+conservative build in the table.
+
+B's white game is the one to read: 172 moves, terminated by the fifty-move rule in a dead-drawn
+same-colour bishop ending that both sides shuffle from about move 85. Its clock reads 43.1 s after
+move 40, 26.6 s after move 60, 11.6 s after move 80 and 6.4 s after move 100, bottoms out at
+5.06 s on move 116 and recovers to 6.9 s by the end. The 1.5x ceiling bound on 78 of our 166
+moves, every one down to a clock of about 9.1 s, below which `budgets` clamps soft to hard and the
+ceiling is inert. What drains the clock is not the ceiling but that `soft = clock/25 + 400` has no
+floor against the increment: at a 6 s clock the soft budget is 640 ms against a 500 ms increment,
+so a long game settles at a fixed point near 5-7 s. v4.1 does the same in a 170-move game;
+`time/reserve-floor` in `docs/VERSIONS.md` is the candidate that addresses it.

@@ -7,7 +7,7 @@ a local file.
 
 ## Hard dates
 
-- Upload deadline **Thu 2026-09-11 11:00 UK**. The latest validated upload plays.
+- Upload deadline **Fri 2026-09-11 11:00 UK (verified against aichessathon.com/docs on 2026-09-10: "Uploads close 11 September 11:00")**. The latest validated upload plays.
 - Final qualification: 13-round Swiss on locked builds that afternoon. The hourly rated rounds
   (08:00–22:00) only seed it.
 - London final Sep 12 needs a UK university student on the team. Eligibility unconfirmed.
@@ -70,9 +70,69 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   after the first upload, scale by the validation log's real slowest move.
 - Before any upload: `make gate`, 60+ games vs random at 3 s plus 16 at 2 s with zero failed
   terminations, `make zip` smoke passes.
+- **Never `SIGSTOP` a running arena, and never resume one.** The referee times every move
+  against the wall clock, so a suspended process is charged the whole pause and the in-flight
+  game records a `flag` -- the termination this list calls priority zero, manufactured out of
+  nothing. It cost cycle 6 a fake disqualifier that survived into a scored row until the PGN
+  clocks were read. To pause a run, kill it: the completed PGNs are the state, and a run
+  resumes from its PGN directory by index because the arena's game order is a pure function of
+  the index. Resuming from disk is safe; suspending the process is not.
+- Pinning both sides matters when the difference is small. Resolve each side to a commit and
+  play out of separate **detached** worktrees, so neither can move mid-run and the diff between
+  them is auditable afterwards. `harness.bench` plays 28 openings (`BENCH_OPENINGS`) against
+  `harness.arena`'s 8, so a 56-game bench run is the full set at both colours and is the wider
+  sample when a result on 8 openings looks like it might be an opening-set artifact.
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 afternoon · **rounds 91 to 96 were v4.1-contempt** (the 01:23 zip), not the PVS/LMR
+  `v4.2`: 2 W 1 D 3 L, the three losses to opponents at ACPL 17 to 20 on depth-6/7 moves with 25 to
+  98 s on the clock; the contempt change decided no move (checked at fixed depth on the two it
+  coincided with). Do not go back to v4.0; upload the `v4.2` tag (PVS/LMR, +143 vs v4.1). The
+  `submission-v4.2.zip` in the repo root is NOT that build. Eleven positions into the suite.
+- 2026-09-10 morning · **v4.2** = v4.1 + PR #22 (`stack/v42`: PVS, LMR with no reduction at a PV node,
+  iteration gate capped at 1.5x soft). Benched on the idle M5 vs v4.1: 69.5% at 10 s over 200, 69.8% at
+  the 45 s proxy over 48, 0 disqualifiers in 696 games; audited (PVS exact over 1,120 searches; the cap
+  raises the 120 s clock minimum from 9.3 s to 16.7 s in the round-85 replay). Frozen at
+  `local-opponents/v4.2`, tag `v4.2`; **this is the upload for the Friday 11:00 UK cutoff**. Bench
+  baseline is v4.2. Held: PR #16 null move, PR #18 hard divisor. Next candidates: a soft-budget floor
+  against the increment (long games settle at 5 to 7 s on every build), the warm/cold root tie
+  instability, the LMR minimum-depth knob.
+- 2026-09-10 01:30 · **v4.1-contempt** (built as `submission-v4.2.zip` before the tag went to PR #22; played rounds 91 to 96) = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
+  so a pending recapture no longer sets draw-seeking contempt in a level position; round 90). Built as
+  `submission-v4.2.zip` from the branch (f05f0dd) because the merge into prod is the team's to make:
+  PR open, tag `v4.2` goes on the merge commit. Proof: 96 vs v4.1 50.5%; vs v4.0 96 fast 52.1% and 48
+  proxy 46.9% (50.3% pooled), two 120 s games 1-1 with worst move 12.5 s and clocks over 15 s, 76 vs
+  random all mates, 0 disqualifiers, suite 27/47, smoke clean. Frozen at `local-opponents/v4.2`;
+  bench baseline v4.2. Every change since v4.0 fixes a rated-game situation and is Elo-neutral by
+  design; nothing on prod has an Elo lower bound above v4.0.
+- 2026-09-10 · **Rejected, PR #19 closed unmerged** `eval/mobility`: knight, bishop, rook and
+  queen mobility in both evaluations. **47.3% pooled over 128 games** against v4.0-plus-rook-pawn
+  baselines (53.1% on 64 at 10 s, 39.1% on 32 at the 45 s proxy, 43.8% on 32 at the 28-opening
+  bench head-to-head); only the narrowest opening set was above 50%. **Zero disqualifiers in all
+  128 games** -- the code is sound and exact against `agent.py` on 10,000 positions, so this is a
+  strength rejection, not a robustness one. The head-to-head is what closed it: the term costs
+  7.5% of the node rate and gives back a 6.5% smaller tree, so **it reaches the same median depth
+  7.0 and still loses ground**, which rules out the cost as the explanation and leaves the term
+  itself. The reading is that the net already encodes mobility -- easy for a piece-square net to
+  learn -- so a hand term duplicating it re-states at half weight what `(hand + net) // 2`
+  already has, and pays full price. Worth remembering before the next hand-authored term on top
+  of a learned evaluation. Branch kept, code not merged; `docs/BENCH_LOG.md` cycle 6 has the
+  rows, the telemetry and the `SIGSTOP` artifact that produced a fake flag.
+
+- 2026-09-09 night · **cycle 5**, from the rounds 73 to 90 review (draws from won positions: 1 in
+  17; no repetition ever taken while ahead; contempt read a pre-quiescence static). Off prod
+  2354ff5, bench baseline v4.1. `search/check-extension`: 55.7% fast, 57.3% proxy, 49.0% re-run,
+  pooled 53.3% (+23, -14 to +61), suite 26/47 vs 27/47, **not proven**, pushed for a PR.
+  `eval/contempt-quiescence`: contempt read through quiescence, so a pending recapture no longer
+  sets draw-seeking contempt in a level position; 50.5%, a correctness fix judged on the
+  mechanism, pushed for a PR.
+- 2026-09-09 evening · **v4.1** = v4.0 + PR #17 (KPK rook-pawn draw) + PR #20 (queen-first promotion
+  tie-break, from the M5 session). Frozen at `local-opponents/v4.1`, tag `v4.1`. Bench baseline stays
+  v4.0 for candidates already in flight; new ones use v4.1. Held: PR #16 (null move, proxy says no),
+  PR #18 (hard divisor 6) until `time/platform-spend` reports its proxy rows, then one combined time
+  candidate. In flight: cycle 4 PVS/LMR/futility; the 100M-position net (`nnue-h256-100m-*` on
+  `nnue/weights-v1`), whose epoch-11 file is benching vs v4.0 now.
 - 2026-09-09 morning · **v4.0**: PR #14 (`nnue/runtime`, the compiled learned evaluation, merged with
   the switch off after an independent audit; the one CRITICAL, a damaged weight file failing the
   import, fixed before merge) plus `nnue/v4.0`, which commits `weights/nnue.npz` and sets
