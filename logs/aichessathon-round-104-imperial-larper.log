@@ -1,0 +1,147 @@
+AI CHESSATHON MATCH LOG
+=======================
+
+MATCH
+  Round          Rated 104
+  Team           2 Pawns and a Queen
+  Colour         Black
+  Opponent       Imperial Larper
+  Opening        Sicilian Closed
+  Start FEN      r1bqk2r/pp2ppbp/2np1np1/2p5/P3P3/2NP1NP1/1PP2PBP/R1BQK2R b KQkq - 0 7
+  You moved      First
+  Machine        w-b1bbdd
+  Finished       2026-09-10 20:11:52 UTC
+  Match ID       6d055c98-1c0a-4f91-9ff6-a5099ccf2a37
+
+INIT
+  Ready in       15.9 s
+  Budget         90.0 s
+  Used           18 percent
+
+CLOCK
+  Base           120.0 s plus 0.5 s per move
+  Moves          52
+  Time used      117.4 s
+  Slowest        5.9 s on move 7
+  Fastest        0.5 s on move 51
+  Average        2.3 s
+  Left at end    28.6 s
+
+RESULT
+  Lost by checkmate
+  Game lasted 218.4 s
+
+MOVES
+    #  move          time     clock left
+    1  O-O           5.5 s      115.0 s
+    2  e5            1.4 s      114.1 s
+    3  h6            4.1 s      110.5 s
+    4  Re8           1.8 s      109.2 s
+    5  a5            3.5 s      106.2 s
+    6  g5            5.7 s      101.0 s
+    7  g4            5.9 s       95.6 s
+    8  Nd4           1.6 s       94.5 s
+    9  Nxd5          0.7 s       94.3 s
+   10  Qd7           1.1 s       93.7 s
+   11  f5            3.7 s       90.5 s
+   12  fxg4          1.7 s       89.3 s
+   13  Rf8           2.8 s       87.0 s
+   14  Rb8           1.2 s       86.3 s
+   15  exd4          2.7 s       84.1 s
+   16  Bxf8          5.8 s       78.9 s
+   17  Qg7           2.0 s       77.3 s
+   18  b5            2.8 s       75.0 s
+   19  Qe5           0.7 s       74.8 s
+   20  Qg5           5.2 s       70.1 s
+   21  Bg7           2.7 s       67.9 s
+   22  Qxh5          1.1 s       67.2 s
+   23  Qe5           3.3 s       64.5 s
+   24  Rxb5          1.2 s       63.8 s
+   25  Kh7           2.8 s       61.5 s
+   26  Qxf5          2.2 s       59.8 s
+   27  Kg8           0.7 s       59.6 s
+   28  Rxb2          1.6 s       58.5 s
+   29  Bf8           0.8 s       58.2 s
+   30  Rb1+          0.6 s       58.2 s
+   31  Rb2           2.3 s       56.4 s
+   32  c4            2.8 s       54.0 s
+   33  Rb3+          2.6 s       51.9 s
+   34  Rxg3          2.6 s       49.8 s
+   35  Rg2           2.9 s       47.5 s
+   36  Rg1           2.7 s       45.3 s
+   37  Rf1           3.3 s       42.5 s
+   38  Kg7           1.6 s       41.5 s
+   39  Re1+          1.0 s       40.9 s
+   40  Rg1           1.9 s       39.5 s
+   41  Rg2           1.1 s       39.0 s
+   42  dxc5          1.6 s       37.9 s
+   43  Rh2           1.6 s       36.7 s
+   44  Be7           2.3 s       34.9 s
+   45  Rc2           1.5 s       34.0 s
+   46  Rxc4          2.1 s       32.4 s
+   47  Bxf8          0.9 s       32.0 s
+   48  Rxe4+         1.1 s       31.5 s
+   49  Kg6           0.7 s       31.2 s
+   50  c4            2.1 s       29.6 s
+   51  Kh5           0.5 s       29.6 s
+   52  Kg4           1.6 s       28.6 s
+
+OUTPUT
+  8,119 bytes on stderr
+
+  d6 score +15 move g1f3 from partial d7 nodes 71552 nps 571555 125ms soft 125 hard 125 clock 1000 tt 36% cut 6151 null 0 lmr 3478 contempt +0 peakrss 277MB
+  numba engine ready: compiled fasteval 1.3s + fastnnue 1.6s + fastsearch 9.0s, first search 127ms, rss 277MB, evaluation nnue h256 qa256 qb1024 qc128 cp400 absolute from nnue.npz, book 24,479 entries
+  d9 score -1 move e8g8 nodes 2794957 nps 505661 5527ms soft 5200 hard 15000 clock 120000 tt 31% cut 174891 null 0 lmr 107006 contempt +0 peakrss 277MB
+  d8 score +0 move e7e5 nodes 643066 nps 458073 1404ms soft 4999 hard 14371 clock 114970 tt 30% cut 58046 null 0 lmr 17058 contempt +0 peakrss 277MB
+  d9 score +0 move h7h6 nodes 2029381 nps 496734 4085ms soft 4963 hard 14258 clock 114063 tt 27% cut 148173 null 0 lmr 68673 contempt +0 peakrss 277MB
+  d8 score +2 move f8e8 nodes 915080 nps 508184 1801ms soft 4819 hard 13809 clock 110475 tt 22% cut 58783 null 0 lmr 30583 contempt +0 peakrss 277MB
+  d8 score +0 move a7a5 nodes 1651048 nps 472849 3492ms soft 4767 hard 13646 clock 109171 tt 25% cut 117014 null 0 lmr 47323 contempt +0 peakrss 277MB
+  d9 score +0 move g6g5 nodes 2691841 nps 476298 5652ms soft 4647 hard 13272 clock 106172 tt 27% cut 190992 null 0 lmr 84342 contempt +0 peakrss 277MB
+  d10 score +28 move g5g4 nodes 3002193 nps 508323 5906ms soft 4441 hard 12627 clock 101018 tt 39% cut 257453 null 0 lmr 136966 contempt +0 peakrss 277MB
+  d9 score +14 move c6d4 nodes 784657 nps 493830 1589ms soft 4224 hard 11951 clock 95609 tt 30% cut 55936 null 0 lmr 31886 contempt +0 peakrss 277MB
+  d8 score +26 move f6d5 nodes 359505 nps 482745 745ms soft 4181 hard 11815 clock 94517 tt 30% cut 33960 null 0 lmr 10849 contempt +0 peakrss 277MB
+  d7 score +14 move d8d7 nodes 488172 nps 456022 1071ms soft 4171 hard 11784 clock 94270 tt 32% cut 21295 null 0 lmr 11859 contempt +0 peakrss 277MB
+  d9 score +12 move f7f5 nodes 1812946 nps 496844 3649ms soft 4148 hard 11712 clock 93697 tt 35% cut 119502 null 0 lmr 75511 contempt +0 peakrss 277MB
+  d8 score +21 move f5g4 nodes 792241 nps 456471 1736ms soft 4022 hard 11318 clock 90545 tt 32% cut 67390 null 0 lmr 23073 contempt +0 peakrss 277MB
+  d9 score +33 move e8f8 nodes 1308521 nps 472950 2767ms soft 3972 hard 11163 clock 89307 tt 29% cut 103754 null 0 lmr 48828 contempt +0 peakrss 277MB
+  d8 score +24 move a8b8 nodes 584951 nps 489889 1194ms soft 3881 hard 10880 clock 87037 tt 29% cut 43946 null 0 lmr 22122 contempt +0 peakrss 277MB
+  d10 score +45 move e5d4 nodes 1338677 nps 491403 2724ms soft 3854 hard 10793 clock 86341 tt 36% cut 116125 null 0 lmr 56169 contempt +50 peakrss 277MB
+  d11 score +24 move g7f8 nodes 2812333 nps 488862 5753ms soft 3765 hard 10514 clock 84114 tt 36% cut 269962 null 0 lmr 120576 contempt +50 peakrss 277MB
+  d10 score +2 move d7g7 nodes 994064 nps 495315 2007ms soft 3554 hard 9857 clock 78859 tt 40% cut 87195 null 0 lmr 45857 contempt +0 peakrss 277MB
+  d10 score -18 move b7b5 nodes 1433579 nps 506768 2829ms soft 3494 hard 9669 clock 77350 tt 38% cut 115253 null 0 lmr 69643 contempt +0 peakrss 277MB
+  d9 score -35 move g7e5 nodes 391081 nps 546748 715ms soft 3401 hard 9377 clock 75018 tt 47% cut 23195 null 0 lmr 23904 contempt +0 peakrss 277MB
+  d9 score -27 move e5g5 nodes 2516151 nps 484164 5197ms soft 3392 hard 9350 clock 74800 tt 34% cut 201498 null 0 lmr 94448 contempt +0 peakrss 277MB
+  d9 score -55 move f8g7 nodes 1367293 nps 498771 2741ms soft 3204 hard 8762 clock 70097 tt 31% cut 104820 null 0 lmr 56933 contempt +50 peakrss 277MB
+  d8 score -63 move g5h5 nodes 546828 nps 481505 1136ms soft 3114 hard 8482 clock 67853 tt 26% cut 42537 null 0 lmr 17743 contempt +50 peakrss 277MB
+  d9 score -334 move h5e5 nodes 1526315 nps 469667 3250ms soft 3089 hard 8402 clock 67215 tt 31% cut 136281 null 0 lmr 49232 contempt +0 peakrss 277MB
+  d9 score -395 move b8b5 nodes 558792 nps 470039 1189ms soft 2979 hard 8058 clock 64463 tt 41% cut 66422 null 0 lmr 24869 contempt +0 peakrss 277MB
+  d10 score -510 move g8h7 nodes 1505935 nps 543803 2769ms soft 2951 hard 7971 clock 63771 tt 38% cut 98628 null 0 lmr 76791 contempt +50 peakrss 277MB
+  d12 score -516 move e5f5 nodes 1247378 nps 563920 2212ms soft 2860 hard 7688 clock 61500 tt 49% cut 118966 null 0 lmr 94344 contempt +50 peakrss 277MB
+  d11 score -558 move h7g8 nodes 348946 nps 519193 672ms soft 2791 hard 7473 clock 59785 tt 48% cut 55054 null 0 lmr 22039 contempt +50 peakrss 277MB
+  d11 score -650 move b5b2 nodes 838135 nps 531018 1578ms soft 2784 hard 7451 clock 59611 tt 42% cut 119467 null 0 lmr 50960 contempt +50 peakrss 277MB
+  d10 score -616 move g7f8 nodes 468935 nps 597960 784ms soft 2741 hard 7316 clock 58530 tt 49% cut 34886 null 0 lmr 28969 contempt +50 peakrss 277MB
+  d9 score -629 move b2b1 nodes 283318 nps 514587 551ms soft 2730 hard 7280 clock 58243 tt 40% cut 41169 null 0 lmr 11894 contempt +50 peakrss 277MB
+  d11 score -722 move b1b2 nodes 1278322 nps 546989 2337ms soft 2728 hard 7274 clock 58189 tt 43% cut 158697 null 0 lmr 68374 contempt +50 peakrss 277MB
+  d11 score -690 move c5c4 nodes 1483699 nps 526645 2817ms soft 2654 hard 7044 clock 56350 tt 36% cut 190169 null 0 lmr 79755 contempt +50 peakrss 277MB
+  d12 score -775 move b2b3 nodes 1537469 nps 592725 2594ms soft 2561 hard 6754 clock 54031 tt 42% cut 126218 null 0 lmr 102041 contempt +50 peakrss 277MB
+  d11 score -818 move b3g3 nodes 1359603 nps 524261 2593ms soft 2477 hard 6492 clock 51934 tt 36% cut 235374 null 0 lmr 66749 contempt +50 peakrss 277MB
+  d11 score -864 move g3g2 nodes 1661871 nps 575703 2887ms soft 2394 hard 6230 clock 49839 tt 41% cut 203540 null 0 lmr 83125 contempt +50 peakrss 277MB
+  d11 score -878 move g2g1 nodes 1500233 nps 561872 2670ms soft 2298 hard 5931 clock 47450 tt 43% cut 197515 null 0 lmr 81565 contempt +50 peakrss 277MB
+  d12 score -795 move g1f1 nodes 2048761 nps 628319 3261ms soft 2211 hard 5660 clock 45276 tt 49% cut 169664 null 0 lmr 145050 contempt +50 peakrss 277MB
+  d11 score -815 move g8g7 nodes 852772 nps 548304 1555ms soft 2101 hard 5314 clock 42513 tt 44% cut 107828 null 0 lmr 40754 contempt +50 peakrss 277MB
+  d10 score -748 move f1e1 nodes 628148 nps 602364 1043ms soft 2058 hard 5182 clock 41456 tt 50% cut 39502 null 0 lmr 34587 contempt +50 peakrss 277MB
+  d10 score -789 move e1g1 nodes 1122847 nps 592790 1894ms soft 2036 hard 5114 clock 40910 tt 46% cut 69478 null 0 lmr 69823 contempt +50 peakrss 277MB
+  d9 score -825 move g1g2 nodes 543821 nps 518834 1048ms soft 1981 hard 4939 clock 39514 tt 38% cut 70502 null 0 lmr 20739 contempt +50 peakrss 277MB
+  d10 score -894 move d6c5 nodes 931507 nps 588959 1582ms soft 1959 hard 4870 clock 38963 tt 43% cut 62340 null 0 lmr 48464 contempt +50 peakrss 277MB
+  d9 score -898 move g2h2 nodes 848151 nps 518281 1636ms soft 1915 hard 4735 clock 37879 tt 32% cut 90222 null 0 lmr 29290 contempt +50 peakrss 277MB
+  d10 score -930 move f8e7 nodes 1301175 nps 566629 2296ms soft 1870 hard 4592 clock 36740 tt 37% cut 91854 null 0 lmr 55603 contempt +50 peakrss 277MB
+  d10 score -1186 move h2c2 nodes 901242 nps 609296 1479ms soft 1798 hard 4368 clock 34941 tt 44% cut 59787 null 0 lmr 48398 contempt +50 peakrss 277MB
+  d12 score -1370 move c2c4 nodes 1734756 nps 844370 2054ms soft 1758 hard 4245 clock 33960 tt 61% cut 138769 null 0 lmr 126633 contempt +50 peakrss 277MB
+  d11 score -1474 move e7f8 nodes 512394 nps 575907 890ms soft 1696 hard 4050 clock 32403 tt 47% cut 88187 null 0 lmr 24662 contempt +50 peakrss 277MB
+  d10 score -999990 move c4e4 nodes 894207 nps 854076 1047ms soft 1680 hard 4001 clock 32011 tt 47% cut 15595 null 0 lmr 33708 contempt +50 peakrss 277MB
+  d9 score -999992 move g7g6 nodes 456238 nps 634177 719ms soft 1658 hard 3933 clock 31462 tt 50% cut 63886 null 0 lmr 18286 contempt +50 peakrss 277MB
+  d10 score -999994 move c5c4 nodes 1793072 nps 842705 2128ms soft 1650 hard 3905 clock 31240 tt 62% cut 72637 null 0 lmr 96895 contempt +50 peakrss 277MB
+  d9 score -999996 move g6h5 nodes 315842 nps 680612 464ms soft 1584 hard 3701 clock 29609 tt 61% cut 45432 null 0 lmr 18804 contempt +50 peakrss 277MB
+  d10 score -999998 move h5g4 nodes 1296264 nps 828513 1565ms soft 1586 hard 3705 clock 29643 tt 64% cut 51031 null 0 lmr 75079 contempt +50 peakrss 277MB
+
+Email hello@aichessathon.com with this file if anything here is unclear.
