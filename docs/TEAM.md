@@ -85,6 +85,13 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 afternoon · **v4.4** = v4.3 + PR #25 (`eval/bare-endgame-blend`, from the M5 session, merged
+  on Neil's instruction): past the 3-man line the leaf is the blend plus one mop-up term, except pure pawn
+  endings, which stay hand-only; the round-102 seam (a mate-in-14 shuffled for 47 moves) is closed and all
+  five conversion endgames still mate. 45 s proxy vs v4.2 60.4% (+73, -1 to +155), 0 disqualifiers; two
+  120 s games clean. Frozen at `local-opponents/v4.4`, tag `v4.4`; **this is the upload**. Still open on
+  the laptop: `eval/blend-weight` (net 2:1) benching vs v4.3; on the M5: the e36 net's pooled 10 s run.
+  Neither holds the submission.
 - 2026-09-10 midday · **v4.3** = v4.2 + PR #24 (`time/soft-floor`, from the M5 session): a reserve of
   the first clock / 8 kept out of the soft budget so long games floor near 17 s instead of 5 s. Proxy
   within noise (+22), four 120 s games with minima 22 to 48 s, 0 disqualifiers. Frozen at
