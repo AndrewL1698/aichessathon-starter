@@ -85,6 +85,14 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 morning · **v4.2** = v4.1 + PR #22 (`stack/v42`: PVS, LMR with no reduction at a PV node,
+  iteration gate capped at 1.5x soft). Benched on the idle M5 vs v4.1: 69.5% at 10 s over 200, 69.8% at
+  the 45 s proxy over 48, 0 disqualifiers in 696 games; audited (PVS exact over 1,120 searches; the cap
+  raises the 120 s clock minimum from 9.3 s to 16.7 s in the round-85 replay). Frozen at
+  `local-opponents/v4.2`, tag `v4.2`; **this is the upload for the Friday 11:00 UK cutoff**. Bench
+  baseline is v4.2. Held: PR #16 null move, PR #18 hard divisor. Next candidates: a soft-budget floor
+  against the increment (long games settle at 5 to 7 s on every build), the warm/cold root tie
+  instability, the LMR minimum-depth knob.
 - 2026-09-10 01:30 · **v4.2** = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
   so a pending recapture no longer sets draw-seeking contempt in a level position; round 90). Built as
   `submission-v4.2.zip` from the branch (f05f0dd) because the merge into prod is the team's to make:
