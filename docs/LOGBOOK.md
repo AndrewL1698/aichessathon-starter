@@ -856,3 +856,48 @@ inside a 15 s hard budget, clocks never under 15 s; 60 games vs random at 3 s an
 is Elo-neutral by design, so the proof is the positions it fixes plus no measurable regression
 over 240 games, not a lower bound above v4.0. Nothing on prod or in flight has such a lower bound
 (check extension +23 with -14; hard-divisor-6 +31 with -13; null move rejected at the proxy).
+
+### 2026-09-10, rounds 91 to 96: the contempt-only build's six rated games. Won 2, drew 1, lost 3. The losses are the depth-6 class; the contempt fix decided nothing.
+
+**Which build.** All six carry the new contempt logic: on the 33 moves where the old and the new
+`root_contempt` disagree and a search line survives, the printed contempt matches the new one every
+time and the old one never (rounds 82 to 90 match the old one every time). Depth 7 at 0.45 to
+0.57M nps, the same as v4.0. So this is `submission-v4.2.zip` as built at 01:23, v4.1 plus
+`eval/contempt-quiescence`, and not the PVS/LMR stack that carries the `v4.2` tag since PR #22
+(that build searches deeper and has the old `root_contempt`). To end the collision, this build is
+**v4.1-contempt** in `docs/VERSIONS.md` from here on; the zip keeps its file name.
+
+| Round | Opponent | Colour | Result | Our ACPL / real | Their ACPL / real | Stockfish peak for us |
+|---|---|---|---|---|---|---|
+| 91 | Shah's Mate | White | won, mate | 10 / 0 | 44 / 2 | won throughout |
+| 92 | CheckmateGPT | White | lost, mate | 33 / 2 | 20 / 2 | +338 at move 34 |
+| 93 | Nakamura | Black | lost, mate | 58 / 3 | 17 / 0 | +12 |
+| 94 | Matrix | Black | draw, repetition | 29 / 2 | 29 / 1 | +13 |
+| 95 | AggieQuant | White | lost, mate | 49 / 3 | 18 / 0 | +214 at move 13 |
+| 96 | spring_week_converter | Black | won, mate | 43 / 5 | 66 / 7 | won throughout |
+
+Stockfish 19 at depth 18, joined to our search lines as before. The record is v4.0's (2 W 4 D 3 L
+over rounds 82 to 90) with two draws turned into a win and a loss, which six games cannot
+distinguish from noise; the three losses are to opponents at ACPL 17 to 20 who made zero to two
+real mistakes. Where they went: round 92, 34.Ne2 (+338 to +20, inside the log gap; e4 keeps it)
+and 42.d4 (-118 to -504, depth 6, 0.8 s of a 1.4 s budget with 25 s on the clock); round 93,
+30.fxg3 and 31.Rxd2 (+3 to -627 across two depth-6 moves with 37 s on the clock, ...Bd6 both
+times); round 95, 13.Bf4 (+214 to +77, depth 7), 26.Red1 (+202 to +77, depth 7, Qxe5 wins a
+pawn), then 42.Qe7 and 43.Re3 at depth 6 and 7. Every decisive move is a depth-6 or depth-7 move
+with 25 to 98 s on the clock: the class every review since round 82 has named, and the class PVS
+and LMR are for.
+
+**The contempt fix, move by move.** 33 of our moves read a different contempt than v4.1 would
+have: 23 pending recaptures that no longer read +50, 9 material wins that now read -50, and one
+each of 0 to +50 and +50 to -50. Two coincide with a Stockfish drop, 29...h5 in round 94 (0 to
+-128, drawn three moves later anyway) and 26.Red1 in round 95 (+202 to +77). At fixed depth both
+positions produce the same move at contempt -50, 0 and +50, so contempt did not choose either; no
+draw line was in either tree. Nothing in the six games traces to the fix, and nothing shows it
+earning anything: no perpetual was on offer with a capture pending.
+
+**Go back to v4.0?** No. v4.0 lost rounds 86 and 90 and drew 87 from +372 by the same mechanism,
+and v4.1-contempt is v4.1 plus one change that decided nothing here. The proven step is the
+PVS/LMR build tagged `v4.2` (+143 vs v4.1, +101 to +190, 696 games without a disqualifier), which
+the status already names as the Friday upload; the contempt change should be benched on top of it
+before it rides along. Eleven positions into `tests/positions`. Blunders per game, real only,
+v4.1-contempt: 0, 2, 3, 2, 3, 5.

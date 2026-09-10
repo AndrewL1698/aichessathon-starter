@@ -85,6 +85,11 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 afternoon · **rounds 91 to 96 were v4.1-contempt** (the 01:23 zip), not the PVS/LMR
+  `v4.2`: 2 W 1 D 3 L, the three losses to opponents at ACPL 17 to 20 on depth-6/7 moves with 25 to
+  98 s on the clock; the contempt change decided no move (checked at fixed depth on the two it
+  coincided with). Do not go back to v4.0; upload the `v4.2` tag (PVS/LMR, +143 vs v4.1). The
+  `submission-v4.2.zip` in the repo root is NOT that build. Eleven positions into the suite.
 - 2026-09-10 morning · **v4.2** = v4.1 + PR #22 (`stack/v42`: PVS, LMR with no reduction at a PV node,
   iteration gate capped at 1.5x soft). Benched on the idle M5 vs v4.1: 69.5% at 10 s over 200, 69.8% at
   the 45 s proxy over 48, 0 disqualifiers in 696 games; audited (PVS exact over 1,120 searches; the cap
@@ -93,7 +98,7 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   baseline is v4.2. Held: PR #16 null move, PR #18 hard divisor. Next candidates: a soft-budget floor
   against the increment (long games settle at 5 to 7 s on every build), the warm/cold root tie
   instability, the LMR minimum-depth knob.
-- 2026-09-10 01:30 · **v4.2** = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
+- 2026-09-10 01:30 · **v4.1-contempt** (built as `submission-v4.2.zip` before the tag went to PR #22; played rounds 91 to 96) = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
   so a pending recapture no longer sets draw-seeking contempt in a level position; round 90). Built as
   `submission-v4.2.zip` from the branch (f05f0dd) because the merge into prod is the team's to make:
   PR open, tag `v4.2` goes on the merge commit. Proof: 96 vs v4.1 50.5%; vs v4.0 96 fast 52.1% and 48
