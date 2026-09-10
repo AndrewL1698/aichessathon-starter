@@ -1185,3 +1185,74 @@ before dropping anything else.
 
 **The 32-bucket HalfKAv2_hm version does not start unless that bench shows a credible gain that
 outweighs the 3.4%.** Nothing here is evidence about strength, in either direction.
+
+
+## Cycle 5 (M5), 2026-09-10: a floor under the soft budget (time/soft-floor)
+
+Off `prod` at v4.2, one change against `local-opponents/v4.2`. The previous section ends on the
+problem: `soft = clock/25 + 400` has no floor against the 0.5 s increment, so at a 6 s clock the
+engine plans 640 ms for a move the increment pays 500 ms of, and a long game settles at 5-7 s
+whatever the build. Rated games have run to 90 moves, so this is insurance against a flag, not
+Elo; it ships only if it costs no strength.
+
+The change: the soft budget is taken from the clock above a reserve of `RESERVE_DIVISOR` (8) of
+the **first clock of the game** -- 15 s at the platform's 120 s, 5.6 s at the 45 s proxy, 1.25 s
+at 10 s. A fraction, not a fixed 10 s, because one build plays every control and a fixed reserve
+that is 8% of the platform's clock is 22% of the proxy's (that is what `time/reserve-floor`
+ace9ebc did). The first clock is inferred, because `get_move(fen, time_left_ms)` is told neither
+the base clock nor the increment; `budgets` records it and `reset` clears it, and `observe`
+already calls `reset` on any position that is not one legal move on from the one we handed back,
+so a second game in the same process cannot inherit a stale reserve. Below the reserve a move
+plans `SOFT_BONUS_MS` alone, 400 ms, under the increment, so the clock climbs back out. The hard
+budget and the abort path are untouched.
+
+### The replay, before any games were played
+
+`pgn/stack-120s/B-white.pgn`, the 172-move drawn game v4.2 played as White, walked through
+`fastsearch.think` position by position with the clock starting at 120 s, decremented by what
+each move actually spent on this machine and credited 0.5 s per move. The moves played are the
+game's, so every variant sees the same 166 positions and only the clock differs. The M5 is about
+2.5x the platform's core, so the depths are higher than a platform game's and the clock curve is
+the shape to read, not the absolute depth.
+
+| budgets | m40 | m60 | m80 | m100 | m120 | m160 | minimum | depth first 40 min/med/max | spend first 40 |
+|---|---|---|---|---|---|---|---|---|---|
+| prod (v4.2) | 49.3 | 28.1 | 14.8 | 8.8 | 6.5 | 5.6 | **5.30 s @m149** | 9 / 10 / 14 | 104.4 s |
+| reserve = first/12 | 60.6 | 39.3 | 24.7 | 17.2 | 13.8 | 12.5 | **11.64 s @m152** | 9 / 11 / 14 | 89.1 s |
+| reserve = first/8 | 56.8 | 37.7 | 27.7 | 23.8 | 19.7 | 17.5 | **16.91 s @m156** | 8 / 10 / 14 | 90.1 s |
+
+The prod row reproduces the real game (5.06 s at move 116 there, 5.30 s at move 149 here), which
+is what says the method is sound. /12 floors at 11.6 s, under the 15 s target, so the fraction was
+tuned once to /8: 3.2x prod's minimum at prod's median depth over the first 40 moves, for 14% less
+time spent there. That is the trade -- the reserve is depth given up early, and early depth is
+worth less than a move that is not made on a 5 s clock.
+
+### The rows
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| time-soft-floor | v4.2 | 45s+0.2s | 48 | +19 =13 -16 | 53.1% | +22 | -64 to +110 | 0 / 0 / 0 / 0 | 5.63s | 258 MB |
+
+Four 120 s + 0.5 s games against v4.2, one at a time, clocks read from the PGN rather than the
+log. Two openings: the English the replayed game came from, and the Petroff, picked as a
+symmetrical line likely to run long.
+
+| game | our colour | result | moves | our clock m40/60/80/100 | our minimum | past hard | our depth first 40 | theirs |
+|---|---|---|---|---|---|---|---|---|
+| English | white | 1-0 us, mate | 102 | 53.0 / 37.4 / 26.4 / 22.9 | 22.05 s @m98 | 0 | 7 / 10 / 14 | 7 / 10 / 14 |
+| English | black | 1-0 them, mate | 86 | 51.7 / 37.1 / 26.3 / end | 25.22 s @m82 | 0 | 7 / 12 / 16 | 7 / 12 / 15 |
+| Petroff | white | 1/2-1/2 threefold | 49 | 57.2 / end / end / end | 48.29 s @m47 | 0 | 7 / 10 / 14 | 7 / 10 / 14 |
+| Petroff | black | 1-0 them, mate | 75 | 57.7 / 39.0 / end / end | 33.86 s @m67 | 0 | 7 / 12 / 16 | 7 / 11 / 16 |
+
+One win, one draw and two losses over four games is noise; the 48-game row is the strength
+signal. The clock columns are the point. No move anywhere past the hard budget, and the
+comparable number is the English as White: 22.9 s at move 100, where v4.2's own 120 s game in the
+same opening and colour held 6.4 s and bottomed at 5.06 s.
+
+**What these four games do not show.** None of them ran long enough to reach the reserve -- 49 to
+102 moves against the replayed game's 172, and the lowest clock in the set is 22 s. So they say
+the change costs no depth (the depth distributions are v4.2's on the same board) and no
+over-budget move; the offline replay above is what says the floor holds in a game that actually
+gets long. The 48-game proxy row's lower bound is -64, below the -40 the brief asked for, on a
+positive centre: a 48-game row at exactly 50.0% has a lower bound near -86, so that is the
+interval's width and not a measured loss.
