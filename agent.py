@@ -64,11 +64,11 @@ FINE_CHECK_BELOW_MS = 300
 # Budgets in milliseconds, all derived from the clock we were handed, never from a constant.
 SOFT_DIVISOR = 25
 SOFT_BONUS_MS = 400
-HARD_DIVISOR = 8
+HARD_DIVISOR = 6
 # The referee times us from when it sends the request, so process overhead is on our clock.
 SAFETY_MARGIN_MS = 300
 # Below this the clock is nearly gone: search one ply plus quiescence and reply immediately.
-# One second, not the five this started at: the hard budget already caps a move at an eighth
+# One second, not the five this started at: the hard budget already caps a move at a sixth
 # of the clock, so panic only has to cover the last moves of a spent clock. At 5 s the arena's
 # 10 s control sat across the threshold, about 70% of moves came back at depth 1, and that
 # scored 79.7% against minimax where 1 s scores 95.3%.

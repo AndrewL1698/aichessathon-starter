@@ -668,6 +668,60 @@ rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / k
 `check_kpk` and the round 82 positions at depth 10: the three game positions score 0 with
 contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
 attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
+## Cycle 4, small fixes, 2026-09-09: `time/hard-divisor-6`
+
+Baseline `local-opponents/v4.0`, four games at a time, `harness.bench`. `HARD_DIVISOR` 8 to 6
+in both engines; the soft budget is unchanged.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hard-divisor-6 | baseline | 10s+0.1s | 96 | +30 =21 -45 | 42.2% | -55 | -120 to +6 | 0 / 0 / 0 / 0 | 1.70s | 254 MB |
+| hard-divisor-6-proxy45 | baseline | 45s+0.2s | 48 | +18 =19 -11 | 57.3% | +51 | -25 to +133 | 0 / 0 / 0 / 0 | 7.60s | 254 MB |
+| hard-divisor-6-120s | baseline | 120s+0.5s | 16 | +6 =5 -5 | 53.1% | +22 | -129 to +182 | 0 / 0 / 0 / 0 | 20.25s | 252 MB |
+| hard-divisor-6-proxy45-ext | baseline | 45s+0.2s | 96 | +34 =34 -28 | 53.1% | +22 | -34 to +79 | 0 / 0 / 0 / 0 | 7.57s | 256 MB |
+| hard-divisor-6-proxy45-pooled | baseline | 45s+0.2s | 144 | +52 =53 -39 | 54.5% | +31 | -13 to +77 | 0 / 0 / 0 / 0 | 7.60s | 256 MB |
+
+**The fast control measures an artifact here, and the PGN clocks show which.** At 10 s + 0.1 s
+the hard budget is 1.67 s instead of 1.25 s, the gate starts bigger iterations from the first
+move, and the candidate's clock ran under `PANIC_MS` (1 s, where the engine searches one ply)
+in **19 of 96 games against 0 for v4.0** on the other side of the same boards; under 1.5 s in
+75 games against 15. v4.0 against itself at this control (the `kpk-rook-pawn-draw` run, whose
+budgets are v4.0's) never went under 1 s on either side. So the row is mostly the cost of
+playing one-ply moves at the end of a 10 s game, a regime a 120 s + 0.5 s game does not enter
+(rounds 76 to 86 ended with 8 to 50 s on the clock). The same pattern is on record for
+`time/growth-cap` (42.2% fast, 60.4% at the 45 s proxy). The rows that decide this candidate are
+the 45 s + 0.2 s proxy (48 games) and 120 s + 0.5 s (16 games), below when they land; the fast
+row stands as measured.
+
+**The 45 s proxy: 57.3%, +51, -25 to +133, no disqualifiers.** The slowest move, 7.60 s with 45.6 s
+on the clock, is the new hard budget to the millisecond, so the deadline binds where it should.
+The cost shows in the PGN clocks: the candidate's lowest clock per game had a median of 2.6 s
+(lowest 1.4 s, 9 games under 2 s) against v4.0's 4.1 s (lowest 2.0 s, none under 2 s), over games
+of a median 66 moves. It spends what it is given and arrives at the ending with less; at 45 s that
+stayed above the 1 s panic floor in every game. The 120 s + 0.5 s row below is the one that says
+whether the same holds at the platform's control, where v4.0's rated games ended with 8 to 50 s.
+
+**120 s + 0.5 s, 16 games: 53.1%, +22, -129 to +182.** Sixteen games decide nothing about Elo; what
+they decide is safety at the platform's control. The slowest move was 20.25 s with 121.5 s on the
+clock, the new hard budget exactly. The candidate's lowest clock per game had a median of 6.7 s and
+a minimum of 5.5 s against v4.0's 11.5 s and 7.4 s, over games of 35 to 85 moves; none under 5 s
+on either side, no disqualifiers, peak RSS 252 MB. Round 82's 125-move game would end lower than
+that, still above the 1 s panic floor by construction (`hard = min(clock / 6, clock - 300 ms)`).
+
+**Verdict: not proven on the ship rule.** Fast row negative (artifact), proxy +51 with the lower
+bound at -25, 120 s +22 on a sample too small to read. The mechanism it targets is on record in
+three rated games (34.Qc6 in round 82, 16...Bg7 in round 86, 28.bxc4 in round 87: decisive depth-6
+moves with 44 to 89 s on the clock), and the cost is a thinner clock at the end. What settles it is
+the proxy at 144 games or more; the 96-game extension is queued and its row goes below.
+
+**The extension: 53.1%, +22, -34 to +79; pooled over 144 proxy games, 54.5%, +31, -13 to +77.**
+The sign held on a fresh 96-game sample from different openings and the lower bound did not clear
+zero. Clock minima in the extension: candidate median 2.5 s, lowest 1.6 s, 18 games under 2 s, none
+under 1 s; v4.0 median 4.1 s, lowest 2.5 s. **Verdict: not proven; not shipped on these numbers.** A
+one-constant change with the right sign at every platform-like control and a cost that is visible
+in the clock is a reasonable thing for the team to take on the mechanism evidence, and an
+unreasonable thing to call measured. The PR stays open for that decision; the branch is complete.
+
 
 ## Cycle 4 (M5), 2026-09-09: the round 85 fixes
 
