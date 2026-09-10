@@ -901,3 +901,34 @@ PVS/LMR build tagged `v4.2` (+143 vs v4.1, +101 to +190, 696 games without a dis
 the status already names as the Friday upload; the contempt change should be benched on top of it
 before it rides along. Eleven positions into `tests/positions`. Blunders per game, real only,
 v4.1-contempt: 0, 2, 3, 2, 3, 5.
+
+### 2026-09-10, rounds 97 and 98: the last v4.1-contempt game and v4.2's first. Both won.
+
+Which build, from the logs: round 97 (finished 13:20 UTC) searched at depth 6 to 8, median 7, with
+contempt values only 0 and -50, which is `v4.1-contempt`; round 98 (14:19 UTC) searched at depth 7 to
+12, median 9, never past 1.9x the soft budget, with +50 among its contempt values, which is the
+PVS/LMR stack with the capped gate and the old `root_contempt`: **v4.2's first rated game**. Node
+rates 0.53M and 0.49M, so the extra two plies are the search, not the machine. Stockfish 19 at depth
+18 joined to the surviving lines as before; both logs complete except eight lines of round 98.
+
+| Round | Build | Opponent | Colour | Result | Our ACPL / real | Their ACPL / real |
+|---|---|---|---|---|---|---|
+| 97 | v4.1-contempt | Shah's Mate | White | won, mate in 54 | 17 / 0 | 63 / 4 |
+| 98 | v4.2 | zenith | White | won, mate in 70 | 22 / 2 | 42 / 3 |
+
+**Round 97** is the cleanest v4.x win on record: no move cost 150 cp, the opponent's errors from
+move 29 on were taken, and the root score sat 24 cp from Stockfish's in level positions. 124.9 s
+used, 19.6 s left.
+
+**Round 98** is a first look at v4.2 on the platform and it is mixed. Two real blunders, both at
+depth 8: 13.a5 (+325 to +10, 3.2 s of a 5.0 s soft budget with 114 s on the clock; 13.e5 wins) and
+32.Rd1 (0 to -168, 2.1 s of 3.0 s with 65 s; e5 again). Moves 33 to 35 sat at -205 to -254 by
+Stockfish while our score read -80 to 0, the one "unseen" stretch, and the game turned on zenith's
+47...Qc2. From move 44 the engine converted without error. **Nothing went wrong at depth 9 or
+deeper (0 of 31 moves); both errors were the depth-8 moves, and 32 of the 52 surviving lines were
+depth 9 or more, where v4.1 lived at 6 and 7.** The gate cap shows in the spend: 19 of 52 moves
+stopped under half the soft budget, none of them a blunder, and no move ran past 2.5x soft. The
+evaluation is v4.0's, and so is its scale: from move 48 on our score trailed Stockfish's by 220 to
+490 cp in a won position, as in rounds 83 and 84. 128.5 s used, 21.5 s left over 60 moves. The two
+positions are in `tests/positions`, now 61. Blunders per game, real only: v4.1-contempt 0, 2, 3, 2,
+3, 5, 0 over rounds 91 to 97; v4.2 2 over round 98.
