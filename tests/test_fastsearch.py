@@ -91,15 +91,19 @@ def check_against_reference(reference: ModuleType, fens: list[str], depths: tupl
 ):
     """The root score of the port must equal the root score of the engine it came from.
 
-    Null-move pruning is switched off here, and only here. It is the one thing this search
-    does that `agent.py`'s does not, and it is deliberately unsound: it is allowed to miss a
-    line, which is the trade that buys the depth. With it off the two searches are the same
-    algorithm and the scores have to agree exactly; `check_null_move` covers it being on.
+    Null-move pruning and futility pruning are switched off here, and only here. They are
+    the two things this search does that `agent.py`'s does not, and both are deliberately
+    unsound: null move is allowed to miss a quiet line and a futility margin is allowed to be
+    too small, which is the trade that buys the depth. With both off the two searches are the
+    same algorithm and the scores have to agree exactly; `check_null_move` and
+    `check_futility` cover them being on.
     """
     tally = {"searches": 0, "our nodes": 0, "their nodes": 0, "same move": 0}
     for fen in fens:
         for depth in depths:
-            move, score, nodes = fs.search_fixed(fen, depth, null_move=False)
+            move, score, nodes = fs.search_fixed(
+                fen, depth, null_move=False, futility=False
+            )
             their_move, their_score, their_nodes = reference_root(reference, fen, depth)
             if score != their_score:
                 raise Failure(
@@ -175,6 +179,42 @@ def check_null_move(fens: list[str], depth: int) -> str:
         move_off, _, nodes_off = fs.search_fixed(fen, depth, null_move=False)
         if move_on not in legal:
             raise Failure(f"null move on, depth {depth} from {fen!r} returned {move_on}")
+        on_nodes += nodes_on
+        off_nodes += nodes_off
+        agreed += move_on == move_off
+    saved = 1.0 - on_nodes / max(off_nodes, 1)
+    return (
+        f"mates unaffected; over {len(fens)} positions at d{depth} it searched "
+        f"{on_nodes:,} nodes against {off_nodes:,} ({saved:.0%} fewer) and chose the same "
+        f"move {agreed}/{len(fens)} times"
+    )
+
+
+def check_futility(fens: list[str], depth: int) -> str:
+    """Futility pruning must save nodes without losing a mate or returning an illegal move.
+
+    The same shape as `check_null_move`, and here the mate suites are the sharper half of it,
+    because this is a pruning with no re-search behind it: a move it drops is gone. A mate in
+    one or two is exactly the line a centipawn margin cannot justify dropping -- the static
+    score of the position before a mate is often level -- so if the first move of a node were
+    ever pruned, or the in-check guard were missing, these are what would fail.
+    """
+    for fen, _ in MATE_IN_ONE:
+        _, score, _ = fs.search_fixed(fen, 3, futility=True)
+        if score != fs.MATE - 1:
+            raise Failure(f"with futility on, mate in one from {fen!r} scored {score:+d}")
+    for fen in MATE_IN_TWO:
+        _, score, _ = fs.search_fixed(fen, 3, futility=True)
+        if score != fs.MATE - 3:
+            raise Failure(f"with futility on, mate in two from {fen!r} scored {score:+d}")
+    on_nodes = off_nodes = 0
+    agreed = 0
+    for fen in fens:
+        legal = [candidate.uci() for candidate in chess.Board(fen).legal_moves]
+        move_on, _, nodes_on = fs.search_fixed(fen, depth, futility=True)
+        move_off, _, nodes_off = fs.search_fixed(fen, depth, futility=False)
+        if move_on not in legal:
+            raise Failure(f"futility on, depth {depth} from {fen!r} returned {move_on}")
         on_nodes += nodes_on
         off_nodes += nodes_off
         agreed += move_on == move_off
@@ -507,6 +547,7 @@ def main() -> None:
     print(f"mates at depth three: {ones} mates in one and {twos} mates in two, all found")
 
     print(f"null move: {check_null_move(sample[:20], 6)}")
+    print(f"futility: {check_futility(sample[:20], 6)}")
     print(f"fallback: {check_fallback()}")
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")

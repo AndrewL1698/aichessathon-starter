@@ -27,6 +27,13 @@ run while they do; `clock()` takes the lock back for its 340 nanoseconds and rel
 two stops are independent: the node-counted read is the one that fires in nearly every game,
 and the thread is there for the move where it does not.
 
+**Futility pruning.** At depth 1 and 2, out of check, a quiet move that is not the first
+move of the node is not searched at all when the static score plus a pawn -- two pawns at
+depth 2 -- still does not reach alpha. It is the one thing here that drops a move rather than
+searching it shallower, so it is confined to the plies where the search below it would have
+read the static score almost immediately anyway. `stats[FUTILITY_ENABLED]` turns it off and
+the score equality against `agent.py` runs with it off.
+
 **Aborting.** A timeout cannot unwind through a `raise` here, so `stats[ABORTED]` is set and
 every frame returns as soon as it sees it, *after* unmaking its move. The board, the undo stack
 and the ply-indexed buffers are all consistent when the abort reaches Python, unlike
@@ -191,6 +198,26 @@ NULL_MOVE_MIN_DEPTH = 3
 NULL_MARKER = -1
 
 # --------------------------------------------------------------------------------------
+# Futility pruning, at the last one or two plies only. If the position as it stands is so far
+# below alpha that winning a whole pawn -- two, a ply further out -- would not reach it, then
+# a quiet move, which by definition wins no material, will not reach it either, and it is not
+# searched at all. This is a pruning and not a reduction: the move is dropped, so unlike a
+# late move reduction there is no re-search to catch a margin that was too small.
+#
+# Refused in check, where a quiet move is an escape and its value has nothing to do with the
+# static score, and never for the first move of a node, which is the one the ordering thinks
+# is best and the one that would be left if everything else were dropped. Refused around mate
+# scores for the same reason null move is: a margin in centipawns says nothing about a mate.
+# `stats[FUTILITY_ENABLED]` turns it off and the score equality runs with it off.
+# --------------------------------------------------------------------------------------
+
+FUTILITY_PRUNING = True
+# One pawn at depth 1, two at depth 2, indexed by depth. Index 0 is never read: a node at
+# depth 0 has already gone to quiescence.
+FUTILITY_MARGINS = np.array([0, 150, 300], dtype=np.int64)
+FUTILITY_MAX_DEPTH = 2
+
+# --------------------------------------------------------------------------------------
 # The transposition table's packing. A move occupies bits 0..19 (`fastboard` puts its
 # highest flag at bit 19), the depth is stored one higher than it is so that an all-zero
 # entry reads as empty, and the score is shifted by INFINITY so it is never negative.
@@ -216,7 +243,8 @@ NULL_ENABLED, NULL_CUTOFFS = 12, 13
 EXPIRED = 14
 # `fastnnue.HAND`, `ABSOLUTE`, `BLEND` or `RESIDUAL`: how a leaf is scored, see `leaf`.
 NNUE_POLICY = 15
-STATS_SIZE = 16
+FUTILITY_ENABLED, FUTILITY_PRUNED = 16, 17
+STATS_SIZE = 18
 
 # Read-only, so numba can hold it as a global constant.
 PIECE_VALUE_BY_KIND = np.array(PIECE_VALUES, dtype=np.int32)
@@ -965,12 +993,33 @@ def negamax(
     out = bufs[ply]
     draws_before = stats[DRAWS]
     window_alpha = alpha
+    # The static score of this node, read only by the futility test in the loop below, so it
+    # is computed only where that test can fire. Every other node pays one load and a compare.
+    futile = (
+        stats[FUTILITY_ENABLED] != 0
+        and depth <= FUTILITY_MAX_DEPTH
+        and not checked
+        and beta < MATE_FOUND
+        and alpha > -MATE_FOUND
+    )
+    futility_bound = -INFINITY
+    if futile:
+        futility_bound = leaf(board, st, acc, ply, stats, net) + FUTILITY_MARGINS[depth]
     best = -INFINITY
     best_move = out[0]
     score_moves(board, st, bufs, scores, killers, history, ply, count, table_move)
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
         move = out[index]
+        # "Quiet" is a claim about the board as it stands: after `make_move` the square a
+        # capture emptied looks exactly like a square that was always empty.
+        quiet = board[(move >> 7) & 127] == 0 and (move & (FLAG_EP | (7 << 14))) == 0
+        # Nothing this move can win closes the gap to alpha, so it is not searched. `index` is
+        # never 0 here, so a node always searches the best move the ordering found and can
+        # never come back having looked at nothing.
+        if futile and index > 0 and quiet and futility_bound <= alpha:
+            stats[FUTILITY_PRUNED] += 1
+            continue
         if stats[NNUE_POLICY] != HAND:
             push(board, side, acc, ply, move, net)
         make_move(board, st, undo, move)
@@ -1007,7 +1056,7 @@ def negamax(
                 # Captures already order themselves by what they win, so only quiet moves are
                 # remembered. Squared, because a cutoff found deep in the tree stood up to far
                 # more refutations than one found at a leaf.
-                if board[(move >> 7) & 127] == 0 and (move & (FLAG_EP | (7 << 14))) == 0:
+                if quiet:
                     if move != killers[ply, 0]:
                         killers[ply, 1] = killers[ply, 0]
                         killers[ply, 0] = move
@@ -1295,10 +1344,12 @@ def think(fen: str, time_left_ms: int) -> str:
     observe(int(st[7]))
     soft_ms, hard_ms = budgets(time_left_ms)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS,
+        EXPIRED, FUTILITY_PRUNED,
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = 1 if NULL_MOVE_PRUNING else 0
+    STATS[FUTILITY_ENABLED] = 1 if FUTILITY_PRUNING else 0
     STATS[NNUE_POLICY] = fastnnue.policy()
     STATS[CHECK_MASK] = NODE_CHECK_MASK if hard_ms >= FINE_CHECK_BELOW_MS else FINE_CHECK_MASK
     # Contempt is set once, from the static evaluation, and left alone; see `_think` for why
@@ -1375,7 +1426,8 @@ def think(fen: str, time_left_ms: int) -> str:
         f"{depth_text} {move_text} nodes {STATS[NODES]} "
         f"{rate_text}{spent_ms:.0f}ms soft {soft_ms:.0f} hard {hard_ms:.0f} "
         f"clock {time_left_ms} tt {hit_rate} cut {STATS[CUTOFFS]} "
-        f"null {STATS[NULL_CUTOFFS]} contempt {STATS[CONTEMPT_AT]:+d} "
+        f"null {STATS[NULL_CUTOFFS]} futile {STATS[FUTILITY_PRUNED]} "
+        f"contempt {STATS[CONTEMPT_AT]:+d} "
         f"peakrss {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / RSS_DIVISOR:.0f}MB",
         flush=True,
     )
@@ -1394,6 +1446,7 @@ def search_fixed(
     deadline: float | None = None,
     first: int = 0,
     null_move: bool | None = None,
+    futility: bool | None = None,
     nnue: bool | None = None,
     policy: int | None = None,
 ) -> tuple[str, int, int]:
@@ -1404,8 +1457,9 @@ def search_fixed(
     caller has set up by hand, which is how the repetition tests reach this path. `deadline`
     is a `time.perf_counter()` value, and with none given the search runs to the depth however
     long it takes. `first` is the move to try first, as the iteration loop passes the previous
-    depth's answer. `null_move` overrides `NULL_MOVE_PRUNING`, which is what lets the
-    score-equality test measure the search `agent.py` describes rather than this one, and
+    depth's answer. `null_move` overrides `NULL_MOVE_PRUNING` and `futility` overrides
+    `FUTILITY_PRUNING`, which is what lets the score-equality test measure the search
+    `agent.py` describes rather than this one, and
     `nnue` overrides `fastnnue.USE_NNUE` the same way and `policy` overrides which of `leaf`'s
     four ways of scoring a leaf is used, so one process can measure all of them. The abort flag
     is left in `STATS[ABORTED]` for the caller to read.
@@ -1414,10 +1468,12 @@ def search_fixed(
         reset()
     board, st, undo = fb.from_fen(fen)
     for counter in (
-        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS, EXPIRED
+        NODES, CUTOFFS, DRAWS, ABORTED, TT_PROBES, TT_HITS, TT_STORES, NULL_CUTOFFS,
+        EXPIRED, FUTILITY_PRUNED,
     ):
         STATS[counter] = 0
     STATS[NULL_ENABLED] = int(NULL_MOVE_PRUNING if null_move is None else null_move)
+    STATS[FUTILITY_ENABLED] = int(FUTILITY_PRUNING if futility is None else futility)
     with_nnue = fastnnue.active() if nnue is None else (nnue and fastnnue.LOADED)
     chosen = fastnnue.file_policy() if policy is None else policy
     STATS[NNUE_POLICY] = chosen if with_nnue else HAND
