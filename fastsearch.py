@@ -1018,8 +1018,20 @@ def negamax(
     out = bufs[ply]
     draws_before = stats[DRAWS]
     window_alpha = alpha
+    # A node asked about a window wider than one is on the principal variation, and the
+    # principal variation is the line the engine is going to play: it is not a line to be
+    # economical about. Everything else is a null-window node being asked only whether it
+    # refutes something, which is exactly the question a shallower search answers well, and
+    # the principal variation search below means nearly every node in the tree is one of
+    # those -- so this exemption costs a few per cent of the saving and buys back the whole
+    # of the search's exactness along the line that matters. Without it, `tests`'s Saavedra
+    # study picks a king move over the winning under-promotion at depths 5 and 6, because a
+    # reduction that fails low is never re-searched and the win is a quiet king move deep in
+    # a quiet line. The node's *original* window decides this, not the running `alpha`, so
+    # that a node does not stop being a principal variation node halfway down its move list.
     best = -INFINITY
     best_move = out[0]
+    pv_node = beta - window_alpha > 1
     score_moves(board, st, bufs, scores, killers, history, ply, count, table_move)
     for index in range(count):
         pick_best(bufs, scores, ply, index, count)
@@ -1029,6 +1041,7 @@ def negamax(
         # emptied looks exactly like a square that was always empty.
         late = (
             stats[LMR_ENABLED] != 0
+            and not pv_node
             and index >= LMR_FIRST_MOVE
             and depth >= LMR_MIN_DEPTH
             and not checked
