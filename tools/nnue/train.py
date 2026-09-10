@@ -1,6 +1,8 @@
 """Train the learned evaluation. Offline only; torch never ships and never runs on the clock.
 
-Architecture: 768 -> H (default 128) -> 32 -> 1, clipped ReLU on both hidden layers.
+Architecture: 3072 -> H (default 128) -> 32 -> 1, clipped ReLU on both hidden layers.
+The 3,072 inputs are four king-bucket blocks of 768; `docs/NNUE_KING_BUCKETS.md` is the
+spec. Warm start from a trained 768-input checkpoint with `tools/nnue/bucketize.py`.
 
 The clipped ReLU is not a stylistic choice. Runtime inference is int16 in numba, where a hidden
 activation lives on a fixed scale and saturates; training with ``clamp(x, 0, 1)`` makes the float
@@ -30,6 +32,7 @@ import torch
 from torch import nn
 
 from tools.nnue.features import NUM_FEATURES, features
+from tools.nnue.nnue_ref import FLAT_SCHEME_VERSION, SCHEME_VERSION
 
 # Centipawns per unit of network output. 400 is the usual NNUE choice: sigmoid(400/400) = 0.73,
 # so a one-pawn edge is a bit under three quarters of a point.
@@ -46,7 +49,12 @@ SANITY_POSITIONS: tuple[tuple[str, str], ...] = (
 
 
 class Nnue(nn.Module):
-    """768 -> hidden -> 32 -> 1 with clipped ReLU. Input is a dense 0/1 feature vector."""
+    """3072 -> hidden -> 32 -> 1 with clipped ReLU. Input is a dense 0/1 feature vector.
+
+    The 3,072 inputs are four king-bucket blocks of the old 768; only one block is ever active
+    in a row, so the dense scratch `densify` builds is four times as wide and just as sparse.
+    `tools/nnue/bucketize.py` warm starts this from a trained 768-input checkpoint.
+    """
 
     def __init__(self, hidden: int = 128) -> None:
         super().__init__()
@@ -62,11 +70,14 @@ class Nnue(nn.Module):
 
 
 def densify(indices: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """Turn a padded ``[B, 32]`` int index batch into a dense ``[B, 768]`` float batch.
+    """Turn a padded ``[B, 32]`` int index batch into a dense ``[B, 3072]`` float batch.
 
-    Padding is -1, so everything is shifted up by one into a 769-wide scratch tensor whose first
-    column is then dropped. At 16384 x 769 floats a batch is 50 MB, which is nothing here, so the
-    sparse-accumulator trick the runtime needs is not worth its complexity offline.
+    Padding is -1, so everything is shifted up by one into a 3073-wide scratch tensor whose first
+    column is then dropped. King buckets made this four times as wide for the same 32 active
+    features: at 16384 x 3073 floats a batch is 201 MB against the 50 MB it was. Still one
+    allocation per batch and still not worth the sparse-accumulator trick the runtime needs, but
+    it is now the largest thing in the training loop, so a machine short of memory should drop
+    the batch size before it drops anything else.
     """
     rows = indices.shape[0]
     scratch = torch.zeros(rows, NUM_FEATURES + 1, device=device)
@@ -87,6 +98,16 @@ def load_shards(
     hand_blocks: list[np.ndarray] = []
     for path in paths:
         with np.load(path) as shard:
+            # A shard built before king buckets holds 768-input indices. Training a
+            # 3,072-input model on those gives a net whose bucket blocks 1 to 3 never saw a
+            # position, and every check downstream of here would still pass, so refuse it now.
+            scheme = int(shard["scheme"]) if "scheme" in shard else FLAT_SCHEME_VERSION
+            if scheme != SCHEME_VERSION:
+                raise SystemExit(
+                    f"{path} holds scheme {scheme} indices and this trains scheme "
+                    f"{SCHEME_VERSION} ({NUM_FEATURES} inputs); rebuild the shards with "
+                    f"tools.nnue.data"
+                )
             index_blocks.append(shard["indices"])
             cp_blocks.append(shard["cp"])
             if with_hand:

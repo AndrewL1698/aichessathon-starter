@@ -27,7 +27,9 @@ l1_bias on qa, l2_bias on qa*qb, l3_bias on qa*qc. That way the runtime never re
 The int16 accumulator is proved safe here rather than hoped for: for every hidden neuron, the
 bias plus the 32 largest weight magnitudes in that neuron's column must fit in int16. At most 32
 men can be on the board, so that bound covers every reachable position. If it fails, the export
-refuses rather than shipping a net that wraps around in some endgame.
+refuses rather than shipping a net that wraps around in some endgame. Under the king-bucketed
+scheme the 32 largest are taken within one 768-row bucket block, because that is where a single
+perspective's features all live; see `_check_accumulator`.
 
 Run from the repo root:
 
@@ -43,7 +45,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from tools.nnue.features import MAX_ACTIVE
+from tools.nnue.features import BASE_FEATURES, MAX_ACTIVE, NUM_BUCKETS
 from tools.nnue.nnue_ref import SCHEME_VERSION
 from tools.nnue.train import Nnue
 
@@ -67,10 +69,15 @@ def _quantise(array: np.ndarray, scale: float, dtype: type[np.signedinteger]) ->
 def _check_accumulator(l1_weight: np.ndarray, l1_bias: np.ndarray) -> int:
     """Return the smallest int16 headroom over all hidden neurons, refusing if any is negative.
 
-    ``l1_weight`` is [768, hidden]; column ``h`` holds every feature's contribution to neuron h.
+    ``l1_weight`` is [3072, hidden]: four 768-row bucket blocks, column ``h`` holding every
+    feature's contribution to neuron h. The bound is taken **within** a block, because every
+    feature active in one perspective carries the same bucket, so the reachable worst case is 32
+    rows drawn from one block. The top 32 across all four blocks would bound a position that
+    cannot arise, and would refuse files that are in fact safe.
     """
     magnitudes = np.abs(l1_weight.astype(np.int32))
-    top = np.sort(magnitudes, axis=0)[-MAX_ACTIVE:].sum(axis=0)
+    blocks = magnitudes.reshape(NUM_BUCKETS, BASE_FEATURES, -1)
+    top = np.sort(blocks, axis=1)[:, -MAX_ACTIVE:, :].sum(axis=1).max(axis=0)
     worst = top + np.abs(l1_bias.astype(np.int32))
     headroom = int(INT16_MAX - worst.max())
     if headroom < 0:
@@ -100,7 +107,8 @@ def export(arguments: argparse.Namespace) -> Path:
     qb = arguments.qb
     with torch.no_grad():
         # torch.nn.Linear stores [out, in]; the runtime wants to gather whole feature rows, so
-        # layer 1 is transposed to [768, hidden] and layer 2 to [hidden, 32].
+        # layer 1 is transposed to [3072, hidden], four bucket blocks, and layer 2 to
+        # [hidden, 32].
         l1_weight = _quantise(model.l1.weight.T.numpy(), qa, np.int16)
         l1_bias = _quantise(model.l1.bias.numpy(), qa, np.int16)
         l2_weight = _quantise(model.l2.weight.T.numpy(), qb, np.int16)

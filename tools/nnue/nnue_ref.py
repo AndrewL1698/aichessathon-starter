@@ -4,6 +4,11 @@ Plain numpy, no torch. Every arithmetic step is the step the runtime will take, 
 order and the same width, so `test_export.py` comparing this to the torch model is a real check
 on the quantisation rather than a check on numpy.
 
+Scheme 2 is king-bucketed: `l1_weight` holds 3,072 rows, four 768-row blocks, and the active
+indices handed to `evaluate` already carry the bucket offset that `tools/nnue/features.py` put
+there. Nothing in the arithmetic below changes -- a bucket is a choice of rows, not a new layer --
+which is the point of doing it this way. `docs/NNUE_KING_BUCKETS.md` has the mapping.
+
 The pipeline, with `qa`, `qb`, `qc` and `cp_scale` read from the weight file:
 
     acc = l1_bias + sum(l1_weight[i] for each active feature i)   int16   scale qa
@@ -21,7 +26,10 @@ Two details the runtime must copy rather than reinvent:
     by one centipawn, so the runtime must floor.
   * The accumulator is int16 and export.py proves it cannot overflow: for every hidden neuron,
     |l1_bias| plus the 32 largest |l1_weight| in that neuron's column fits in int16. A position
-    holds at most 32 men, so no reachable position can push it out of range.
+    holds at most 32 men, so no reachable position can push it out of range. Under scheme 2 the
+    bound is taken **per bucket block** rather than over all 3,072 rows: every feature active in
+    one perspective carries the same bucket, so 32 rows from one block is the reachable worst
+    case and the global top-32 would refuse files that are in fact safe.
   * Everything after the accumulator is int32 and stays there. At the shipped scales the widest
     intermediates measured are z2 ~ 1.4e6 and z3 * cp_scale ~ 1.9e8, both far inside int32, so
     the runtime needs no int64 anywhere.
@@ -36,9 +44,11 @@ from pathlib import Path
 
 import numpy as np
 
+from tools.nnue.features import tile_rows
+
 # Bumped whenever the feature scheme or the quantisation layout changes, so a stale weight file
 # fails loudly instead of being read with the wrong shapes.
-SCHEME_VERSION = 1
+SCHEME_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -51,7 +61,7 @@ class Weights:
     qb: int
     qc: int
     cp_scale: int
-    l1_weight: np.ndarray  # int16 [768, hidden], indexed by feature
+    l1_weight: np.ndarray  # int16 [3072, hidden], indexed by bucketed feature
     l1_bias: np.ndarray  # int16 [hidden]
     l2_weight: np.ndarray  # int16 [hidden, 32]
     l2_bias: np.ndarray  # int32 [32]
@@ -59,13 +69,22 @@ class Weights:
     l3_bias: int  # int32 scalar
 
 
+# A 768-input file. Read here, and by the runtime, as four identical bucket blocks, so that the
+# shipped net can be compared against the bucketed engine before any fine-tuning has happened.
+FLAT_SCHEME_VERSION = 1
+
+
 def load(path: str | Path) -> Weights:
     with np.load(Path(path)) as data:
         version = int(data["version"])
-        if version != SCHEME_VERSION:
+        if version not in (SCHEME_VERSION, FLAT_SCHEME_VERSION):
             raise SystemExit(
-                f"weight file is scheme version {version}, this code speaks {SCHEME_VERSION}"
+                f"weight file is scheme version {version}, this code speaks {SCHEME_VERSION} "
+                f"and warm starts {FLAT_SCHEME_VERSION}"
             )
+        l1_weight = data["l1_weight"]
+        if version == FLAT_SCHEME_VERSION:
+            l1_weight = tile_rows(l1_weight)
         return Weights(
             version=version,
             hidden=int(data["hidden"]),
@@ -73,7 +92,7 @@ def load(path: str | Path) -> Weights:
             qb=int(data["qb"]),
             qc=int(data["qc"]),
             cp_scale=int(data["cp_scale"]),
-            l1_weight=data["l1_weight"],
+            l1_weight=l1_weight,
             l1_bias=data["l1_bias"],
             l2_weight=data["l2_weight"],
             l2_bias=data["l2_bias"],
