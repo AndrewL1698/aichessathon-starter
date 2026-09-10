@@ -977,3 +977,22 @@ all lines survive. The one inaccuracy was 9.Ng5 (91 cp, e4 was better), under th
 The evaluation's scale again: from move 11 our score sat 160 to 800 cp below Stockfish's in a
 position that was won throughout (+137 against +298 at move 11, +354 against +791 at move 19).
 It changed nothing here. Blunders per game, real only, v4.2: 2, 6, 0 (rounds 98 to 100).
+
+### 2026-09-10, round 101: v4.2 beat Yumo by mate in 48 as Black. One gate-refused slip in a won game.
+
+Banner and depth profile: v4.2 (depth 6 to 10, median 8, at 0.41M nps, the slowest node rate of
+its four games). Stockfish 19 at depth 18: our ACPL 39, one real blunder and two cosmetic ones
+inside a +1,600 position; Yumo's ACPL 67 with five real mistakes. 100.8 s used, 40.2 s left over
+42 moves, all lines survive. The score never dipped: Stockfish had us ahead from the first move
+and past +300 by move 28.
+
+**The one real error.** 28...Rb8 (+313 to +138; ...Rc5 keeps it) was played at depth 7 after 872
+ms of a 2,862 ms soft budget with 61 s on the clock: the gate refused depth 8. It is the same shape
+as 34.Qc6 in round 82 and 16...Bg7 in round 86, one ply deeper because this is v4.2, and it cost
+nothing here because the position stayed won. Fourteen of the 42 moves stopped under half the soft
+budget; this was the only one that cost anything.
+
+**Calibration.** Level positions read 13 cp from Stockfish's on average; from move 30 the score
+trailed by 200 to 440 cp in a position Stockfish had at +345 to +750, the compression seen in every
+v4.x win. The position is in `tests/positions`, now 63. Blunders per game, real only, v4.2: 2, 6,
+0, 1 over rounds 98 to 101 (3 W 1 D).
