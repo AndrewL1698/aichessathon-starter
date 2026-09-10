@@ -1300,3 +1300,96 @@ each with the bishops on opposite colours from move 66, a dead draw by material 
 conversion this change missed; clock 37.4 s at move 40, minimum 5.3 s at move 143, slowest
 6.82 s, no move past hard. The 5.3 s is v4.2's long-game drift, on a base cut before the v4.3
 floor merged; the floor's replay puts that game near 17 s, and the PR carries both.
+
+## Cycle 9, 2026-09-10: a 2x soft iteration ceiling on v4.3. Rejected on the proxy screen
+
+Branch `time/v4.3-soft-overrun-2` at 7b0fd82, one constant: `SOFT_OVERRUN` 1.5 -> 2.0, against
+frozen `local-opponents/v4.3`. The reserve PR #24 added, `SOFT_DIVISOR`, the hard budget, the
+safety margin, the growth clamp, panic, the backstop, the search, the evaluation and the network
+are all untouched, and `budgets()` is not in the diff. **Rejected. `SOFT_OVERRUN` stays 1.5, and
+there is no version or tag for it.**
+
+### Where it came from
+
+A read of the rated logs asked why v4.2 finished games with 40 s left, about twice the
+opponent's clock. The answer was two things, and only one of them was a problem. The budget rule
+is scale-free, so a short game arithmetically ends with a large remainder whatever the engine
+does; but on top of that, **62 to 67% of moves over rounds 98 to 101 ended on the iteration
+gate with the depth unfinished**, at a median 0.71 of the soft budget and 0.27 of the hard one,
+and the deepest search in those four games was d23 against a cap of 64. That is not a tree being
+exhausted, and it is not a reserve anybody designed.
+
+Writing the gate out explains the number. If each depth costs `g` times the one before, elapsed
+settles near `last * g / (g - 1)`, the projection is about `(g - 1) * elapsed`, and the gate
+fires once elapsed passes `SOFT_OVERRUN / g` of the soft budget. The rated games measure `g` at
+about 2.4, so 1.5 stops a move at 0.63 of its budget and 2.0 would stop it at 0.83.
+
+### What v4.3 changed about the experiment
+
+v4.3's reserve makes the soft budget smaller, and that moves the clock at which this ceiling
+still binds a long way down: `2.0 * soft` stays under the hard budget from the first move to a
+**6.4 s clock** in a 120 s game, against only **above 17.8 s** on v4.2. At the 45 s proxy it
+binds above 7.8 s; at the 10 s control it binds only above 10.0 s, which is the starting clock,
+so **the change is very nearly inert at the fast control**. That is the whole reason the two
+controls below are not pooled.
+
+The reserve is also what made raising the ceiling safe to try at all: the long-game floor became
+the reserve's job, so modelled over 172 moves at 120 s the clock settles near 20 s at 2.0 against
+26 s at 1.5, where the same model on v4.2 gave 9.6 s and 11.4 s.
+
+### The screen
+
+Two detached worktrees, both read-only, differing in that one constant and nothing else. One
+game at a time, nothing else of ours running. Baseline calibration at a fixed depth 8 was
+**1.204M nodes/s before the proxy arena and 1.211M after**, so the two arenas are comparable to
+each other.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | duration |
+|---|---|---|---|---|---|---|---|---|---|
+| v4.3-soft-overrun-2 | v4.3 | 10s+0.1s | 40 | +13 =15 -12 | 51.2% | +9 | -79 to +97 | 0 / 0 / 0 / 0 | 1,541 s |
+| v4.3-soft-overrun-2 | v4.3 | 45s+0.2s | 40 | +10 =13 -17 | **41.2%** | **-61** | -158 to +27 | 0 / 0 / 0 / 0 | 5,624 s |
+
+**41.2% is the 40-game proxy result. It is not a pooled figure**, and the 80 games are
+deliberately not pooled: the ceiling is mostly inert at 10 s, so pooling would dilute the only
+control that measures the change with 40 games that mostly do not. Every one of the 80
+terminations is a legal chess ending -- 52 checkmates, 20 threefold, 4 insufficient material, 4
+fifty-move -- recounted from the PGNs rather than read off the arena's summary. By colour at the
+proxy: 40.0% as White, 42.5% as Black, so the deficit is on both sides.
+
+### The mechanism worked, and the score still went down
+
+Four paired diagnostic games, both engines logging, at each control:
+
+| 45 s + 0.2 s | v4.3 | so2 |
+|---|---|---|
+| spent/soft above the 7.8 s crossover | 0.65 | **0.85** |
+| spent/hard | 0.23 | 0.35 |
+| mean / median depth | 8.21 / 8 | **8.81 / 9** |
+| nodes/s | 1.345M | 1.356M |
+| slowest move | 3,809 ms | 4,914 ms |
+| partial iterations | 1 | 3 |
+| peak RSS | 258 MB | 250 MB |
+
+Utilisation moved to 0.85, inside the 0.78-0.90 the `SOFT_OVERRUN / g` arithmetic predicted, and
+bought **0.6 ply** of mean depth. So the change did exactly what it was designed to do and the
+result was still 41.2%. That combination is the useful part of this cycle: it is not a failed
+measurement, it is a measured effect with the wrong sign.
+
+Where the time went is visible in the clocks across all 80 scored PGNs. At the proxy the
+candidate ends games with a **mean final clock of 5.77 s against v4.3's 9.19 s**, on nearly
+identical minima (2.23 s against 2.19 s) and slowest moves (5.43 s against 5.26 s). It spends
+the extra time in the middlegame and arrives at the endgame thinner -- which is part of what
+PR #24's reserve exists to prevent, re-opened by relaxing the gate above it.
+
+### Why this stopped at 80 games
+
+The pre-registered plan was 200 proxy games. It was declined deliberately, and the reasoning is
+worth keeping. The interval **-158 to +27 does not prove the candidate weaker**; at 40 games it
+could not. But the sign is negative at the only control where the change acts, the mechanism
+check confirms the change took effect rather than the run being broken, and 200 proxy games is
+about eight hours against an upload deadline the next morning. Spending that to resolve a
+hypothesis whose prior had just moved against it was the wrong trade. If it is ever revisited,
+the thing to measure alongside is the 172-move replay, to test whether the endgame-clock story
+above is the real mechanism.
+
+**Verdict: rejected, and not extended.** The branch and every PGN and log are kept.
