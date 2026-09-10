@@ -841,3 +841,113 @@ run reported 35.9% **with one flag** -- the termination class these rules call p
 and it was not real. Game 14 was replayed from the same index, which is the same pairing
 because the arena's game order is a pure function of the index, and it is a win. The row in the
 table above is the clean 32. The rule this produced is in `docs/TEAM.md`.
+
+## Cycle 7, 2026-09-10: the 163M-position net on the same 768 features. Rejected over 144 games
+
+The question this run was asked: before anyone spends a day on king-relative features, what is
+the 768-input architecture actually worth, and is the newest file trained on it better than the
+one that ships? `prod` at afb34f4 is byte-identical to `local-opponents/v4.1`, so the only
+variable available is the weight file. The candidate is the patience stop of the 163M-position
+run on `nnue/weights-v1` (`nnue-h256-100m-e71.npz`, run notes `tools/nnue/runs/h256-100m-e71.md`).
+
+| | baseline | candidate |
+|---|---|---|
+| build | `prod` afb34f4 = v4.1 | same five source files, byte-identical |
+| weight file | `nnue-h256-52m-e60.npz` (ships as `weights/nnue.npz`) | `nnue-h256-100m-e71.npz` |
+| sha256 | `fc7c862f1b0be11d…d74543f` | `4a376651d4249ab9…e2e39c5e` |
+| unique training positions | 51,687,780 (90M rows) | **163,101,630 (290M rows)** |
+| best validation loss | 0.014602, epoch 60 | **0.013992, epoch 71** (patience stop) |
+| quantisation | qa=256 qb=1024 qc=128 cp400 | qa=**512** qb=1024 qc=128 cp400 |
+| export error | 2.93 cp mean, 24.22 cp max | **1.65 cp mean, 9.44 cp max** |
+| architecture | 768-256-32-1, two side-relative accumulators | identical |
+| leaf | blend, `(hand + net) // 2`, hand tables past `bare_endgame` | identical (`target='cp'`) |
+
+Both agents were frozen into `chmod a-w` directories under
+`~/Documents/bench-snapshots/2026-09-10-nnue768/` before the first game and their checksums
+re-read after the last one; nothing in them moved while they were being measured. Every game ran
+out of those read-only directories, which is also the read-only-filesystem check. Arena jobs ran
+strictly one at a time with nothing else on the machine, per the rule in `docs/TEAM.md`.
+
+### The result
+
+Paired openings and reversed colours, `local-opponents/v4.1` as the baseline, all PGNs kept
+under `~/Documents/pgn/2026-09-10-*`.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|
+| nnue-100m-e71 | v4.1 | 10s+0.1s | 96 | +29 =26 -41 | 43.8% | -44 | -106 to +16 | 0 / 0 / 0 / 0 |
+| nnue-100m-e71 | v4.1 | 20s+0.2s | 48 | +11 =23 -14 | 46.9% | -22 | -95 to +50 | 0 / 0 / 0 / 0 |
+| **pooled** | v4.1 | both | **144** | **+40 =49 -55** | **44.8%** | **-36** | **-84 to +10** | 0 / 0 / 0 / 0 |
+
+By side, fast control: 44.8% as White (+15 =13 -20), 42.7% as Black (+14 =13 -21). Slow control:
+43.8% as White, 50.0% as Black. Terminations over the 144: 95 checkmate, 33 threefold, 10
+insufficient material, 6 fifty-move. Across all 214 games played in this cycle -- 144 benched, 64
+ablation, 2 gate, 4 instrumented -- **zero illegal moves, zero exceptions, zero flag falls, zero
+over-budget moves, zero tracebacks.**
+
+### It is not a speed question
+
+Depth 7 over the 47 regression positions, no clock, one job at a time:
+
+| build | as shipped (blend) | hand only | net only |
+|---|---|---|---|
+| baseline e60 | 1.363M nodes/s | 2.585M | 1.534M |
+| candidate e71 | **1.367M nodes/s** | 2.642M | 1.546M |
+
+Same width, same node rate; the file is free. The hand-only sweep searched exactly 205,733,319
+nodes on both builds, which is the control that says the two differ in the net and nothing else.
+In instrumented games the candidate is level or slightly deeper -- mean depth 7.34 against 7.25
+at 10 s + 0.1 s, 8.96 against 8.14 at 20 s + 0.2 s over one game each -- with slowest move
+1.13 s against 1.24 s, clock floor 1.71 s of 10 s, median 1.75M nodes/s in game, peak RSS 254 MB
+and import 4.24 s against 4.19 s. Nothing in the health numbers separates them, and nothing is
+near a platform limit.
+
+### The suite is a wash
+
+47 positions, `--engine fast`, depth 11, 20 s: **candidate 26/47 against the baseline's 27/47**,
+mean nominal depth 8.55 against 8.57. The candidate gains `r76 m11`, `r76 m19`, `r82 m42` and
+`r85 m20`; it loses `r73 m11`, `r76 m17`, `r77 m14`, `r80 m24` and `r86 m16`. Of the 22 both
+solve it finds the move at a shallower depth in 9 and a deeper one in 2 -- a mild sharpness
+signal that the games do not confirm.
+
+### The blend still wins, at both weight files
+
+32 games each against the same v4.1 baseline, candidate weights throughout, one constant changed:
+
+| candidate build | games | +=- | score | Elo | 95% |
+|---|---|---|---|---|---|
+| blend, as shipped | 96 | +29 =26 -41 | 43.8% | -44 | -106 to +16 |
+| net only (`POLICY = ABSOLUTE`) | 32 | +6 =6 -20 | 28.1% | -163 | -312 to -56 |
+| hand only (`USE_NNUE = False`) | 32 | +5 =4 -23 | 21.9% | -221 | -408 to -107 |
+
+Against the common opponent that is about **+119 Elo for the blend over the net alone and +177
+over the hand evaluation alone**, reproducing v4.0's central finding on a file trained on three
+times the data. The blend is not a property of the 52M net; it is a property of the composition.
+
+### What the cycle says
+
+**Validation loss did not order strength, and this time both nets were the same architecture and
+the same policy.** The candidate is better on every offline number that exists: -6.1e-4 of
+validation loss, twice the layer-1 precision, the most precise export of any file the project has
+made. It played at 44.8% over 144 games. `docs/BENCH_LOG.md` previously held that the metric
+orders *absolute* nets correctly and only stops ordering things across policies. That is now too
+generous: within one policy and one architecture, on a superset of the training data, it failed
+too. The earlier file from this same run, epoch 11, had already benched at parity with e60 over
+96 games. Two files from the 163M run, 240 games between them, neither ahead.
+
+No interval excludes zero, the pooled one included, so this is not proof the new file is worse.
+It is firm evidence it is not an improvement, and the pooled **upper bound of +10 Elo** is what
+decides it: there is no reading of this data where swapping the shipped weights is worth an
+upload the day before the deadline.
+
+Two caveats on how far the numbers reach. The harness has 8 openings and both colours, so 96
+games is 48 pairings replayed six times with clock noise as the only variation -- the effective
+sample is smaller than the count, the same limitation cycle 6 ran into. And the two ablation rows
+are 32 games with intervals over 250 Elo wide; they are decisive only because the gaps are
+enormous.
+
+**What this establishes for the king-relative work.** The 768-input baseline is now measured on a
+quiet machine: v4.1, blend, 1.363M nodes/s at depth 7, 27/47 on the suite, 4.19 s import, 222 to
+254 MB peak RSS, and the disqualifier record above. More training data on the same 768 features
+has now failed twice to beat it. That is the argument for the feature set, rather than the data
+volume, being the binding constraint -- which is the premise a king-relative attempt rests on.

@@ -85,6 +85,27 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 · **Rejected** the 163M-position 768-input net (`nnue-h256-100m-e71.npz` on
+  `nnue/weights-v1`), benched as the last read on the 768 architecture before anyone starts on
+  king-relative features. Code identical to `prod` afb34f4 = v4.1; the weight file is the only
+  variable. **44.8% pooled over 144 games** vs `local-opponents/v4.1` (43.8% over 96 at
+  10 s + 0.1 s, Elo -44, -106 to +16; 46.9% over 48 at 20 s + 0.2 s, -22, -95 to +50), both
+  controls below 50%, **0 / 0 / 0 / 0 across all 214 games played in the cycle**. It is not a
+  speed question: 1.367M nodes/s at depth 7 against 1.363M, suite 26/47 against 27/47, import
+  4.24 s, peak RSS 254 MB. **The finding to carry forward: validation loss did not order strength
+  even within one policy and one architecture.** The candidate wins every offline number (-6.1e-4
+  validation loss, qa=512, the most precise export the project has made) and loses on the board;
+  the epoch-11 file from the same run had already benched at parity over 96 games, so that is two
+  files and 240 games from the 163M run with neither ahead. The pooled upper bound of +10 Elo is
+  what settles it against spending an upload. **The blend was re-confirmed on the new weights:**
+  net alone 28.1% and hand alone 21.9% over 32 games each, about +119 and +177 Elo for the blend.
+  Method note worth keeping: both builds were frozen into `chmod a-w` directories under
+  `~/Documents/bench-snapshots/2026-09-10-nnue768/` and their checksums re-read after the last
+  game, so what was measured is provably what was snapshotted, and every game ran out of a
+  read-only directory, which is the read-only-filesystem check for free. PGNs under
+  `~/Documents/pgn/2026-09-10-*`; the numbers are cycle 7 in `docs/BENCH_LOG.md`. **What this
+  leaves for the king-relative work:** more data on the same 768 features has now failed twice,
+  which is the argument that the feature set is the binding constraint.
 - 2026-09-10 · **Rejected, PR #19 closed unmerged** `eval/mobility`: knight, bishop, rook and
   queen mobility in both evaluations. **47.3% pooled over 128 games** against v4.0-plus-rook-pawn
   baselines (53.1% on 64 at 10 s, 39.1% on 32 at the 45 s proxy, 43.8% on 32 at the 28-opening

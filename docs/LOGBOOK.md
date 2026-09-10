@@ -830,3 +830,39 @@ pushed for a PR.
 **What the cycle says.** The cross-game review's finding stands: nothing here changes how often
 the engine wins from a won position, because that is decided by depth-6 middlegame moves, which
 is cycle 4's pruning work, in flight elsewhere. No rated game has been played by either branch.
+
+### 2026-09-10, cycle 7: the 163M-position net on the same features. Rejected on 144 games.
+
+Asked as the baseline read on the 768-input architecture, before any king-relative feature work
+starts. `prod` at afb34f4 is byte-identical to `local-opponents/v4.1`, so the experiment is the
+weight file and nothing else: the shipped `nnue-h256-52m-e60` against `nnue-h256-100m-e71` from
+`nnue/weights-v1`, both 768-256-32-1, both absolute, both blended into the hand evaluation.
+
+**Theory.** The 163M-position run is trained on a superset of the shipped file's data, stops on
+patience at epoch 71 with a validation loss 6.1e-4 lower, and exports at qa=512 rather than 256 --
+twice the layer-1 precision, and the most accurate export the project has produced (1.65 cp mean
+against 2.93). Everything measurable offline says it is the better net. The absolute rows in
+cycle "the learned evaluation" were monotone in validation loss, so the ordering had earned some
+trust within a policy.
+
+**Measured.** 43.8% over 96 games at 10 s + 0.1 s (Elo -44, -106 to +16) and 46.9% over 48 at
+20 s + 0.2 s (-22, -95 to +50); pooled 144 games, 44.8%, -36, **-84 to +10**. Both controls below
+50%, both colours below 50% at the fast control. Not a cost: 1.367M nodes/s at depth 7 against
+1.363M, the same width and the same accumulator, and the hand-only sweep searched an identical
+205,733,319 nodes on both builds. Suite 26/47 against 27/47, mean nominal depth 8.55 against 8.57.
+Zero illegal moves, exceptions, flag falls or over-budget moves in 214 games.
+
+**Verdict: does not ship.** No interval excludes zero, so the file is not proven worse; the
+number that decides is the pooled upper bound of +10 Elo. Nothing there is worth an upload slot
+the day before the deadline, and the shipped weights stay.
+
+**What it teaches.** Validation loss did not order strength, and this time the two nets shared an
+architecture, a policy and a training pipeline -- the case where the metric was supposed to work.
+The epoch-11 file from this same run had already benched at parity over 96 games, so the 163M run
+has now produced two files and 240 games without getting ahead of a file trained on a third of
+the data. The blend, on the other hand, reproduced exactly: with the new weights the net alone
+scored 28.1% and the hand evaluation alone 21.9% over 32 games each, roughly +119 and +177 Elo
+for averaging them. The composition is where the Elo lives, not the size of the training set.
+
+For the next cycle: more data on the same 768 features has failed twice, which is the argument
+that the feature set is what binds, and the argument king-relative features are the thing to try.
