@@ -70,8 +70,42 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   after the first upload, scale by the validation log's real slowest move.
 - Before any upload: `make gate`, 60+ games vs random at 3 s plus 16 at 2 s with zero failed
   terminations, `make zip` smoke passes.
+- **Never `SIGSTOP` a running arena, and never resume one.** The referee times every move
+  against the wall clock, so a suspended process is charged the whole pause and the in-flight
+  game records a `flag` -- the termination this list calls priority zero, manufactured out of
+  nothing. It cost cycle 6 a fake disqualifier that survived into a scored row until the PGN
+  clocks were read. To pause a run, kill it: the completed PGNs are the state, and a run
+  resumes from its PGN directory by index because the arena's game order is a pure function of
+  the index. Resuming from disk is safe; suspending the process is not.
+- Pinning both sides matters when the difference is small. Resolve each side to a commit and
+  play out of separate **detached** worktrees, so neither can move mid-run and the diff between
+  them is auditable afterwards. `harness.bench` plays 28 openings (`BENCH_OPENINGS`) against
+  `harness.arena`'s 8, so a 56-game bench run is the full set at both colours and is the wider
+  sample when a result on 8 openings looks like it might be an opening-set artifact.
 
 ## Status (newest first; update this in the same PR or a docs commit)
+
+- 2026-09-10 01:30 · **v4.2** = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
+  so a pending recapture no longer sets draw-seeking contempt in a level position; round 90). Built as
+  `submission-v4.2.zip` from the branch (f05f0dd) because the merge into prod is the team's to make:
+  PR open, tag `v4.2` goes on the merge commit. Proof: 96 vs v4.1 50.5%; vs v4.0 96 fast 52.1% and 48
+  proxy 46.9% (50.3% pooled), two 120 s games 1-1 with worst move 12.5 s and clocks over 15 s, 76 vs
+  random all mates, 0 disqualifiers, suite 27/47, smoke clean. Frozen at `local-opponents/v4.2`;
+  bench baseline v4.2. Every change since v4.0 fixes a rated-game situation and is Elo-neutral by
+  design; nothing on prod has an Elo lower bound above v4.0.
+- 2026-09-10 · **Rejected, PR #19 closed unmerged** `eval/mobility`: knight, bishop, rook and
+  queen mobility in both evaluations. **47.3% pooled over 128 games** against v4.0-plus-rook-pawn
+  baselines (53.1% on 64 at 10 s, 39.1% on 32 at the 45 s proxy, 43.8% on 32 at the 28-opening
+  bench head-to-head); only the narrowest opening set was above 50%. **Zero disqualifiers in all
+  128 games** -- the code is sound and exact against `agent.py` on 10,000 positions, so this is a
+  strength rejection, not a robustness one. The head-to-head is what closed it: the term costs
+  7.5% of the node rate and gives back a 6.5% smaller tree, so **it reaches the same median depth
+  7.0 and still loses ground**, which rules out the cost as the explanation and leaves the term
+  itself. The reading is that the net already encodes mobility -- easy for a piece-square net to
+  learn -- so a hand term duplicating it re-states at half weight what `(hand + net) // 2`
+  already has, and pays full price. Worth remembering before the next hand-authored term on top
+  of a learned evaluation. Branch kept, code not merged; `docs/BENCH_LOG.md` cycle 6 has the
+  rows, the telemetry and the `SIGSTOP` artifact that produced a fake flag.
 
 - 2026-09-09 night · **cycle 5**, from the rounds 73 to 90 review (draws from won positions: 1 in
   17; no repetition ever taken while ahead; contempt read a pre-quiescence static). Off prod
