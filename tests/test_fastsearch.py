@@ -447,6 +447,81 @@ def check_table() -> str:
     return f"{probes:,} probes, {hits:,} hits ({rate:.0%}), {stores:,} stores"
 
 
+def check_reserve() -> str:
+    """The soft budget keeps a reserve off the clock, and the reserve belongs to one game.
+
+    The point of the reserve is the increment: a long game at 120 s + 0.5 s used to walk the
+    clock down until every move cost about what the increment paid back, and the 172-move
+    replay settled at 5.3 s. What has to hold is that a move made on a clock inside the reserve
+    plans to spend *less* than the increment, so the clock climbs back out instead of sitting
+    there. `SOFT_BONUS_MS` is the floor under that, and it is 400 ms against a 500 ms increment.
+
+    The rest is the reserve being a fact about this game and no other. It is inferred from the
+    first clock, because the platform tells the agent neither the base clock nor the increment,
+    and the only thing that says a new game has started is `observe` deciding the position it
+    was handed is not one legal move on from the one we handed back. So a 45 s game that starts
+    in a process which just played a 120 s game must derive its reserve from 45 s, or its every
+    move is budgeted against three times the reserve it should have and it plays down a ply for
+    the whole game.
+    """
+    increment_ms = 500.0
+    fs.reset()
+    fs.budgets(120_000)
+    soft_ms, hard_ms = fs.budgets(6_000)
+    if soft_ms >= increment_ms:
+        raise Failure(
+            f"at a 6 s clock after a 120 s first clock the soft budget is {soft_ms:.0f} ms, "
+            f"not under the {increment_ms:.0f} ms increment: the clock cannot recover"
+        )
+    if soft_ms < fs.SOFT_BONUS_MS:
+        raise Failure(f"the soft budget fell to {soft_ms:.0f} ms, below the bonus floor")
+    planned_ms = soft_ms
+    if hard_ms != max(min(6_000 / fs.HARD_DIVISOR, 6_000 - fs.SAFETY_MARGIN_MS), 0.0):
+        raise Failure(f"the hard budget moved: {hard_ms:.0f} ms at a 6 s clock")
+
+    # A second game in the same process, reached the way a real one is: we hand back a move,
+    # and the next position we are given belongs to a game we are not in.
+    fs.remember_played(fb.START_FEN, "e2e4")
+    other = "8/8/8/4k3/8/4K3/8/8 w - - 0 1"
+    _, st, _ = fb.from_fen(other)
+    fs.observe(int(st[7]))
+    if fs._FIRST_CLOCK_MS is not None:
+        raise Failure("a position from another game left the first clock behind")
+    fresh, _ = fs.budgets(45_000)
+    expected = (45_000 - 45_000 / fs.RESERVE_DIVISOR) / fs.SOFT_DIVISOR + fs.SOFT_BONUS_MS
+    if abs(fresh - expected) > 0.5:
+        raise Failure(
+            f"the 45 s game's first move budgets {fresh:.0f} ms, not the {expected:.0f} ms a "
+            f"45 s reserve gives: it inherited the 120 s game's reserve"
+        )
+
+    # Degenerate first clocks. A reserve is only ever subtracted, never divided by, so the
+    # harness's short-clock tests and a zero clock have to come out as the plain formula or a
+    # small reserve, and never as an exception or a negative budget.
+    for first_ms, clock_ms in ((0, 9_000), (1_500, 1_500), (1_500, 40), (120_000, 0)):
+        fs.reset()
+        fs.budgets(first_ms)
+        soft_ms, hard_ms = fs.budgets(clock_ms)
+        if soft_ms < 0.0 or hard_ms < 0.0 or soft_ms > max(hard_ms, 0.0) + 0.5:
+            raise Failure(
+                f"a {first_ms} ms first clock and a {clock_ms} ms clock give soft "
+                f"{soft_ms:.0f} ms and hard {hard_ms:.0f} ms"
+            )
+    # A game whose first clock is zero has no reserve to take, and then this is prod's formula
+    # exactly. Nothing about a reserve may make a budget smaller than the one it replaced by
+    # any route other than a reserve there was a clock to pay for.
+    fs.reset()
+    fs.budgets(0)
+    zero_soft, _ = fs.budgets(9_000)
+    if abs(zero_soft - (9_000 / fs.SOFT_DIVISOR + fs.SOFT_BONUS_MS)) > 0.5:
+        raise Failure("a zero first clock does not fall back to the budget without a reserve")
+    fs.reset()
+    return (
+        f"reserve 1/{fs.RESERVE_DIVISOR} of the first clock, 6 s clock in a 120 s game plans "
+        f"{planned_ms:.0f} ms against a 500 ms increment"
+    )
+
+
 def check_timed(fens: list[str], reference: ModuleType) -> str:
     """A search that runs out of time returns a legal move and leaves the shared arrays sane.
 
@@ -636,6 +711,7 @@ def main() -> None:
     print(f"fallback: {check_fallback()}")
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
+    print(f"reserve: {check_reserve()}")
     print(f"timeouts: {check_timed(sample[:24], reference)}")
     print(f"backstop: {check_backstop(sample[:6])}")
 

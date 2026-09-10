@@ -154,6 +154,7 @@ FINE_CHECK_BELOW_MS = 300
 
 SOFT_DIVISOR = 25
 SOFT_BONUS_MS = 400
+RESERVE_DIVISOR = 8
 HARD_DIVISOR = 8
 SAFETY_MARGIN_MS = 300
 PANIC_MS = 1_000
@@ -1231,26 +1232,58 @@ def search_root(
 # The position we handed back last move, as a fen. The next one has to be one move on.
 _EXPECTED: str | None = None
 
+# The first clock this game handed us, in milliseconds, or None before the game's first move.
+# `budgets` records it and derives the reserve from it; `reset` clears it, so a second game in
+# the same process, or a position `observe` decides belongs to another game, never inherits it.
+_FIRST_CLOCK_MS: int | None = None
+
 
 def reset() -> None:
     """Forget everything. A process is meant to live for one game; this is another game."""
-    global _EXPECTED
+    global _EXPECTED, _FIRST_CLOCK_MS
     TT.fill(0)
     HISTORY.fill(0)
     KILLERS.fill(0)
     STATS[GAME_COUNT] = 0
     _EXPECTED = None
+    _FIRST_CLOCK_MS = None
 
 
 def budgets(time_left_ms: int) -> tuple[float, float]:
-    """The soft and hard budgets in milliseconds, as `_budgets` computes them.
+    """The soft and hard budgets in milliseconds, with a reserve the soft budget never spends.
 
     The soft budget is what an average move is meant to cost and the only thing the iteration
     gate tests against elapsed time; the hard budget is the deadline the search aborts on, and
-    it is what the backstop thread is armed for. Neither changed here. `SOFT_OVERRUN` in
-    `think` is what now stands between them.
+    it is what the backstop thread is armed for. The hard budget is untouched here.
+
+    A fraction of the clock plus a bonus has no floor against the increment, and a long game
+    walks it down: at a 6 s clock the soft budget was 640 ms against a 0.5 s increment, so
+    every move still cost more than the increment paid back and the clock kept sinking. The
+    120 s replay of the 172-move drawn game (`docs/BENCH_LOG.md` cycle 5) reached 5.3 s at
+    move 149, and one slow subtree there is a flag fall.
+
+    So the soft budget is taken from the clock above a reserve rather than from the whole
+    clock: `RESERVE_DIVISOR` of the *first* clock of the game, 15 s at the platform's 120 s,
+    5.6 s at the 45 s proxy, 1.25 s at 10 s. A fraction rather than a fixed number of seconds
+    because the same code plays every control, and a 10 s reserve that is 8% of the platform's
+    clock would be 22% of the proxy's. Below the reserve the soft budget is `SOFT_BONUS_MS`
+    alone, 400 ms, under the 0.5 s increment, so the clock climbs back instead of sinking, and
+    the equilibrium sits where the reserve puts it: the same replay floors at 16.9 s, against
+    prod's 5.3 s, for the same median depth over the first 40 moves.
+
+    The first clock is what `get_move` was handed on this game's first move; the platform tells
+    the agent neither the base clock nor the increment, so it is inferred and nothing else can
+    be. `reset` clears it, and `observe` calls `reset` on any position that is not one legal
+    move on from what we handed back, so another game in the same process cannot inherit a
+    stale reserve. Before any move has been seen, or on a first clock of zero, the reserve is
+    zero and this is exactly the formula it replaced. Nothing divides by the reserve or by the
+    first clock, so a tiny first clock is only a tiny reserve: 1.5 s gives 188 ms.
     """
-    soft = time_left_ms / SOFT_DIVISOR + SOFT_BONUS_MS
+    global _FIRST_CLOCK_MS
+    if _FIRST_CLOCK_MS is None:
+        _FIRST_CLOCK_MS = time_left_ms
+    reserve = max(_FIRST_CLOCK_MS, 0) / RESERVE_DIVISOR
+    soft = max(time_left_ms - reserve, 0.0) / SOFT_DIVISOR + SOFT_BONUS_MS
     hard = max(min(time_left_ms / HARD_DIVISOR, time_left_ms - SAFETY_MARGIN_MS), 0.0)
     return min(soft, hard), hard
 
