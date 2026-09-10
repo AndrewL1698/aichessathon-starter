@@ -34,10 +34,11 @@ is the copy alone. `refresh` builds a perspective pair from the board, and the r
 once per search; every node below it is incremental.
 
 **Where the net stops.** `bare_endgame` is the one position class this evaluation refuses, and
-`fastsearch.leaf` scores it with the hand tables instead. A network trained on positions games
-reach has effectively never seen KRvK or KPvK, and it shows: it scores every legal move in
-KRRvK within a few centipawns of every other, because every one of them leaves the same men on
-the board. That function has the measurements and the reasoning.
+`fastsearch.leaf` scores it with the blend plus a whole mop-up term instead. A network trained
+on positions games reach has effectively never seen KRvK or KPvK, and it shows: it scores every
+legal move in KRRvK within a few centipawns of every other, because every one of them leaves
+the same men on the board. That function has the measurements and the reasoning, including why
+handing over to the hand tables *alone* -- what v4.2 did -- cost rated round 102 fifty moves.
 
 **Missing or broken weights.** `weights/nnue.npz` arrives by a separate PR and is not in the
 tree here. If it is absent, unreadable, or fails the shape and scale checks, `LOADED` is False
@@ -391,8 +392,9 @@ def _men_at_most(board: np.ndarray, side: int, limit: int) -> bool:
 def bare_endgame(board: np.ndarray) -> bool:
     """Has either side been reduced to a king and at most two other men?
 
-    This is the line the learned evaluation is not allowed across, and `fastsearch.leaf`
-    scores everything past it with the hand tables instead. Two reasons, one measured:
+    This is the line the learned evaluation is not allowed across on its own, and
+    `fastsearch.leaf` scores everything past it as the blend plus a whole mop-up term. Two
+    reasons the net cannot have the position to itself, one measured:
 
     The network has no idea what to do here. Its training set is positions a real game
     reached, and KRvK, KRRvK and KPvK are a vanishing fraction of those, so its output in
@@ -414,6 +416,34 @@ def bare_endgame(board: np.ndarray) -> bool:
     number of this file's own choosing. The material-advantage half of `fasteval`'s mop-up
     condition is deliberately *not* applied: KPvK is a pawn ahead, not four hundred
     centipawns ahead, and it is one of the positions that needs this.
+
+    **Why the leaf past the line is the blend and not the hand tables alone.** Handing over to
+    `fasteval` alone -- v4.2's policy -- put a step in the evaluation at the line, because the
+    two scales are different: the blend of a +191-Elo net with the hand tables reads a won
+    ending several hundred centipawns higher than the hand tables do. A search whose root is
+    on the crowded side of the line and whose leaves are past it therefore sees every capture
+    that crosses the line as a loss of those centipawns, and refuses it.
+
+    Rated round 102 is that, played out. A rook up in a won ending, the engine shuffled from
+    move 53 to move 100 -- 47 moves, halfmove clock 94 -- instead of taking the d3 pawn with
+    its king. After 54.Kd1 (`8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b - - 2 54`) v4.2's blend search
+    reads +869 at depth 8 and +857 at depth 12 for shuffling, playing Rd2 and Rh3, while the
+    hand tables score the position after 54...Kxd3 at +408: capturing looks like giving up
+    450 centipawns, so `search_fixed` never plays c3d3 at either depth. With `nnue=False` on
+    both sides of the line it plays c3d3 at once, at +603. The same thing at move 92
+    (`8/8/4B3/2r5/3p1p2/3PkP2/8/6K1 b - - 78 92`), where v4.2 plays c5c2 at +978 rather than
+    e3d3. Stockfish at depth 30 gives mate in 14 from move 54. The game was still won, in 114
+    moves; the next one with the clock at 94 would not be.
+
+    Scoring the leaf as the blend plus a whole mop-up term removes the step -- the same
+    evaluation on both sides of the line, one scale -- and keeps what the line was drawn for:
+    the hand tables' material and geometry still lead the score, and mop-up at full weight
+    still steers KRvK, KQvK and KRRvK to mate. That is the part the earlier attempt above
+    lacked. The net plus the mop-up term alone drew KRRvK by repetition and never promoted in
+    KPvK because it had no material term to anchor it; here it has half of one, and the
+    conversion playouts in `tests/test_nnue.py` are what say that is enough. With the fix in
+    place both round-102 positions play the capture: c3d3 at +1191 (depth 8) and +1330 (depth
+    12), e3d3 at +1115 and +1307.
     """
     return _men_at_most(board, 0, MOP_UP_MAX_WEAK_PIECES) or _men_at_most(
         board, 1, MOP_UP_MAX_WEAK_PIECES

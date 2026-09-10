@@ -116,7 +116,7 @@ from fastboard import (
 )
 
 # `PIECE_VALUES` is the evaluation's, read here only for MVV-LVA ordering.
-from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate
+from fasteval import PIECE_VALUES, STALEMATE_PIECE_LIMIT, evaluate, mop_up
 from fastnnue import (
     ABSOLUTE,
     BLEND,
@@ -636,13 +636,31 @@ def leaf(
       net as an absolute one is wrong by the whole hand evaluation and still looks plausible.
 
     `bare_endgame` overrides every one of them and is not an optimisation: a position where
-    either side is down to a king and two men is scored by the hand tables whatever the policy
-    says, because the net has no training data there. `fastnnue.bare_endgame` has the
-    measurements. It is a dozen loads on a full board, which is what makes it affordable here.
+    either side is down to a king and two men is scored one way whatever the policy says,
+    because the net has no training data there. That one way is the blend plus a whole mop-up
+    term -- `fastnnue.bare_endgame` has the measurements and the round that forced it -- and
+    the override is uniform across the policies because the position class is one thing and
+    the shipped configuration is `BLEND`. It is a dozen loads on a full board, which is what
+    makes the test affordable here.
+
+    The hand's dead draws survive as draws: where `fasteval` returns exactly 0 it is saying
+    the material cannot mate (KBvK, KNvK) or the rook pawn cannot queen, and a network that
+    has never seen the position does not get a vote on that. It is an override, not a term.
     """
     policy = stats[NNUE_POLICY]
-    if policy == HAND or bare_endgame(board):
+    if policy == HAND:
         return evaluate(board, st)
+    if bare_endgame(board):
+        hand = evaluate(board, st)
+        if hand == 0:
+            return 0
+        learned = infer(acc, ply, st[0], net)
+        blended = (hand + learned) // 2
+        # The blend carries half the mop-up term through its hand half; this is the other
+        # half, so the leaf carries exactly one. Truncated toward zero, like `fasteval`'s
+        # own taper, so that mirroring the board still negates the score exactly.
+        term = mop_up(board, st)
+        return blended + (term // 2 if term >= 0 else -((-term) // 2))
     learned = infer(acc, ply, st[0], net)
     if policy == ABSOLUTE:
         return learned

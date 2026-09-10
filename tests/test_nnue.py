@@ -57,6 +57,14 @@ BARE_ENDGAMES: tuple[tuple[str, str], ...] = (
     ("KBBvK", "8/8/8/4k3/8/8/8/2B1KB2 w - - 0 1"),
 )
 
+# Rated round 102, where the handover cost 47 moves. Both are one capture short of
+# `fastnnue.bare_endgame`, so the move that wins crosses the line; `check_round_102` says what
+# v4.2 played instead and why.
+ROUND_102: tuple[tuple[str, str, str], ...] = (
+    ("m54 Kxd3", "8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b - - 2 54", "c3d3"),
+    ("m92 Kxd3", "8/8/4B3/2r5/3p1p2/3PkP2/8/6K1 b - - 78 92", "e3d3"),
+)
+
 # Rules the feature scheme and the deltas only meet in particular positions. Random play from
 # the openings reaches an en passant capture roughly never and a promotion rarely.
 DELTA_SEEDS: tuple[str, ...] = (
@@ -361,6 +369,12 @@ def check_policies(fens: list[str]) -> str:
     that include the bare endgames -- because the handover overrides every policy and that has
     to be true of each of them, not just of the one that shipped first.
 
+    Past the handover the composition is the blend plus a whole mop-up term, and the half of
+    that term the blend already carries through its hand half is why the arithmetic here adds
+    only the other half. A position the hand evaluation scores exactly 0 is a draw it has
+    proved from the material, so it stays 0 rather than being averaged with a network that
+    has never seen the position.
+
     `//` on the blend is floor division. Both inputs are side-to-move relative and both are
     mirror-invariant, so their mean is too, and the search never needs the evaluation to be an
     odd function; there is nothing for a floor to break here.
@@ -373,11 +387,14 @@ def check_policies(fens: list[str]) -> str:
         bare = bool(fn.bare_endgame(board))
         fn.refresh(board, acc, 0, fn.NET)
         net = int(fn.infer(acc, 0, int(st[0]), fn.NET))
+        term = int(fe.mop_up(board, st))
+        half = term // 2 if term >= 0 else -((-term) // 2)
+        past = 0 if hand == 0 else (hand + net) // 2 + half
         wanted = {
             fn.HAND: hand,
-            fn.ABSOLUTE: hand if bare else net,
-            fn.BLEND: hand if bare else (hand + net) // 2,
-            fn.RESIDUAL: hand if bare else hand + net,
+            fn.ABSOLUTE: past if bare else net,
+            fn.BLEND: past if bare else (hand + net) // 2,
+            fn.RESIDUAL: past if bare else hand + net,
         }
         for chosen, want in wanted.items():
             fs.STATS[fs.NNUE_POLICY] = chosen
@@ -470,16 +487,22 @@ def check_target_marker() -> str:
 
 
 def check_bare_endgames(depth: int) -> str:
-    """Past `fastnnue.bare_endgame` the hand evaluation scores the leaf, and these convert.
+    """Past `fastnnue.bare_endgame` the leaf is the blend plus a whole mop-up term, and these
+    still convert.
 
-    Two assertions, and the second is the one that cannot pass by accident. The first is that
-    each of these endings actually reaches mate with the network switched on: before the
-    handover existed, KRRvK drew by repetition and KPvK never promoted, because a network
-    trained on positions games reach scores every move in KRRvK the same. The second is that
-    the whole playout is *identical* with the network on and off. Every position in these
-    lines is past the line, so if a single leaf were still scored by the network the two
-    playouts would diverge, and if the handover fired somewhere it should not the middlegame
-    check below would catch it.
+    Two assertions, one per evaluation. Each of these endings has to reach mate with the
+    network switched on, which is what the handover exists for: before it, KRRvK drew by
+    repetition and KPvK never promoted, because a network trained on positions games reach
+    scores every move in KRRvK the same. And each has to reach mate with the network off,
+    because that is the hand policy `agent.py` still runs on and the conversion is the hand
+    tables' own.
+
+    The playouts are no longer required to be *identical* with the network on and off, and
+    that is the change round 102 forced: scoring these positions with the hand tables alone
+    put a step in the evaluation at the handover, and the engine spent 47 moves refusing to
+    capture across it. `fastnnue.bare_endgame` has the numbers. The two evaluations now
+    differ past the line, so the two playouts may pick different mates; what is asserted is
+    that both mate, and `check_policies` above is what pins the composition exactly.
 
     Fixed depth rather than a clock, because a conversion that depends on how loaded the
     machine was is not a test. `contempt_for` is recomputed each ply, as `think` does, so the
@@ -507,19 +530,52 @@ def check_bare_endgames(depth: int) -> str:
                     f"with the network on, {name} ended in {with_net}: nothing is steering "
                     f"the search towards a mate"
                 )
-            if with_net != without:
+            if not without.startswith("mate in "):
                 raise Failure(
-                    f"{name} plays out as {with_net} with the network and {without} without "
-                    f"it, so a leaf past bare_endgame is still being scored by the network"
+                    f"with the network off, {name} ended in {without}: the hand policy "
+                    f"`agent.py` runs on no longer converts it"
                 )
-            results.append(f"{name} {with_net}")
+            results.append(f"{name} {with_net} (hand alone: {without})")
     finally:
         fn.USE_NNUE = was
         fs.reset()
-    return (
-        f"false in a middlegame; at depth {depth}, {', '.join(results)}, identical with the "
-        f"network on and off"
-    )
+    return f"false in a middlegame; at depth {depth}, {', '.join(results)}"
+
+
+def check_round_102(depth: int) -> str:
+    """The capture across the handover is played, which in rated round 102 it was not.
+
+    A rook up in a won ending, v4.2 shuffled from move 53 to move 100 -- 47 moves, halfmove
+    clock 94 -- rather than take the d3 pawn with its king, because the position it was in was
+    scored by the blend and the position after the capture, past `fastnnue.bare_endgame`, was
+    scored by the hand tables alone. Two evaluations on two scales, so the capture read as a
+    450-centipawn loss: at these depths v4.2 answers Rd2 and Rh3 at +869 and +857 from move
+    54, and c5c2 at +978 from move 92. Stockfish at depth 30 mates in 14 from move 54.
+
+    These are the two positions from that game, and they are here rather than only in
+    `positions.epd` because what they test is the seam itself: any policy that scores the two
+    sides of `bare_endgame` on different scales fails them, however good either scale is.
+    """
+    was = fn.USE_NNUE
+    found = []
+    try:
+        fn.USE_NNUE = True
+        if not fn.active():
+            raise Failure("the network is not active, so this measures the wrong evaluation")
+        for label, fen, want in ROUND_102:
+            fs.reset()
+            move, score, _ = fs.search_fixed(fen, depth)
+            if move != want:
+                raise Failure(
+                    f"round 102 {label}: at depth {depth} the search plays {move} at {score}, "
+                    f"not the capture {want} -- the evaluation has a step at bare_endgame "
+                    f"again and the engine will shuffle rather than cross it"
+                )
+            found.append(f"{label} {move} {int(score):+d}")
+    finally:
+        fn.USE_NNUE = was
+        fs.reset()
+    return f"at depth {depth}, {', '.join(found)}"
 
 
 def playout(fen: str, depth: int, enabled: bool, limit: int = 120) -> str:
@@ -755,6 +811,7 @@ def main() -> None:
     print(f"\npolicies: {check_policies(fens[:400] + [fen for _, fen in BARE_ENDGAMES])}")
     print(f"target marker: {check_target_marker()}")
     print(f"\nbare endgames: {check_bare_endgames(6)}")
+    print(f"round 102: {check_round_102(8)}")
 
     reference_module = load_reference()
     search_rng = random.Random(0x5EA2)
