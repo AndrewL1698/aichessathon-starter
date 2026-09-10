@@ -73,3 +73,16 @@ r2qrbk1/2pb1ppp/p1np1n2/1p6/P2PP3/1B3N2/1P1N1PPP/R1BQR1K1 w - - 1 13; bm e4e5; i
 1rr3k1/Q1p2pp1/3p2p1/Pp1P4/4PnP1/1B2R2P/1q3P2/4R1K1 w - - 2 32; bm e4e5; id "r98 m32 Rd1 -168"
 # Round 99 (v4.2, drawn vs Phantom from a lost ending). Stockfish 19 depth 18, 150 cp threshold; only the first flagged move was in a position still worth playing.
 6k1/5pbp/r1p3p1/p2r4/R2N3P/4P3/1P2R1K1/8 w - - 4 31; bm b2b4; id "r99 m31 Rc4 -177"
+# Round 101 (v4.2, won vs Yumo). Stockfish 19 depth 18, 150 cp threshold, real only.
+2rr2k1/1p3pp1/pP3q1p/P2n4/2p1p1B1/2P1P2P/5P1P/R1R1Q2K b - - 10 28; bm c8c5; id "r101 m28 Rb8 -175"
+# Round 102 (v4.2, won vs Magician from Riga in 114 moves). Stockfish 19 depth 18, 150 cp threshold, real only; the ending's misses were all in won positions.
+1rb2rk1/p4pbp/1q1p2p1/3P4/3p1N2/1p1P2PP/1PPQ1PB1/1KR4R b - - 3 18; bm b6a6; id "r102 m18 Be5 -210"
+6k1/p1r2p2/6p1/1q1p3P/3p4/3P4/1P1Q1PB1/1K6 b - - 0 31; bm c7c6; id "r102 m31 a5 -157"
+5k2/5p2/8/1q1p1r2/p2p4/K2P4/1P2QP2/3B4 b - - 11 40; bm b5c5; id "r102 m40 Qb8 -179"
+# Round 103 (v4.2, drawn vs Waterside Research by the fifty-move rule). Stockfish 19 depth 18, 150 cp threshold, real only.
+8/3R4/8/pp1P4/1k3K2/8/1r3P2/8 w - - 1 49; bm f4e3; id "r103 m49 Ra7 -251"
+# Round 104 (v4.2's first loss, vs Imperial Larper). Stockfish 19 depth 18, 150 cp threshold; the two later flagged moves were in a lost position.
+1rb3k1/R5b1/3p3p/1PpP2qP/3pP1p1/3P2P1/1P2B2N/4Q1K1 b - - 2 28; bm c5c4; id "r104 m28 Qxh5 -267"
+# Round 102 (v4.2, won vs Magician from Riga in 114 moves after 47 shuffled ones). Not Stockfish-flagged blunders but the bare-endgame seam: the winning move is a capture across `fastnnue.bare_endgame`, which v4.2 refused because the two sides of the line were scored on different scales.
+8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b - - 2 54; bm c3d3; id "r102 m54 Kxd3"
+8/8/4B3/2r5/3p1p2/3PkP2/8/6K1 b - - 78 92; bm e3d3; id "r102 m92 Kxd3"

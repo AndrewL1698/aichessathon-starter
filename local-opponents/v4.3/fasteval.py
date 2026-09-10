@@ -660,116 +660,12 @@ def evaluate(board: np.ndarray, st: np.ndarray) -> int:
     return score if st[0] == 0 else -score
 
 
-@njit(nbt.int64(_BOARD_T, _ST_T), cache=False)
-def mop_up(board: np.ndarray, st: np.ndarray) -> int:
-    """`evaluate`'s mop-up term on its own, tapered, from the side to move's point of view.
-
-    `fastsearch.leaf` scores a bare endgame as the blend of the two evaluations plus a whole
-    mop-up term, so it needs the term separately; `evaluate` folds it in with everything else
-    and has to stay byte-identical for the hand policy, so this recounts rather than returning
-    it from there. The gate, the weights and the taper are `evaluate`'s, line for line.
-
-    It is zero unless `evaluate`'s mop-up condition fires: the weaker side down to a king and
-    at most two other men, *and* the stronger side at least `MOP_UP_MIN_ADVANTAGE` ahead. So
-    it is zero in KPvK, and zero in every position the hand evaluation calls a dead draw
-    (KBvK and KNvK are 330 and 320 ahead, the rook-pawn draw 100), which is what makes adding
-    it safe: it can neither invent a win in a drawn position nor disturb one.
-
-    The taper truncates toward zero, as `evaluate`'s does. `evaluate` truncates the *sum* of
-    its two tapered halves once, so this can differ from the term's share of that score by a
-    centipawn. `tests/test_fasteval.py` freezes the value on the endings the term was written
-    for and checks the bound and the gates everywhere else.
-    """
-    white_men = 0
-    black_men = 0
-    white_material = 0
-    black_material = 0
-    white_heavy = 0
-    black_heavy = 0
-    minors = 0
-    rooks = 0
-    queens = 0
-    for square in range(21, 99):
-        piece = board[square]
-        if piece == 0 or piece == 13:
-            continue
-        white = piece <= 6
-        kind = piece if white else piece - 6
-        value = PIECE_VALUE_BY_KIND[kind - 1]
-        if white:
-            white_men += 1
-            white_material += value
-        else:
-            black_men += 1
-            black_material += value
-        if kind == 1:
-            if white:
-                white_heavy += 1
-            else:
-                black_heavy += 1
-        elif kind == 2 or kind == 3:
-            minors += 1
-        elif kind == 4:
-            rooks += 1
-            if white:
-                white_heavy += 1
-            else:
-                black_heavy += 1
-        elif kind == 5:
-            queens += 1
-            if white:
-                white_heavy += 1
-            else:
-                black_heavy += 1
-
-    if white_men > MOP_UP_MAX_WEAK_PIECES and black_men > MOP_UP_MAX_WEAK_PIECES:
-        return 0
-    white_king = st[5]
-    black_king = st[6]
-    advantage = white_material - black_material
-    sign = 0
-    weak_king = white_king
-    weak_count = white_men
-    weak_heavy = white_heavy
-    if advantage >= MOP_UP_MIN_ADVANTAGE:
-        sign = 1
-        weak_king = black_king
-        weak_count = black_men
-        weak_heavy = black_heavy
-    elif advantage <= -MOP_UP_MIN_ADVANTAGE:
-        sign = -1
-    if sign == 0 or weak_count > MOP_UP_MAX_WEAK_PIECES:
-        return 0
-    bare = weak_count <= MOP_UP_BARE_PIECES and weak_heavy == 0
-    if bare:
-        centre_weight = MOP_UP_CMD
-        close_weight = MOP_UP_CLOSE
-    else:
-        centre_weight = MOP_UP_LOOSE_CMD
-        close_weight = MOP_UP_LOOSE_CLOSE
-    separation: int = abs(FILE_OF[white_king] - FILE_OF[black_king]) + abs(
-        RANK_OF[white_king] - RANK_OF[black_king]
-    )
-    endgame: int = 0
-    endgame += sign * (
-        centre_weight * CENTRE_DISTANCE[weak_king] + close_weight * (14 - separation)
-    )
-
-    phase = minors + PHASE_ROOK * rooks + PHASE_QUEEN * queens
-    if phase > PHASE_MAX:
-        phase = PHASE_MAX
-    total = endgame * (PHASE_MAX - phase)
-    score = total // PHASE_MAX if total >= 0 else -((-total) // PHASE_MAX)
-    return score if st[0] == 0 else -score
-
-
 def warm() -> None:
     """Run the jitted evaluation once so nothing compiles on the clock."""
     from fastboard import START_FEN, from_fen
 
     board, st, _ = from_fen(START_FEN)
     evaluate(board, st)
-    mop_up(board, st)
 
 
 warm()

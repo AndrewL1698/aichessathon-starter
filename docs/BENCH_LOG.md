@@ -977,3 +977,419 @@ ceiling is inert. What drains the clock is not the ceiling but that `soft = cloc
 floor against the increment: at a 6 s clock the soft budget is 640 ms against a 500 ms increment,
 so a long game settles at a fixed point near 5-7 s. v4.1 does the same in a 170-move game;
 `time/reserve-floor` in `docs/VERSIONS.md` is the candidate that addresses it.
+## Cycle 7, 2026-09-10: the 163M-position net on the same 768 features. Rejected over 144 games
+
+The question this run was asked: before anyone spends a day on king-relative features, what is
+the 768-input architecture actually worth, and is the newest file trained on it better than the
+one that ships? `prod` at afb34f4 is byte-identical to `local-opponents/v4.1`, so the only
+variable available is the weight file. The candidate is the patience stop of the 163M-position
+run on `nnue/weights-v1` (`nnue-h256-100m-e71.npz`, run notes `tools/nnue/runs/h256-100m-e71.md`).
+
+| | baseline | candidate |
+|---|---|---|
+| build | `prod` afb34f4 = v4.1 | same five source files, byte-identical |
+| weight file | `nnue-h256-52m-e60.npz` (ships as `weights/nnue.npz`) | `nnue-h256-100m-e71.npz` |
+| sha256 | `fc7c862f1b0be11d…d74543f` | `4a376651d4249ab9…e2e39c5e` |
+| unique training positions | 51,687,780 (90M rows) | **163,101,630 (290M rows)** |
+| best validation loss | 0.014602, epoch 60 | **0.013992, epoch 71** (patience stop) |
+| quantisation | qa=256 qb=1024 qc=128 cp400 | qa=**512** qb=1024 qc=128 cp400 |
+| export error | 2.93 cp mean, 24.22 cp max | **1.65 cp mean, 9.44 cp max** |
+| architecture | 768-256-32-1, two side-relative accumulators | identical |
+| leaf | blend, `(hand + net) // 2`, hand tables past `bare_endgame` | identical (`target='cp'`) |
+
+Both agents were frozen into `chmod a-w` directories under
+`~/Documents/bench-snapshots/2026-09-10-nnue768/` before the first game and their checksums
+re-read after the last one; nothing in them moved while they were being measured. Every game ran
+out of those read-only directories, which is also the read-only-filesystem check. Arena jobs ran
+strictly one at a time with nothing else on the machine, per the rule in `docs/TEAM.md`.
+
+### The result
+
+Paired openings and reversed colours, `local-opponents/v4.1` as the baseline, all PGNs kept
+under `~/Documents/pgn/2026-09-10-*`.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|
+| nnue-100m-e71 | v4.1 | 10s+0.1s | 96 | +29 =26 -41 | 43.8% | -44 | -106 to +16 | 0 / 0 / 0 / 0 |
+| nnue-100m-e71 | v4.1 | 20s+0.2s | 48 | +11 =23 -14 | 46.9% | -22 | -95 to +50 | 0 / 0 / 0 / 0 |
+| **pooled** | v4.1 | both | **144** | **+40 =49 -55** | **44.8%** | **-36** | **-84 to +10** | 0 / 0 / 0 / 0 |
+
+By side, fast control: 44.8% as White (+15 =13 -20), 42.7% as Black (+14 =13 -21). Slow control:
+43.8% as White, 50.0% as Black. Terminations over the 144: 95 checkmate, 33 threefold, 10
+insufficient material, 6 fifty-move. Across all 214 games played in this cycle -- 144 benched, 64
+ablation, 2 gate, 4 instrumented -- **zero illegal moves, zero exceptions, zero flag falls, zero
+over-budget moves, zero tracebacks.**
+
+### It is not a speed question
+
+Depth 7 over the 47 regression positions, no clock, one job at a time:
+
+| build | as shipped (blend) | hand only | net only |
+|---|---|---|---|
+| baseline e60 | 1.363M nodes/s | 2.585M | 1.534M |
+| candidate e71 | **1.367M nodes/s** | 2.642M | 1.546M |
+
+Same width, same node rate; the file is free. The hand-only sweep searched exactly 205,733,319
+nodes on both builds, which is the control that says the two differ in the net and nothing else.
+In instrumented games the candidate is level or slightly deeper -- mean depth 7.34 against 7.25
+at 10 s + 0.1 s, 8.96 against 8.14 at 20 s + 0.2 s over one game each -- with slowest move
+1.13 s against 1.24 s, clock floor 1.71 s of 10 s, median 1.75M nodes/s in game, peak RSS 254 MB
+and import 4.24 s against 4.19 s. Nothing in the health numbers separates them, and nothing is
+near a platform limit.
+
+### The suite is a wash
+
+47 positions, `--engine fast`, depth 11, 20 s: **candidate 26/47 against the baseline's 27/47**,
+mean nominal depth 8.55 against 8.57. The candidate gains `r76 m11`, `r76 m19`, `r82 m42` and
+`r85 m20`; it loses `r73 m11`, `r76 m17`, `r77 m14`, `r80 m24` and `r86 m16`. Of the 22 both
+solve it finds the move at a shallower depth in 9 and a deeper one in 2 -- a mild sharpness
+signal that the games do not confirm.
+
+### The blend still wins, at both weight files
+
+32 games each against the same v4.1 baseline, candidate weights throughout, one constant changed:
+
+| candidate build | games | +=- | score | Elo | 95% |
+|---|---|---|---|---|---|
+| blend, as shipped | 96 | +29 =26 -41 | 43.8% | -44 | -106 to +16 |
+| net only (`POLICY = ABSOLUTE`) | 32 | +6 =6 -20 | 28.1% | -163 | -312 to -56 |
+| hand only (`USE_NNUE = False`) | 32 | +5 =4 -23 | 21.9% | -221 | -408 to -107 |
+
+Against the common opponent that is about **+119 Elo for the blend over the net alone and +177
+over the hand evaluation alone**, reproducing v4.0's central finding on a file trained on three
+times the data. The blend is not a property of the 52M net; it is a property of the composition.
+
+### What the cycle says
+
+**Validation loss did not order strength, and this time both nets were the same architecture and
+the same policy.** The candidate is better on every offline number that exists: -6.1e-4 of
+validation loss, twice the layer-1 precision, the most precise export of any file the project has
+made. It played at 44.8% over 144 games. `docs/BENCH_LOG.md` previously held that the metric
+orders *absolute* nets correctly and only stops ordering things across policies. That is now too
+generous: within one policy and one architecture, on a superset of the training data, it failed
+too. The earlier file from this same run, epoch 11, had already benched at parity with e60 over
+96 games. Two files from the 163M run, 240 games between them, neither ahead.
+
+No interval excludes zero, the pooled one included, so this is not proof the new file is worse.
+It is firm evidence it is not an improvement, and the pooled **upper bound of +10 Elo** is what
+decides it: there is no reading of this data where swapping the shipped weights is worth an
+upload the day before the deadline.
+
+Two caveats on how far the numbers reach. The harness has 8 openings and both colours, so 96
+games is 48 pairings replayed six times with clock noise as the only variation -- the effective
+sample is smaller than the count, the same limitation cycle 6 ran into. And the two ablation rows
+are 32 games with intervals over 250 Elo wide; they are decisive only because the gaps are
+enormous.
+
+**What this establishes for the king-relative work.** The 768-input baseline is now measured on a
+quiet machine: v4.1, blend, 1.363M nodes/s at depth 7, 27/47 on the suite, 4.19 s import, 222 to
+254 MB peak RSS, and the disqualifier record above. More training data on the same 768 features
+has now failed twice to beat it. That is the argument for the feature set, rather than the data
+volume, being the binding constraint -- which is the premise a king-relative attempt rests on.
+
+**Read after v4.2:** this run measured against v4.1 because that was `prod` at the time. v4.2
+shipped later the same day and changed the search only -- `weights/nnue.npz` is byte-identical
+across it -- so the conclusion still names the weight file that ships today.
+
+## Cycle 8, 2026-09-10: four king buckets. Built and proved exact; strength not measured
+
+Cycle 7 rejected more data on the same features. What it left was the feature set itself: the
+768 scheme cannot say where our own king is, so a knight on f5 is one feature whether the king
+is castled on g1 or walking on e4. This cycle builds the smallest thing that tests that, on
+branch `nnue/king-buckets-4` off `prod` afb34f4. **It is not Stockfish's HalfKAv2_hm** -- four
+buckets rather than 32, no king-file mirroring -- and it deliberately changes nothing outside
+the model. `docs/NNUE_KING_BUCKETS.md` is the spec, the mapping and the go/no-go.
+
+**There is no strength row in this section and there cannot be one yet.** The four bucket blocks
+are copies of the trained 768 layer, so the net returns the same integer it always did and a
+bench against v4.1 would score 50% by construction. Strength waits on fine-tuning.
+
+### What was built
+
+`bucket = 2 * (rank >= 4) + (file >= 4)` on the perspective-oriented friendly king square, which
+is the square after the flip the 768 scheme already applies, so the mapping is colour-symmetric
+by construction and the mirror invariant survives. The index is `bucket * 768 + plane * 64 +
+square`: 3,072 inputs, four blocks, the 768 half untouched. Each perspective is conditioned on
+its own king, which is what lets one side's king move leave the other accumulator alone.
+
+The cost model is the design. A non-king move is one row out and one row in per perspective, as
+before. A king move inside its bucket is the same. Only a king crossing a boundary rebuilds, and
+only the perspective whose king moved. Castling takes whichever path its two squares say --
+`e1g1` stays in bucket 1, `e1c1` crosses into bucket 0. The king square rides in one extra int16
+column of the accumulator stack, so `fastsearch.py`, `fasteval.py` and `agent.py` are
+byte-identical on the branch: search, hand evaluation, blend, time management, the UCI reply and
+the python-chess fallback are all exactly v4.1's.
+
+### Speed, which is the gate that had to pass first
+
+The first layer is 1.50 MiB against 0.38, and the platform core has 1 MiB of L2, so this was the
+number that could have ended the experiment. Both builds, same machine, one job at a time, run
+twice each. **The node counts came out identical to the digit -- 169,149,685 at depth 7 over the
+47 regression positions -- because a warm-started net evaluates identically, so the tree is the
+same and only the time differs.**
+
+| | 768 | 4 buckets | delta |
+|---|---|---|---|
+| `infer` | 957 / 953 ns | 959 / 962 ns | unchanged |
+| `push`, quiet move | 480 / 496 ns | 520 / 520 ns | +6% |
+| `push`, king inside its bucket | 474 / 494 ns | 513 / 517 ns | +7% |
+| `push`, king crossing | 492 / 494 ns | 633 / 649 ns | +30% |
+| `refresh` | 758 / 771 ns | 879 / 884 ns | +15% |
+| **node rate, depth 7** | **1.391 / 1.389M** | **1.338 / 1.344M** | **-3.4%** |
+| first layer | 0.38 MiB | 1.50 MiB | 4x |
+| weight file | 273 KB | 1.07 MB | 3.9x |
+| import, peak RSS | 4.0 s, 255 MB | 4.1 s, 224-239 MB | unchanged |
+
+**The cache worry did not materialise.** A search touches at most one block per perspective, so
+768 KiB against the flat build's 384 KiB, and that is worth 3.4% of the node rate. The
+measurement is representative of a fine-tuned net even though it was taken on a warm-started
+one: identical blocks change the values at those addresses, not which addresses are touched. For
+scale, cycle 6's mobility term cost 7.5% of the node rate and lost no median depth at all, so
+3.4% should be well under a tenth of a ply. **Gate passed**, and cheaply enough that a real
+evaluation gain would clear it.
+
+### Exactness
+
+| check | result |
+|---|---|
+| runtime table against the offline one | 128 square/perspective pairs identical |
+| index space | 1,536 base indices in range and distinct, 4 disjoint blocks tiling 3,072 |
+| colour symmetry and the mirror | 300 positions, offline and in the accumulators |
+| all four buckets | 250 positions each, selected and evaluated correctly |
+| **warm start** | **11,000 positions return the integer the 768 net returned** |
+| reference against numba | 11,000 positions, 0 mismatches |
+| randomised sequences | **30,000** make/unmake, 0 mismatches, 3,175 crossings, 54 crossing castles |
+| distinct blocks | all of it again on a net whose blocks differ: 1,500 positions exact |
+| int16 bound | worst reachable 25,393 of 32,767, headroom 7,374 |
+| file, memory, import | 1.7 MB of the 50 MB cap, 4.09 s of the 90 s budget, 255 MB of 2 GB |
+| pipeline end to end | shards, train, export, runtime on scheme-2 features; old shards refused |
+
+Two things worth keeping from building it. **The int16 bound had to become per bucket block**:
+the same bound taken across all 3,072 rows reads 42,313, past int16, and would have refused a
+file that is provably safe, because a position's features all carry one bucket and 32 rows from
+one block is the real worst case. And **the table test earned its place immediately** -- it
+caught a mailbox-orientation error on its first run. That is the class of bug that trains on one
+bucketing and plays another, with both halves self-consistent and every other test green.
+
+### What has to happen before this is worth anything
+
+In order: merge `prod` up into the branch (it is based on afb34f4, which is v4.1; v4.2 landed
+afterwards and changed only `fastsearch.py`, which this branch does not touch, so the merge is
+clean), rebuild shards (old ones carry 768 indices and are now refused by design), warm start a
+checkpoint with `tools/nnue/bucketize.py`, fine-tune, export, and bench against
+`local-opponents/v4.2` at both controls. **Re-take the 3.4% on v4.2's search before trusting
+it**: late move reductions change how often a king move is searched at all, and the crossing
+path is the only one whose cost depends on that. Note for whoever runs it: `densify` builds a dense
+batch, so at batch 16384 that is now 201 MB per batch rather than 50 MB; drop the batch size
+before dropping anything else.
+
+**The 32-bucket HalfKAv2_hm version does not start unless that bench shows a credible gain that
+outweighs the 3.4%.** Nothing here is evidence about strength, in either direction.
+
+
+## Cycle 5 (M5), 2026-09-10: a floor under the soft budget (time/soft-floor)
+
+Off `prod` at v4.2, one change against `local-opponents/v4.2`. The previous section ends on the
+problem: `soft = clock/25 + 400` has no floor against the 0.5 s increment, so at a 6 s clock the
+engine plans 640 ms for a move the increment pays 500 ms of, and a long game settles at 5-7 s
+whatever the build. Rated games have run to 90 moves, so this is insurance against a flag, not
+Elo; it ships only if it costs no strength.
+
+The change: the soft budget is taken from the clock above a reserve of `RESERVE_DIVISOR` (8) of
+the **first clock of the game** -- 15 s at the platform's 120 s, 5.6 s at the 45 s proxy, 1.25 s
+at 10 s. A fraction, not a fixed 10 s, because one build plays every control and a fixed reserve
+that is 8% of the platform's clock is 22% of the proxy's (that is what `time/reserve-floor`
+ace9ebc did). The first clock is inferred, because `get_move(fen, time_left_ms)` is told neither
+the base clock nor the increment; `budgets` records it and `reset` clears it, and `observe`
+already calls `reset` on any position that is not one legal move on from the one we handed back,
+so a second game in the same process cannot inherit a stale reserve. Below the reserve a move
+plans `SOFT_BONUS_MS` alone, 400 ms, under the increment, so the clock climbs back out. The hard
+budget and the abort path are untouched.
+
+### The replay, before any games were played
+
+`pgn/stack-120s/B-white.pgn`, the 172-move drawn game v4.2 played as White, walked through
+`fastsearch.think` position by position with the clock starting at 120 s, decremented by what
+each move actually spent on this machine and credited 0.5 s per move. The moves played are the
+game's, so every variant sees the same 166 positions and only the clock differs. The M5 is about
+2.5x the platform's core, so the depths are higher than a platform game's and the clock curve is
+the shape to read, not the absolute depth.
+
+| budgets | m40 | m60 | m80 | m100 | m120 | m160 | minimum | depth first 40 min/med/max | spend first 40 |
+|---|---|---|---|---|---|---|---|---|---|
+| prod (v4.2) | 49.3 | 28.1 | 14.8 | 8.8 | 6.5 | 5.6 | **5.30 s @m149** | 9 / 10 / 14 | 104.4 s |
+| reserve = first/12 | 60.6 | 39.3 | 24.7 | 17.2 | 13.8 | 12.5 | **11.64 s @m152** | 9 / 11 / 14 | 89.1 s |
+| reserve = first/8 | 56.8 | 37.7 | 27.7 | 23.8 | 19.7 | 17.5 | **16.91 s @m156** | 8 / 10 / 14 | 90.1 s |
+
+The prod row reproduces the real game (5.06 s at move 116 there, 5.30 s at move 149 here), which
+is what says the method is sound. /12 floors at 11.6 s, under the 15 s target, so the fraction was
+tuned once to /8: 3.2x prod's minimum at prod's median depth over the first 40 moves, for 14% less
+time spent there. That is the trade -- the reserve is depth given up early, and early depth is
+worth less than a move that is not made on a 5 s clock.
+
+### The rows
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| time-soft-floor | v4.2 | 45s+0.2s | 48 | +19 =13 -16 | 53.1% | +22 | -64 to +110 | 0 / 0 / 0 / 0 | 5.63s | 258 MB |
+
+Four 120 s + 0.5 s games against v4.2, one at a time, clocks read from the PGN rather than the
+log. Two openings: the English the replayed game came from, and the Petroff, picked as a
+symmetrical line likely to run long.
+
+| game | our colour | result | moves | our clock m40/60/80/100 | our minimum | past hard | our depth first 40 | theirs |
+|---|---|---|---|---|---|---|---|---|
+| English | white | 1-0 us, mate | 102 | 53.0 / 37.4 / 26.4 / 22.9 | 22.05 s @m98 | 0 | 7 / 10 / 14 | 7 / 10 / 14 |
+| English | black | 1-0 them, mate | 86 | 51.7 / 37.1 / 26.3 / end | 25.22 s @m82 | 0 | 7 / 12 / 16 | 7 / 12 / 15 |
+| Petroff | white | 1/2-1/2 threefold | 49 | 57.2 / end / end / end | 48.29 s @m47 | 0 | 7 / 10 / 14 | 7 / 10 / 14 |
+| Petroff | black | 1-0 them, mate | 75 | 57.7 / 39.0 / end / end | 33.86 s @m67 | 0 | 7 / 12 / 16 | 7 / 11 / 16 |
+
+One win, one draw and two losses over four games is noise; the 48-game row is the strength
+signal. The clock columns are the point. No move anywhere past the hard budget, and the
+comparable number is the English as White: 22.9 s at move 100, where v4.2's own 120 s game in the
+same opening and colour held 6.4 s and bottomed at 5.06 s.
+
+**What these four games do not show.** None of them ran long enough to reach the reserve -- 49 to
+102 moves against the replayed game's 172, and the lowest clock in the set is 22 s. So they say
+the change costs no depth (the depth distributions are v4.2's on the same board) and no
+over-budget move; the offline replay above is what says the floor holds in a game that actually
+gets long. The 48-game proxy row's lower bound is -64, below the -40 the brief asked for, on a
+positive centre: a 48-game row at exactly 50.0% has a lower bound near -86, so that is the
+interval's width and not a measured loss.
+
+## Cycle 5 (M5), 2026-09-10: the bare-endgame handover (eval/bare-endgame-blend)
+
+Off `prod` at v4.2 (9779e43), rebased onto v4.3 before the PR; one change, against
+`local-opponents/v4.2`. Rated round 102 is the evidence: a rook up in a won ending from move 53,
+the engine shuffled 47 moves (halfmove clock 94 of 100) instead of taking the d3 pawn with its
+king, and won only because the opponent dropped f3 at move 100. Round 103 drew by the fifty-move
+rule from the same class of position.
+
+**The seam.** The leaf is `(hand + net) // 2` until `fastnnue.bare_endgame` flips, which is when
+either side is down to a king and at most two men; past it v4.2 scored the leaf by the hand
+tables alone, whose scale is far lower. After 54.Kd1 (`8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b`) the
+blend reads +857 to +869 for shuffling and the hand reads the position after 54...Kxd3 as +408,
+so winning a pawn read as a 450 cp loss. `search_fixed` never played c3d3 at d8 or d12; with the
+network off it played it at once (+603). Stockfish 19 at depth 30: mate in 14 from move 54.
+
+**The policy.** Past the line the leaf is the blend plus one whole mop-up term
+(`fasteval.mop_up`, now its own accessor; the blend already carries half of it), with the
+hand's exact zero for a proved draw kept as an override. Pawn endings, neither side having a
+piece but the king, stay on the hand tables alone as in v4.2: the network is inverted there,
+measured over the pawn's march e2/e4/e5/e6 in KPvK as hand 72/112/152/232 against net
+161/-16/25/-95, so a blend leaf would pay 48 cp to advance, and mop-up is zero there by its
+400 cp gate. **The residual seam is a capture into a pure pawn ending**, blend on one side of
+the capture and hand on the other; it is the one case this change leaves.
+
+The hard gate: the five bare-endgame playouts. With the blend plus mop-up at full weight, KRvK
+mates in 37 plies, KQvK 25, KRRvK 9, KPvK 43, KBBvK 27 (hand alone: 33/17/11/41/99). KPvK is 43
+against v4.2's 41 because the promoted queen is a piece ending on the blend path; the depth-6
+search from KPvK returns the same move and score with the network on and off. Blend plus
+mop-up without the pawn-ending carve-out was the first attempt and drew KPvK by insufficient
+material, which is why the carve-out exists. Round 102: c3d3 at d8 +1191 and d12 +1330, e3d3
+at +1105 / +1302. `tests.test_fastsearch`'s 77-search score equality with `agent.py` holds.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bare-endgame-blend | v4.2 | 45s+0.2s | 48 | +19 =20 -9 | 60.4% | +73 | -1 to +155 | 0 / 0 / 0 / 0 | 5.63s | 259 MB |
+
+120 s + 0.5 s vs v4.2, one game per colour, clocks from the PGN: as White, won by checkmate in
+74 of our moves, clock 40.6 s at move 40, minimum 20.5 s at move 67, slowest move 7.08 s, no
+move past hard. As Black, drawn by the fifty-move rule in 157 of our moves: a bishop and a pawn
+each with the bishops on opposite colours from move 66, a dead draw by material and not a
+conversion this change missed; clock 37.4 s at move 40, minimum 5.3 s at move 143, slowest
+6.82 s, no move past hard. The 5.3 s is v4.2's long-game drift, on a base cut before the v4.3
+floor merged; the floor's replay puts that game near 17 s, and the PR carries both.
+
+## Cycle 9, 2026-09-10: a 2x soft iteration ceiling on v4.3. Rejected on the proxy screen
+
+Branch `time/v4.3-soft-overrun-2` at 7b0fd82, one constant: `SOFT_OVERRUN` 1.5 -> 2.0, against
+frozen `local-opponents/v4.3`. The reserve PR #24 added, `SOFT_DIVISOR`, the hard budget, the
+safety margin, the growth clamp, panic, the backstop, the search, the evaluation and the network
+are all untouched, and `budgets()` is not in the diff. **Rejected. `SOFT_OVERRUN` stays 1.5, and
+there is no version or tag for it.**
+
+### Where it came from
+
+A read of the rated logs asked why v4.2 finished games with 40 s left, about twice the
+opponent's clock. The answer was two things, and only one of them was a problem. The budget rule
+is scale-free, so a short game arithmetically ends with a large remainder whatever the engine
+does; but on top of that, **62 to 67% of moves over rounds 98 to 101 ended on the iteration
+gate with the depth unfinished**, at a median 0.71 of the soft budget and 0.27 of the hard one,
+and the deepest search in those four games was d23 against a cap of 64. That is not a tree being
+exhausted, and it is not a reserve anybody designed.
+
+Writing the gate out explains the number. If each depth costs `g` times the one before, elapsed
+settles near `last * g / (g - 1)`, the projection is about `(g - 1) * elapsed`, and the gate
+fires once elapsed passes `SOFT_OVERRUN / g` of the soft budget. The rated games measure `g` at
+about 2.4, so 1.5 stops a move at 0.63 of its budget and 2.0 would stop it at 0.83.
+
+### What v4.3 changed about the experiment
+
+v4.3's reserve makes the soft budget smaller, and that moves the clock at which this ceiling
+still binds a long way down: `2.0 * soft` stays under the hard budget from the first move to a
+**6.4 s clock** in a 120 s game, against only **above 17.8 s** on v4.2. At the 45 s proxy it
+binds above 7.8 s; at the 10 s control it binds only above 10.0 s, which is the starting clock,
+so **the change is very nearly inert at the fast control**. That is the whole reason the two
+controls below are not pooled.
+
+The reserve is also what made raising the ceiling safe to try at all: the long-game floor became
+the reserve's job, so modelled over 172 moves at 120 s the clock settles near 20 s at 2.0 against
+26 s at 1.5, where the same model on v4.2 gave 9.6 s and 11.4 s.
+
+### The screen
+
+Two detached worktrees, both read-only, differing in that one constant and nothing else. One
+game at a time, nothing else of ours running. Baseline calibration at a fixed depth 8 was
+**1.204M nodes/s before the proxy arena and 1.211M after**, so the two arenas are comparable to
+each other.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | duration |
+|---|---|---|---|---|---|---|---|---|---|
+| v4.3-soft-overrun-2 | v4.3 | 10s+0.1s | 40 | +13 =15 -12 | 51.2% | +9 | -79 to +97 | 0 / 0 / 0 / 0 | 1,541 s |
+| v4.3-soft-overrun-2 | v4.3 | 45s+0.2s | 40 | +10 =13 -17 | **41.2%** | **-61** | -158 to +27 | 0 / 0 / 0 / 0 | 5,624 s |
+
+**41.2% is the 40-game proxy result. It is not a pooled figure**, and the 80 games are
+deliberately not pooled: the ceiling is mostly inert at 10 s, so pooling would dilute the only
+control that measures the change with 40 games that mostly do not. Every one of the 80
+terminations is a legal chess ending -- 52 checkmates, 20 threefold, 4 insufficient material, 4
+fifty-move -- recounted from the PGNs rather than read off the arena's summary. By colour at the
+proxy: 40.0% as White, 42.5% as Black, so the deficit is on both sides.
+
+### The mechanism worked, and the score still went down
+
+Four paired diagnostic games, both engines logging, at each control:
+
+| 45 s + 0.2 s | v4.3 | so2 |
+|---|---|---|
+| spent/soft above the 7.8 s crossover | 0.65 | **0.85** |
+| spent/hard | 0.23 | 0.35 |
+| mean / median depth | 8.21 / 8 | **8.81 / 9** |
+| nodes/s | 1.345M | 1.356M |
+| slowest move | 3,809 ms | 4,914 ms |
+| partial iterations | 1 | 3 |
+| peak RSS | 258 MB | 250 MB |
+
+Utilisation moved to 0.85, inside the 0.78-0.90 the `SOFT_OVERRUN / g` arithmetic predicted, and
+bought **0.6 ply** of mean depth. So the change did exactly what it was designed to do and the
+result was still 41.2%. That combination is the useful part of this cycle: it is not a failed
+measurement, it is a measured effect with the wrong sign.
+
+Where the time went is visible in the clocks across all 80 scored PGNs. At the proxy the
+candidate ends games with a **mean final clock of 5.77 s against v4.3's 9.19 s**, on nearly
+identical minima (2.23 s against 2.19 s) and slowest moves (5.43 s against 5.26 s). It spends
+the extra time in the middlegame and arrives at the endgame thinner -- which is part of what
+PR #24's reserve exists to prevent, re-opened by relaxing the gate above it.
+
+### Why this stopped at 80 games
+
+The pre-registered plan was 200 proxy games. It was declined deliberately, and the reasoning is
+worth keeping. The interval **-158 to +27 does not prove the candidate weaker**; at 40 games it
+could not. But the sign is negative at the only control where the change acts, the mechanism
+check confirms the change took effect rather than the run being broken, and 200 proxy games is
+about eight hours against an upload deadline the next morning. Spending that to resolve a
+hypothesis whose prior had just moved against it was the wrong trade. If it is ever revisited,
+the thing to measure alongside is the 172-move replay, to test whether the endgame-clock story
+above is the real mechanism.
+
+**Verdict: rejected, and not extended.** The branch and every PGN and log are kept.

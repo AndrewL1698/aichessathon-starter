@@ -85,6 +85,89 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 evening · **Rejected** `time/v4.3-soft-overrun-2` (7b0fd82): `SOFT_OVERRUN`
+  1.5 -> 2.0, the iteration gate's ceiling. It was built and benched on **v4.3**, which was
+  `prod` at the time; `prod` has since moved to v4.4 (`eval/bare-endgame-blend`), and the
+  rejection stands either way because v4.4 changed the leaf past the bare-endgame line and not
+  the clock. **41.2% over 40 games at the 45 s + 0.2 s proxy, Elo -61, interval -158 to +27**
+  against frozen `local-opponents/v4.3`. **That 41.2% is the 40-game proxy result and not a
+  pooled 80-game number**: the same candidate scored 51.2% (+9, -79 to +97) over 40 games at
+  10 s + 0.1 s, and the two are deliberately not pooled, because v4.3's reserve leaves this
+  ceiling binding only above a 10.0 s clock at the fast control -- which is where that control
+  starts. 0 illegal, 0 exceptions, 0 timeouts, 0 over-budget moves in all 80 games; calibration
+  1.204M nodes/s before the proxy arena and 1.211M after, so the arenas are comparable.
+  **The 200-game proxy extension was declined on purpose**, and that is a decision rather than
+  an omission: the interval does not prove the candidate weaker, but the sign is negative at the
+  only control where the change acts, the diagnostics confirm the change did take effect
+  (utilisation 0.65 -> 0.85 of the soft budget, +0.6 ply of mean depth), and eight more hours of
+  arena the night before an upload deadline was the wrong trade. **`SOFT_OVERRUN` stays 1.5 in
+  prod and no version or tag was created for a rejected code change.** The branch is pushed and
+  kept, as are every PGN and log; cycle 9 in `docs/BENCH_LOG.md` has the full experiment,
+  including the clue for anyone who revisits it -- the candidate ends proxy games on a mean
+  5.77 s clock against v4.3's 9.19 s, so it buys its depth out of the endgame.
+- 2026-09-10 afternoon · **v4.4** = v4.3 + PR #25 (`eval/bare-endgame-blend`, from the M5 session, merged
+  on Neil's instruction): past the 3-man line the leaf is the blend plus one mop-up term, except pure pawn
+  endings, which stay hand-only; the round-102 seam (a mate-in-14 shuffled for 47 moves) is closed and all
+  five conversion endgames still mate. 45 s proxy vs v4.2 60.4% (+73, -1 to +155), 0 disqualifiers; two
+  120 s games clean. Frozen at `local-opponents/v4.4`, tag `v4.4`; **this is the upload**. Still open on
+  the laptop: `eval/blend-weight` (net 2:1) benching vs v4.3; on the M5: the e36 net's pooled 10 s run.
+  Neither holds the submission.
+- 2026-09-10 midday · **v4.3** = v4.2 + PR #24 (`time/soft-floor`, from the M5 session): a reserve of
+  the first clock / 8 kept out of the soft budget so long games floor near 17 s instead of 5 s. Proxy
+  within noise (+22), four 120 s games with minima 22 to 48 s, 0 disqualifiers. Frozen at
+  `local-opponents/v4.3`, tag `v4.3`; **upload candidate**. In flight on the M5: `eval/bare-endgame-blend`
+  (round 102: the 3-man handover seam stalled a mate-in-14 for 47 moves; policy: blend + mop-up past the
+  seam except pure pawn endings; five conversions green) and the e36 net (+55 at 10 s, +51 at 45 s,
+  neither lower bound above zero; 200 more games pending).
+- 2026-09-10 · **Built, not benched** `nnue/king-buckets-4` (011e75c, worktree
+  `../nnue-king-buckets-4`, branched from `prod` afb34f4): four king buckets, 3,072 inputs, the
+  experiment cycle 7's rejection pointed at. **Deliberately not HalfKAv2_hm** -- four buckets,
+  not 32, no king-file mirroring -- because a 32-bucket scheme divides the same corpus 32 ways
+  and a bucket with too few positions learns noise. `docs/NNUE_KING_BUCKETS.md` is the spec;
+  cycle 8 in `docs/BENCH_LOG.md` has the numbers. `fastsearch.py`, `fasteval.py` and `agent.py`
+  are byte-identical on the branch, so search, blend, time management, the UCI reply and the
+  python-chess fallback are v4.1's exactly. **Speed gate passed: 3.4% of the node rate**
+  (1.341M against 1.390M at depth 7) at **identical node counts**, which is what makes it a
+  clean A/B -- a warm-started net evaluates identically, so the tree is the same and only the
+  time differs. Exactness: 11,000 positions return the 768 net's integer, 11,000 exact against
+  the reference, 30,000 randomised make/unmake sequences with 3,175 bucket crossings and 54
+  crossing castles, and all of it repeated on a net whose four blocks differ, because a
+  warm-started file cannot tell a bucketing bug from a correct bucketing. **No strength claim
+  exists and none can until a net is fine-tuned on bucketed shards** -- the blocks are copies,
+  so a bench today scores 50% by construction, and the init line says so out loud to stop a
+  stray row being read as a result. Next, in order: rebuild shards (old ones carry 768 indices
+  and are now refused by design), warm start with `tools/nnue/bucketize.py`, fine-tune, export,
+  bench against `local-opponents/v4.2` at both controls. **The branch is based on afb34f4,
+  which is v4.1**: v4.2 (PVS, late move reductions, the spend ceiling) landed on `prod` after
+  it and changed only `fastsearch.py`, which this branch does not touch, so it merges up
+  cleanly -- but merge it up before benching, and re-take the 3.4% on v4.2's search, because
+  reductions change how often a king move is searched at all. Whoever trains it should know
+  `densify` now builds a 201 MB dense batch at batch 16384, against 50 MB before; drop the batch
+  size before anything else. **The 32-bucket version does not start unless that bench shows a
+  credible gain that outweighs the 3.4%.**
+- 2026-09-10 · **Rejected** the 163M-position 768-input net (`nnue-h256-100m-e71.npz` on
+  `nnue/weights-v1`), benched as the last read on the 768 architecture before anyone starts on
+  king-relative features. Code identical to `prod` afb34f4 = v4.1; the weight file is the only
+  variable. **44.8% pooled over 144 games** vs `local-opponents/v4.1` (43.8% over 96 at
+  10 s + 0.1 s, Elo -44, -106 to +16; 46.9% over 48 at 20 s + 0.2 s, -22, -95 to +50), both
+  controls below 50%, **0 / 0 / 0 / 0 across all 214 games played in the cycle**. It is not a
+  speed question: 1.367M nodes/s at depth 7 against 1.363M, suite 26/47 against 27/47, import
+  4.24 s, peak RSS 254 MB. **The finding to carry forward: validation loss did not order strength
+  even within one policy and one architecture.** The candidate wins every offline number (-6.1e-4
+  validation loss, qa=512, the most precise export the project has made) and loses on the board;
+  the epoch-11 file from the same run had already benched at parity over 96 games, so that is two
+  files and 240 games from the 163M run with neither ahead. The pooled upper bound of +10 Elo is
+  what settles it against spending an upload. **The blend was re-confirmed on the new weights:**
+  net alone 28.1% and hand alone 21.9% over 32 games each, about +119 and +177 Elo for the blend.
+  Method note worth keeping: both builds were frozen into `chmod a-w` directories under
+  `~/Documents/bench-snapshots/2026-09-10-nnue768/` and their checksums re-read after the last
+  game, so what was measured is provably what was snapshotted, and every game ran out of a
+  read-only directory, which is the read-only-filesystem check for free. PGNs under
+  `~/Documents/pgn/2026-09-10-*`; the numbers are cycle 7 in `docs/BENCH_LOG.md`. **What this
+  leaves for the king-relative work:** more data on the same 768 features has now failed twice,
+  which is the argument that the feature set is the binding constraint. v4.2 landed after this
+  run and left `weights/nnue.npz` byte-identical, so the verdict still names the file that
+  ships.
 - 2026-09-10 afternoon · **rounds 91 to 96 were v4.1-contempt** (the 01:23 zip), not the PVS/LMR
   `v4.2`: 2 W 1 D 3 L, the three losses to opponents at ACPL 17 to 20 on depth-6/7 moves with 25 to
   98 s on the clock; the contempt change decided no move (checked at fixed depth on the two it

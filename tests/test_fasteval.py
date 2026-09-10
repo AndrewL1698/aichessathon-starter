@@ -171,6 +171,55 @@ def check_mirror(fens: list[str]) -> int:
     return checked
 
 
+# `mop_up` on positions whose term was worked out from the constants once and frozen here.
+# The corner figure being the larger is the term doing its job: driving the weak king off the
+# centre is the whole reason it exists. The zeros are the two gates -- KPvK is only a pawn
+# ahead, KBvK cannot mate at all -- and they are why adding the term to a leaf cannot turn a
+# drawn position into a won one.
+MOP_UP_CASES: tuple[tuple[str, str, int], ...] = (
+    ("KRvK, weak king on e5", "8/8/8/4k3/8/8/8/R3K3 w - - 0 1", 45),
+    ("KRvK, weak king cornered", "k7/8/8/8/8/8/8/R3K3 w - - 0 1", 68),
+    ("the same, from the weak side", "k7/8/8/8/8/8/8/R3K3 b - - 0 1", -68),
+    ("KQvK", "8/8/8/3k4/8/8/8/3KQ3 w - - 0 1", 41),
+    ("KRRvK", "8/8/8/4k3/8/8/8/R3K2R w - - 0 1", 41),
+    ("KPvK, under the advantage gate", "8/4k3/8/8/8/8/4P3/4K3 w - - 0 1", 0),
+    ("KBvK, a dead draw", "8/8/8/4k3/8/8/8/2B1K3 w - - 0 1", 0),
+    ("KRvK the other way up", "8/8/8/8/8/2k5/7r/3K4 w - - 0 1", -77),
+)
+
+
+def check_mop_up(fens: list[str]) -> int:
+    """`mop_up` is `evaluate`'s mop-up term alone, and `fastsearch.leaf` adds it to a blend.
+
+    It exists because the leaf past `fastnnue.bare_endgame` is the blend of the two
+    evaluations plus a whole mop-up term, and the blend only carries half of one; a term that
+    drifted from `evaluate`'s would put the step back in the evaluation that cost rated round
+    102 forty-seven moves. `evaluate` folds the term in and has to stay byte-identical, so
+    this is the recount, and what is checked is that it recounts the same thing: frozen values
+    on positions the term was worked out for, the 120-centipawn bound the weights were chosen
+    to respect, and zero everywhere the gate does not fire -- which includes every position
+    `evaluate` calls a dead draw.
+    """
+    for label, fen, want in MOP_UP_CASES:
+        board, st, _ = fb.from_fen(fen)
+        got = int(fe.mop_up(board, st))
+        if got != want:
+            raise Failure(f"mop_up on {label} ({fen!r}) is {got}, not the {want} it was")
+    checked = 0
+    for fen in fens:
+        board, st, _ = fb.from_fen(fen)
+        term = int(fe.mop_up(board, st))
+        if abs(term) > fe.MOP_UP_CMD * 6 + fe.MOP_UP_CLOSE * 12:
+            raise Failure(f"mop_up on {fen!r} is {term}, past the bound the weights promise")
+        if term != 0 and int(fe.evaluate(board, st)) == 0:
+            raise Failure(
+                f"mop_up on {fen!r} is {term} in a position `evaluate` calls a dead draw, so "
+                f"adding it to a leaf would invent a won position"
+            )
+        checked += 1
+    return checked
+
+
 # Rook-pawn endings the rule in `evaluate` must call a draw, and near misses it must not.
 KPK_DRAWS: tuple[str, ...] = (
     "7k/8/K6P/8/8/8/8/8 w - - 0 1",
@@ -272,6 +321,10 @@ def main() -> None:
         print(f"    {name:<12} {tally[name]:,}")
 
     print(f"\nmirror symmetry on {check_mirror(fens[:1000]):,} positions")
+    print(
+        f"mop-up term: {len(MOP_UP_CASES)} frozen positions, bounded and never non-zero in a "
+        f"dead draw on {check_mop_up(fens):,} more"
+    )
 
     print("\nspeed")
     check_speed()
