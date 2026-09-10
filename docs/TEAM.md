@@ -7,7 +7,7 @@ a local file.
 
 ## Hard dates
 
-- Upload deadline **Thu 2026-09-11 11:00 UK**. The latest validated upload plays.
+- Upload deadline **Fri 2026-09-11 11:00 UK (verified against aichessathon.com/docs on 2026-09-10: "Uploads close 11 September 11:00")**. The latest validated upload plays.
 - Final qualification: 13-round Swiss on locked builds that afternoon. The hourly rated rounds
   (08:00–22:00) only seed it.
 - London final Sep 12 needs a UK university student on the team. Eligibility unconfirmed.
