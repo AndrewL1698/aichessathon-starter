@@ -1132,3 +1132,29 @@ cost of not fixing it is clock: three v4.2 games have now ended under 13 s (90, 
 
 The move-49 position is in `tests/positions`, now 67. Blunders per game, real only, v4.2: 2, 6, 0,
 1, 3, 1 over rounds 98 to 103 (4 W 2 D).
+
+### 2026-09-10, round 104: v4.2's first loss, to Imperial Larper as Black. A gate-refused depth-8 move with 67 s on the clock.
+
+Banner and depth profile: v4.2 (depth 7 to 12, median 10, at 0.52M nps). Stockfish 19 at depth 18:
+our ACPL 51 with three real blunders, two of them inside a lost position; Imperial Larper's ACPL 28
+with no real mistake, a strong opponent. 117.4 s used, 28.6 s left after 52 moves, all lines survive.
+
+**How it was lost.** Level to move 25 (Stockfish between -77 and +38, our score within 9 cp of it
+on average). Then three moves: 26...Qg5 (-47 to -161, depth 9 after 5.2 s; ...Rxb5 held), 27...Bg7
+(-197 to -257), and **28...Qxh5 (-277 to -544; ...c4 held), played at depth 8 after 1,136 ms of a
+3,114 ms soft budget with 67 s on the clock**: the gate refused depth 9. From there the opponent
+converted without error. Our score read -63 at move 28 where Stockfish had -277, and trailed by 140
+to 280 cp through move 32, the losing-side compression again.
+
+**Where this sits.** The decisive move is the class every review since round 82 has named: a
+move played under half the soft budget with most of the clock unused, because the projected next
+iteration did not fit. It decided round 82 (34.Qc6), round 86 (16...Bg7), round 87 (28.bxc4) and now
+round 104; round 101's 28...Rb8 was the same shape in a game that stayed won. v4.2 moved the class
+from depth 6 to depth 8 and did not remove it. PR #18 (`time/hard-divisor-6`) is the one measured
+candidate against it, not proven on 144 proxy games; the gate's projection cap (`GROWTH_MAX` 8
+against a measured 4.5 to 6.5) is the untried half of the same idea, and v4.2's own 1.5x-soft cap
+on the gate means a relaxed projection can no longer run the clock the way it did at v4.1. Fifteen
+of the 52 moves in this game stopped under half the soft budget.
+
+The move-28 position is in `tests/positions`, now 68. Blunders per game, real only, v4.2: 2, 6, 0,
+1, 3, 1, 3 over rounds 98 to 104 (4 W 2 D 1 L).

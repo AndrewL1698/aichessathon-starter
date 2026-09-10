@@ -81,3 +81,5 @@ r2qrbk1/2pb1ppp/p1np1n2/1p6/P2PP3/1B3N2/1P1N1PPP/R1BQR1K1 w - - 1 13; bm e4e5; i
 5k2/5p2/8/1q1p1r2/p2p4/K2P4/1P2QP2/3B4 b - - 11 40; bm b5c5; id "r102 m40 Qb8 -179"
 # Round 103 (v4.2, drawn vs Waterside Research by the fifty-move rule). Stockfish 19 depth 18, 150 cp threshold, real only.
 8/3R4/8/pp1P4/1k3K2/8/1r3P2/8 w - - 1 49; bm f4e3; id "r103 m49 Ra7 -251"
+# Round 104 (v4.2's first loss, vs Imperial Larper). Stockfish 19 depth 18, 150 cp threshold; the two later flagged moves were in a lost position.
+1rb3k1/R5b1/3p3p/1PpP2qP/3pP1p1/3P2P1/1P2B2N/4Q1K1 b - - 2 28; bm c5c4; id "r104 m28 Qxh5 -267"
