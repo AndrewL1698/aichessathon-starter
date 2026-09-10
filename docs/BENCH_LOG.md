@@ -1256,3 +1256,47 @@ over-budget move; the offline replay above is what says the floor holds in a gam
 gets long. The 48-game proxy row's lower bound is -64, below the -40 the brief asked for, on a
 positive centre: a 48-game row at exactly 50.0% has a lower bound near -86, so that is the
 interval's width and not a measured loss.
+
+## Cycle 5 (M5), 2026-09-10: the bare-endgame handover (eval/bare-endgame-blend)
+
+Off `prod` at v4.2 (9779e43), rebased onto v4.3 before the PR; one change, against
+`local-opponents/v4.2`. Rated round 102 is the evidence: a rook up in a won ending from move 53,
+the engine shuffled 47 moves (halfmove clock 94 of 100) instead of taking the d3 pawn with its
+king, and won only because the opponent dropped f3 at move 100. Round 103 drew by the fifty-move
+rule from the same class of position.
+
+**The seam.** The leaf is `(hand + net) // 2` until `fastnnue.bare_endgame` flips, which is when
+either side is down to a king and at most two men; past it v4.2 scored the leaf by the hand
+tables alone, whose scale is far lower. After 54.Kd1 (`8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b`) the
+blend reads +857 to +869 for shuffling and the hand reads the position after 54...Kxd3 as +408,
+so winning a pawn read as a 450 cp loss. `search_fixed` never played c3d3 at d8 or d12; with the
+network off it played it at once (+603). Stockfish 19 at depth 30: mate in 14 from move 54.
+
+**The policy.** Past the line the leaf is the blend plus one whole mop-up term
+(`fasteval.mop_up`, now its own accessor; the blend already carries half of it), with the
+hand's exact zero for a proved draw kept as an override. Pawn endings, neither side having a
+piece but the king, stay on the hand tables alone as in v4.2: the network is inverted there,
+measured over the pawn's march e2/e4/e5/e6 in KPvK as hand 72/112/152/232 against net
+161/-16/25/-95, so a blend leaf would pay 48 cp to advance, and mop-up is zero there by its
+400 cp gate. **The residual seam is a capture into a pure pawn ending**, blend on one side of
+the capture and hand on the other; it is the one case this change leaves.
+
+The hard gate: the five bare-endgame playouts. With the blend plus mop-up at full weight, KRvK
+mates in 37 plies, KQvK 25, KRRvK 9, KPvK 43, KBBvK 27 (hand alone: 33/17/11/41/99). KPvK is 43
+against v4.2's 41 because the promoted queen is a piece ending on the blend path; the depth-6
+search from KPvK returns the same move and score with the network on and off. Blend plus
+mop-up without the pawn-ending carve-out was the first attempt and drew KPvK by insufficient
+material, which is why the carve-out exists. Round 102: c3d3 at d8 +1191 and d12 +1330, e3d3
+at +1105 / +1302. `tests.test_fastsearch`'s 77-search score equality with `agent.py` holds.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bare-endgame-blend | v4.2 | 45s+0.2s | 48 | +19 =20 -9 | 60.4% | +73 | -1 to +155 | 0 / 0 / 0 / 0 | 5.63s | 259 MB |
+
+120 s + 0.5 s vs v4.2, one game per colour, clocks from the PGN: as White, won by checkmate in
+74 of our moves, clock 40.6 s at move 40, minimum 20.5 s at move 67, slowest move 7.08 s, no
+move past hard. As Black, drawn by the fifty-move rule in 157 of our moves: a bishop and a pawn
+each with the bishops on opposite colours from move 66, a dead draw by material and not a
+conversion this change missed; clock 37.4 s at move 40, minimum 5.3 s at move 143, slowest
+6.82 s, no move past hard. The 5.3 s is v4.2's long-game drift, on a base cut before the v4.3
+floor merged; the floor's replay puts that game near 17 s, and the PR carries both.
