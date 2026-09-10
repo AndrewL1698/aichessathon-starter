@@ -669,7 +669,7 @@ rate in `tests.test_fastsearch` is unchanged (3.85M / 2.59M nodes/s on start / k
 contempt 0 where v4.0 scored +182 to +292 with contempt -50; the won rook-pawn ending with the
 attacking king on g7 (+928), the centre-pawn KPvK (+162) and KRvK (+614) are unchanged.
 
-## Cycle 4, 2026-09-09: pruning on the compiled engine with a learned leaf
+## Search cycle 4, 2026-09-09: pruning on the compiled engine with a learned leaf
 
 Baseline `local-opponents/v4.0`. Cycles 1 to 3 measured null move, LMR and futility as noise on
 the python-chess engine at 60k nodes/s; the engine is now the compiled one at 1.3M nodes/s with
