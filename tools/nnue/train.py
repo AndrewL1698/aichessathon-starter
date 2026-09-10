@@ -21,10 +21,12 @@ Run from the repo root:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import chess
 import numpy as np
@@ -193,6 +195,101 @@ def run_epoch(
     return total / max(seen, 1)
 
 
+def checkpoint_digest(path: Path) -> str:
+    """The sha256 of the checkpoint file, so a run says which bytes it started from."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_init_checkpoint(path: Path, model: Nnue, arguments: argparse.Namespace) -> dict[str, Any]:
+    """Load `path` into `model` as a warm start, or refuse. Returns provenance for the run.
+
+    Everything is checked *before* the state dict is loaded, and every failure is a
+    `SystemExit`. There is deliberately no fallback: a run asked to warm start and quietly
+    starting from random weights instead would produce a checkpoint that looks like a
+    fine-tune, trains like one, and is not one, and nothing downstream could tell. The whole
+    point of the king-bucket experiment is that the net begins as the 768 net and moves from
+    there, so "it did not load" has to be a stopped run, not a line of output nobody reads.
+
+    What is checked, and why each one matters:
+
+      hidden        a width mismatch is a different net; `Nnue(hidden)` would refuse the load
+                    anyway, but with a torch error rather than one that says what to do.
+      cp_scale      the target is `sigmoid(cp / cp_scale)`, so training a checkpoint under a
+                    different scale silently changes what every label means.
+      target        an absolute net and a residual net predict different quantities; loading
+                    one as the other is wrong by the whole hand evaluation.
+      layer 1 shape the 768-input file has to be bucketised first. This is the mismatch that
+                    will actually happen, so it names the tool that fixes it.
+    """
+    if not path.is_file():
+        raise SystemExit(f"--init-checkpoint {path} does not exist")
+    try:
+        checkpoint: dict[str, Any] = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as failure:  # any unreadable checkpoint stops the run, whatever it raised
+        raise SystemExit(f"--init-checkpoint {path} could not be read: {failure}") from failure
+    for key in ("model", "hidden", "cp_scale"):
+        if key not in checkpoint:
+            raise SystemExit(f"--init-checkpoint {path} has no {key!r}; it is not a checkpoint")
+
+    hidden = int(checkpoint["hidden"])
+    if hidden != arguments.hidden:
+        raise SystemExit(
+            f"--init-checkpoint {path} is {hidden} wide and this run is --hidden "
+            f"{arguments.hidden}"
+        )
+    cp_scale = float(checkpoint["cp_scale"])
+    if abs(cp_scale - float(arguments.cp_scale)) > 1e-6:
+        raise SystemExit(
+            f"--init-checkpoint {path} was trained at cp_scale {cp_scale:g} and this run is "
+            f"--cp-scale {arguments.cp_scale:g}; the labels would mean different things"
+        )
+    target = str(checkpoint.get("target", "cp"))
+    if target != arguments.target:
+        raise SystemExit(
+            f"--init-checkpoint {path} predicts {target!r} and this run is --target "
+            f"{arguments.target!r}"
+        )
+    state = checkpoint["model"]
+    if "l1.weight" not in state:
+        raise SystemExit(f"--init-checkpoint {path} has no l1.weight")
+    shape = tuple(state["l1.weight"].shape)
+    if shape != (arguments.hidden, NUM_FEATURES):
+        hint = ""
+        if len(shape) == 2 and shape[1] == NUM_FEATURES // 4:
+            hint = (
+                "; it is a 768-input net, so bucketise it first with "
+                "`python -m tools.nnue.bucketize --checkpoint <in> --out <out>`"
+            )
+        raise SystemExit(
+            f"--init-checkpoint {path} has l1.weight {shape}, this run wants "
+            f"{(arguments.hidden, NUM_FEATURES)}{hint}"
+        )
+
+    # strict=True: a checkpoint missing a layer, or carrying one this model does not have, is a
+    # different architecture and stops the run like every other mismatch above.
+    model.load_state_dict(state, strict=True)
+    provenance = {
+        "path": str(path.resolve()),
+        "sha256": checkpoint_digest(path),
+        "hidden": hidden,
+        "cp_scale": cp_scale,
+        "target": target,
+        "epoch": checkpoint.get("epoch"),
+        "val_loss": checkpoint.get("val_loss"),
+        "warm_started_from": checkpoint.get("warm_started_from"),
+    }
+    print(
+        f"warm start: loaded {path} (epoch {provenance['epoch']}, val "
+        f"{provenance['val_loss']}, sha256 {provenance['sha256'][:12]}), "
+        f"l1.weight {shape}"
+    )
+    return provenance
+
+
 def train(arguments: argparse.Namespace) -> None:
     device = pick_device(arguments.device)
     print(f"device: {device}")
@@ -213,7 +310,22 @@ def train(arguments: argparse.Namespace) -> None:
         hand_loss = float(np.mean((hand_only - target[validation]) ** 2))
         print(f"baseline val loss, hand evaluation alone (net = 0): {hand_loss:.6f}")
 
+    # The split above is drawn from `generator` and nothing below touches that stream, so the
+    # rows a run trains and validates on are a function of `--seed`, `--val-fraction` and the
+    # shard order alone -- the same with a warm start as without one. That is what makes a
+    # fine-tune's validation loss comparable to the run it started from.
     model = Nnue(arguments.hidden).to(device)
+    # Warm start *before* the optimiser is built, so Adam's parameter groups refer to the
+    # tensors that will actually be trained. The optimiser itself starts fresh: no moment
+    # estimates are carried over from the run that produced the checkpoint. That is a choice,
+    # and the reason is that the moments belong to a different objective -- the 768-input net
+    # was fitting a feature set a quarter this size -- so first- and second-moment estimates
+    # from it describe gradients this model will never see again. A fresh Adam spends its first
+    # few hundred steps rebuilding them, which is cheap next to an epoch, and it means a warm
+    # start differs from a cold one in exactly one way: where the weights began.
+    init_provenance: dict[str, Any] | None = None
+    if arguments.init_checkpoint:
+        init_provenance = load_init_checkpoint(Path(arguments.init_checkpoint), model, arguments)
     optimiser = torch.optim.Adam(model.parameters(), lr=arguments.lr)
     checkpoints = Path(arguments.checkpoints)
     checkpoints.mkdir(parents=True, exist_ok=True)
@@ -253,6 +365,11 @@ def train(arguments: argparse.Namespace) -> None:
                 "target": arguments.target,
                 "epoch": epoch,
                 "val_loss": val_loss,
+                # Provenance, in every checkpoint rather than only the first: a fine-tune's
+                # descendants are the files that get exported and benched, and "which net did
+                # this start from" is the question a bench row cannot answer later. None when
+                # the run started from random weights.
+                "init_checkpoint": init_provenance,
             },
             checkpoints / f"epoch_{epoch:03d}.pt",
         )
@@ -276,6 +393,15 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Train the NNUE evaluation.")
     parser.add_argument("--data", default="tools/nnue/data/lichess", help="shard directory")
     parser.add_argument("--checkpoints", default="tools/nnue/checkpoints")
+    parser.add_argument(
+        "--init-checkpoint",
+        default=None,
+        help=(
+            "warm start from this checkpoint instead of random weights; its width, "
+            "cp scale, target and layer-1 shape must match this run, and a mismatch "
+            "stops the run rather than falling back to random initialisation"
+        ),
+    )
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=16384)

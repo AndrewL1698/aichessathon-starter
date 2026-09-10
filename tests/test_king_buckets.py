@@ -20,6 +20,7 @@ The checks, in the order they run:
   reference         numba inference equals nnue_ref, over positions in every bucket
   increments        push equals a from-scratch refresh over >= 10,000 randomised plies
   distinct          the same, on a net whose four blocks differ, which a warm start's do not
+  rebucket          the scheme-1 -> scheme-2 shard converter against direct extraction
   bounds            the int16 accumulator bound, proved per block and watched empirically
   file              a bucketised weight file loads, evaluates identically and fits the cap
   import            import time and peak resident memory of a real agent process
@@ -45,7 +46,7 @@ import fastsearch as fs
 from tests.test_fastboard import STRESS_SEEDS
 from tests.test_fasteval import ENDGAME_SEEDS
 from tests.test_nnue import DELTA_SEEDS, Failure, sample
-from tools.nnue import bucketize, features, nnue_ref
+from tools.nnue import bucketize, features, nnue_ref, rebucket
 
 ROOT = Path(__file__).resolve().parent.parent
 WEIGHTS = ROOT / "weights" / "nnue.npz"
@@ -55,6 +56,18 @@ ZIP_CAP_BYTES = 50_000_000
 INIT_BUDGET_S = 90.0
 # What the container gives us.
 MEMORY_CAP_MB = 2048
+
+
+# What a full-length randomised walk has to have reached before it is allowed to pass. A walk
+# that never castled or never crossed a bucket boundary proves nothing about those paths, and
+# silence is exactly how that kind of gap survives.
+REQUIRED = ("captures", "en passant", "promotions", "castles", "nulls", "crossed", "same bucket")
+# What the shorter distinct-block walk has to have reached. En passant is rare enough that a
+# 4,000-ply sample can miss it honestly -- it did, once `tests/test_nnue.py` changed under v4.4
+# and moved the shared random stream -- and that walk is not there to cover en passant anyway:
+# the full walk above already did, on the same code, with the only difference being the weights.
+# What this one is for is the bucket paths on a net whose blocks actually differ.
+BUCKET_REQUIRED = ("captures", "crossed", "same bucket")
 
 
 def mailbox(square: int) -> int:
@@ -302,7 +315,9 @@ def check_reference(fens: list[str], net: fn.Net) -> dict[str, int]:
     return tally
 
 
-def check_increments(rng: random.Random, wanted: int, net: fn.Net) -> dict[str, int]:
+def check_increments(
+    rng: random.Random, wanted: int, net: fn.Net, require: tuple[str, ...] = REQUIRED
+) -> dict[str, int]:
     """`push` has to equal a from-scratch refresh, at every ply, including bucket crossings.
 
     The same walk `tests/test_nnue.py` does, with the king-bucket cases counted separately and
@@ -408,10 +423,12 @@ def check_increments(rng: random.Random, wanted: int, net: fn.Net) -> dict[str, 
         fn.refresh(board, acc, 0, net)
         descend(board, st, undo, 0, 0)
 
-    for name in ("captures", "en passant", "promotions", "castles", "nulls", "crossed",
-                 "same bucket"):
+    for name in require:
         if not tally[name]:
-            raise Failure(f"the walk never reached a single {name}, so it proves nothing about it")
+            raise Failure(
+                f"the walk never reached a single {name} in {tally['plies']:,} plies, so it "
+                f"proves nothing about it"
+            )
     return tally
 
 
@@ -471,13 +488,115 @@ def check_distinct_blocks(rng: random.Random, fens: list[str], net: fn.Net) -> s
         plain, _ = _accumulator(fen, net)
         differ += int(fn.infer(plain, 0, side, net)) != got
 
-    walk = check_increments(rng, 4_000, other)
+    walk = check_increments(rng, 4_000, other, require=BUCKET_REQUIRED)
     if not walk["crossed"]:
         raise Failure("the distinct-block walk never crossed a bucket boundary")
     return (
         f"{len(fens):,} positions exact against the reference with four different blocks "
         f"({differ:,} of them score differently from the warm-started net, as they must), and "
         f"{walk['plies']:,} more plies with {walk['crossed']:,} crossings"
+    )
+
+
+def check_rebucket(rng: random.Random, fens: list[str], by_bucket: dict[int, list[str]]) -> str:
+    """`tools/nnue/rebucket.py` must agree with building scheme-2 features from the board.
+
+    The converter never sees a board: it recovers the bucket from the row's own plane-5 king
+    feature and adds `bucket * 768`. So the thing to check is that its answer equals what
+    `features.features` produces from the position -- on real positions, in all four buckets,
+    and on mirrors. The mirror is the case that matters most: it is where the flip and the
+    bucket have to compose in the right order, and a converter that read the king's square
+    unflipped would pass everything else and fail exactly there.
+
+    Scheme-1 rows are synthesised as `features(board) % 768`, which is precisely the index the
+    768 scheme assigned, because a scheme-2 index is that number plus a multiple of 768.
+    """
+    boards = [chess.Board(f) for f in fens]
+    boards += [chess.Board(f) for fens_ in by_bucket.values() for f in fens_]
+    boards += [board.mirror() for board in list(boards)]
+    rng.shuffle(boards)
+
+    wanted = np.full((len(boards), features.MAX_ACTIVE), features.PAD, dtype=np.int16)
+    flat = np.full((len(boards), features.MAX_ACTIVE), features.PAD, dtype=np.int16)
+    seen: dict[int, int] = dict.fromkeys(range(features.NUM_BUCKETS), 0)
+    for row, board in enumerate(boards):
+        active = features.features(board)
+        wanted[row, : active.size] = active
+        flat[row, : active.size] = active % features.BASE_FEATURES
+        seen[int(active[0]) // features.BASE_FEATURES] += 1
+    if any(count == 0 for count in seen.values()):
+        raise Failure(f"the sample does not cover every bucket: {seen}")
+
+    got = rebucket.convert_indices(flat, "test")
+    if not np.array_equal(got, wanted):
+        row = int(np.argmax((got != wanted).any(axis=1)))
+        raise Failure(
+            f"rebucket disagrees with direct extraction on {boards[row].fen()!r}: "
+            f"{sorted(int(x) for x in got[row] if x >= 0)} against "
+            f"{sorted(int(x) for x in wanted[row] if x >= 0)}"
+        )
+    if got.dtype != flat.dtype or got.shape != flat.shape:
+        raise Failure("rebucket changed the index matrix's dtype or shape")
+
+    # A whole shard, so the on-disk path is covered too: every other array and the row order
+    # have to survive, and the marker has to say scheme 2.
+    with tempfile.TemporaryDirectory() as directory:
+        source = Path(directory) / "in" / "shard_0000.npz"
+        source.parent.mkdir(parents=True)
+        cp = np.array(rng.sample(range(-2000, 2000), len(boards)), dtype=np.int16)
+        wdl = np.array([rng.choice([-1, 0, 1]) for _ in boards], dtype=np.int8)
+        extra = np.arange(len(boards), dtype=np.int32)
+        np.savez_compressed(source, indices=flat, cp=cp, wdl=wdl, hand=extra)
+        out = Path(directory) / "out" / "shard_0000.npz"
+        rows, spread = rebucket.convert_shard(source, out)
+        with np.load(out) as shard:
+            if int(shard["scheme"]) != fn.SCHEME_VERSION:
+                raise Failure("the converted shard does not declare scheme 2")
+            if not np.array_equal(shard["indices"], wanted):
+                raise Failure("the converted shard's indices are not the direct extraction")
+            if not np.array_equal(shard["cp"], cp):
+                raise Failure("the converter changed cp")
+            if not np.array_equal(shard["wdl"], wdl):
+                raise Failure("the converter changed wdl")
+            if not np.array_equal(shard["hand"], extra):
+                raise Failure("the converter dropped an array it did not understand")
+
+        # And it has to refuse what it cannot convert, rather than guessing.
+        # A real plane-5 index, so the row genuinely has two friendly kings. Taking "some
+        # feature from row 0" instead is how the first version of this passed: piece_map order
+        # put a pawn there, the row still held exactly one king, and nothing was refused.
+        second_king = np.int16(rebucket.KING_LOW + 3)
+        broken_cases = {
+            "no king": np.where((flat >= rebucket.KING_LOW) & (flat < rebucket.KING_HIGH),
+                                np.int16(0), flat),
+            "two kings": np.concatenate(
+                [flat, np.full((flat.shape[0], 1), second_king, dtype=np.int16)], axis=1
+            ),
+            "out of range": np.where(flat >= 0, np.int16(features.NUM_FEATURES), flat),
+        }
+        refused = []
+        for name, broken in broken_cases.items():
+            try:
+                rebucket.convert_indices(np.ascontiguousarray(broken), name)
+            except rebucket.Malformed:
+                refused.append(name)
+        if len(refused) != len(broken_cases):
+            raise Failure(
+                f"the converter accepted a malformed matrix; it refused only {refused}"
+            )
+        try:
+            rebucket.convert_shard(out, Path(directory) / "again.npz")
+        except rebucket.Malformed:
+            pass
+        else:
+            raise Failure("the converter re-converted a shard that was already scheme 2")
+
+    counts = ", ".join(f"bucket {b} {c}" for b, c in sorted(seen.items()))
+    return (
+        f"{len(boards)} positions, half of them mirrors, convert to exactly what direct "
+        f"extraction gives ({counts}); a {rows}-row shard round-trips with cp, wdl, row order "
+        f"and an unrecognised array intact, spread {dict(spread)}; missing kings, double kings, "
+        f"out-of-range indices and a re-conversion are all refused"
     )
 
 
@@ -600,6 +719,7 @@ def main() -> None:
     started = time.perf_counter()
     print(f"distinct:    {check_distinct_blocks(rng, fens[:500] + every_bucket, net)}, in "
           f"{time.perf_counter() - started:.1f} s")
+    print(f"rebucket:    {check_rebucket(rng, fens[:300], by_bucket)}")
     print(f"bounds:      {check_bounds(net)}")
     print(f"file:        {check_file(net, fens)}")
     print(f"import:      {check_import()}")

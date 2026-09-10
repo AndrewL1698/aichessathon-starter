@@ -50,3 +50,12 @@ files = [
     "harness",
     "tests",
 ]
+
+# torch is the optional `nnue` extra, kept out of `uv sync` on purpose: it is a 200 MB download
+# and nothing that ships imports it. `tests/test_king_buckets.py` reaches
+# `tools/nnue/bucketize.py` for the warm-start round trip, and mypy follows that import into
+# torch, so without this `make gate` would pass only on a machine that had synced the extra.
+# Nothing under `tools/` is in `files` above; it is reached transitively, exactly like this.
+[[tool.mypy.overrides]]
+module = "torch.*"
+ignore_missing_imports = true
