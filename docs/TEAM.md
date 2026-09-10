@@ -80,6 +80,53 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   `eval/contempt-quiescence`: contempt read through quiescence, so a pending recapture no longer
   sets draw-seeking contempt in a level position; 50.5%, a correctness fix judged on the
   mechanism, pushed for a PR.
+- 2026-09-09 · **Search cycle 4 closed: one PR open, three rejects, and the blocker is the
+  clock, not the pruning.** Four candidates off `prod` at 4a7f1a3 (= v4.0), one change each, 200
+  games at 10 s + 0.1 s against `local-opponents/v4.0`, four at a time; rows in
+  `docs/BENCH_LOG.md` under **"Search cycle 4"** (prod already had two sections called "Cycle 4"
+  from the rated-game review work; this is the other one). Regression suite before, and for
+  every candidate: v4.0 solves **9 of 17** on the suite as it stood, since grown to 47.
+  - **`search/null-move-v4` (3171c35), PR #16, the only PR.** `NULL_MOVE_PRUNING = True` and
+    nothing else. **56.8% over 200 games, Elo +47, +6 to +90** -- the first pruning row this
+    project has with a lower bound clear of zero. **The 45 s platform proxy does not reproduce
+    it: 46.4% over 96 games, -25, -86 to +34**, and at 120 s it reaches depth 8.65 / 7.70
+    against v4.0's 8.43 / 7.85, which is no depth at all. Both 120 s games won, 0 / 0 / 0 / 0
+    over 296 games, worst overshoot 1 ms. The briefed 24-game proxy came back at 35.4%; it was
+    extended to 96 rather than believed or ignored. **The ship rule as written is met and the
+    control closest to the platform disagrees, so merging is a judgement call.** It claims no
+    version number: v4.1 went to PRs #17 and #20 while it was benching.
+  - **`search/pvs` (ec6fcaa), level on Elo, kept for what it enables.** Exact -- 188 fixed-depth
+    searches score exactly what `agent.py` scores, at 0.93x its nodes where the unmodified port
+    took 1.10x -- so it has no off-switch and the equality test covers it. **50.0% over 200
+    games, +0, -43 to +43.** Its job is the others: null move's saving at a fixed depth 6 goes
+    from 10% without it to 34% with it, and LMR on top of it saves 73%.
+  - **`search/lmr` (5213a39, on `search/pvs`), the biggest Elo in the cycle and disqualified.**
+    **60.5%, Elo +74, +34 to +116**, and the **only candidate to move the regression suite: 10
+    of 17**, reaching the depth-11 cap on 16 of them where v4.0 reached 7 to 9 in the full 20 s.
+    **Three moves over a quarter of the clock they had, so it is rejected whatever the score.**
+  - **`search/futility` (c60d4e0), rejected twice over.** 52.5%, +17, -24 to +59: the lower
+    bound does not clear zero. Three over-budget moves as well.
+  - **The finding worth acting on.** The two candidates that were disqualified were disqualified
+    by moves of 230 to 760 ms against hard budgets of 110 to 230 ms; the two that were not are
+    the two with nothing to show. An in-process probe of `think` at clocks of 1.2 to 2 s
+    overshoots the hard budget by 70 to 150 ms **with reductions on and off alike**, so a base
+    level of it is v4.0's already; LMR then plays **51.5% of its moves under a 2.5 s clock**
+    against 34 to 37% for the others, because cheap early iterations make the gate start more of
+    them. **The sub-250 ms budget is the thing to fix** -- the iteration gate's projection,
+    calibrated on an unreduced tree, and whatever costs v4.0 70 to 150 ms past its deadline --
+    **and then LMR re-run against it.** That is this cycle's unclaimed Elo, and note PR #18
+    (hard budget a sixth of the clock rather than an eighth) is in the same area.
+  - One gate went red once and passed twice on re-run, on `search/futility`: `check_backstop`
+    reported the timer thread 126 ms late on a 300 ms budget against a 100 ms limit; two
+    immediate re-runs gave 21 ms and 19 ms. Same short-clock region as the over-budget moves.
+  - Deviations from the cycle brief, both deliberate: the 45 s proxy was extended from 24 games
+    to 96 after the 24-game row came back with the opposite sign; and `search/pvs` and
+    `search/futility` were branched off `prod` rather than stacked on the passing null-move
+    branch, so each row is one variable against v4.0 (LMR is on PVS, as briefed).
+  - **Careful merging PR #16:** the prod merge on that branch had resolved `docs/VERSIONS.md` by
+    keeping the branch's row and dropping prod's real v4.1, which would have erased PRs #17 and
+    #20 from the version history. Fixed on the branch in 0c03c62.
+
 - 2026-09-09 evening · **v4.1** = v4.0 + PR #17 (KPK rook-pawn draw) + PR #20 (queen-first promotion
   tie-break, from the M5 session). Frozen at `local-opponents/v4.1`, tag `v4.1`. Bench baseline stays
   v4.0 for candidates already in flight; new ones use v4.1. Held: PR #16 (null move, proxy says no),

@@ -748,3 +748,101 @@ capture pending. Measured directly over the 24,127 positions of two benches: con
 8.4%, draw-seeking dropped on 1,313 (5.4%), draw-averse dropped on 58, and 713 positions where we
 are about to win material now refuse a draw. Suite unchanged at 27/47. Branch pushed for a PR, to
 be judged on the mechanism.
+
+## Search cycle 4, 2026-09-09: pruning on the compiled engine with a learned leaf. One PR, three rejects.
+
+Baseline `local-opponents/v4.0`. Cycles 1 to 3 measured null move, LMR and futility as noise on
+the python-chess engine at 60k nodes/s; the engine is now the compiled one at 1.3M nodes/s with
+the network scoring the leaves, so a ply costs about twice what it did and every one of them was
+worth re-measuring. Four candidates, one change each, 200 games at 10 s + 0.1 s against v4.0,
+four at a time. Regression suite (`tests/positions/run.py --engine fast`, 17 positions, depth
+11, 20 s each) reported beside the Elo, never instead of it: **prod v4.0 solves 9 of 17**, the
+before figure for every row here. **The suite has since grown to 47 positions** from the
+rated-game reviews, so do not compare these `x of 17` counts with cycle 5's `x of 47`.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-null-move-v4 | baseline | 10s+0.1s | 200 | +88 =51 -61 | 56.8% | +47 | +6 to +90 | 0 / 0 / 0 / 0 | 1.28s | 257 MB |
+| search-null-move-v4-proxy45 | baseline | 45s+0.2s | 24 | +5 =7 -12 | 35.4% | -104 | -249 to +11 | 0 / 0 / 0 / 0 | 5.66s | 254 MB |
+| search-null-move-v4-proxy45-96 | baseline | 45s+0.2s | 96 | +31 =27 -38 | 46.4% | -25 | -86 to +34 | 0 / 0 / 0 / 0 | 5.66s | 257 MB |
+| search-pvs | baseline | 10s+0.1s | 200 | +79 =42 -79 | 50.0% | +0 | -43 to +43 | 0 / 0 / 0 / 0 | 1.29s | 259 MB |
+| search-lmr | baseline | 10s+0.1s | 200 | +90 =62 -48 | 60.5% | +74 | +34 to +116 | 0 / 0 / 0 / **3** | 1.52s | 259 MB |
+| search-futility | baseline | 10s+0.1s | 200 | +77 =56 -67 | 52.5% | +17 | -24 to +59 | 0 / 0 / 0 / **3** | 1.44s | 257 MB |
+
+### `search/null-move-v4`: null move on. The one PR, and the two controls disagree
+
+`NULL_MOVE_PRUNING = True` and nothing else. The conditions were already the standard ones
+(not in check, depth >= 3, no null after a null, the side to move has a piece, no mate score in
+the window) and PR #10's repetition-path fix -- a null-move node writes 0 into `path[]` rather
+than its key -- is in the code being switched on. Worth knowing: `search_root` passes
+`alpha = -INFINITY` to every root child, so the `alpha > -MATE_FOUND` guard means null move
+never fires at ply 1 today. Conservative, not wrong, and changing it would be a second variable.
+
+The fast control gives the first pruning row this project has with a lower bound clear of zero.
+The briefed 24-game proxy came back at 35.4%, the opposite sign, so it was extended to 96 games
+rather than believed or ignored: 46.4%, -25, -86 to +34. The openings are not the explanation --
+the 12 openings the 24-game run plays scored 55.2% over their 96 games in the fast run against
+58.2% for the other 16.
+
+120 s + 0.5 s, one game per colour: depth over the first 40 moves 8.65 and 7.70 against v4.0's
+8.43 and 7.85 on the other side of the same boards. **No depth**, which is what the proxy row is
+reporting: 10% fewer nodes at a fixed depth 6 is a fifth of a ply. Both games won by checkmate,
+slowest moves 8.51 s against a 13.02 s hard budget and 10.06 s against 11.97 s, worst overshoot
+1 ms, clock minima 10.3 s and 10.4 s. Suite 9 of 17, the same nine, four a ply deeper.
+**PR open, merge is a judgement call:** the rule as written is met and the control closest to
+the platform says the gain is not there.
+
+### `search/pvs`: principal variation search. Exactly 50.0%, and it is not wasted
+
+First move at the full window, every later move at a window one wide, re-searched at the full
+window when it beats the bound and the window is wider than one. **Exact**, so it has no
+off-switch: 188 fixed-depth searches at depths 2 to 5 score exactly what `agent.py` scores, at
+0.93x its nodes where the unmodified port took 1.10x. 200 games: +79 =42 -79, dead level, the
+tightest interval in the cycle (-43 to +43). Suite 9 of 17.
+
+**A 25% node saving that buys nothing on its own is the expected result and not the point.**
+What it does is make the other two pay: null move's saving at a fixed depth 6 went from 10%
+without PVS to 34% with it, and LMR on top of PVS saves 73%.
+
+### `search/lmr`: the biggest Elo in the cycle, disqualified on the clock
+
+Quiet moves that are not the table move or a killer, from the fourth in the ordering, out of
+check and not giving check, at depth >= 3, searched two plies short with the null window and
+re-searched at the full depth when they beat the bound. Off-switch, and the equality holds with
+it off. 73% fewer nodes at a fixed depth 6. **Suite 10 of 17**, the only candidate to move it,
+reaching the depth-11 cap on 16 of the 17 in a fraction of the time where v4.0 reached 7 to 9 in
+the whole 20 s. **60.5%, Elo +74, +34 to +116.**
+
+**Three moves over a quarter of the clock they had, so it is rejected whatever the score.**
+462 ms of an 1835 ms clock, 396 ms of 1527 ms, 758 ms of 1825 ms, against hard budgets of 229,
+191 and 228 ms. Two things are visible in the PGNs. LMR plays **51.5% of its moves under a
+2.5 s clock** against 34.0% for PVS and 37.2% for null move: the reductions make early
+iterations so cheap that the iteration gate starts more of them and the clock goes early, so it
+lives in the region where a ratio test can trip. And an in-process probe of `think` at clocks of
+1.2 to 2 s overshoots the hard budget by 70 to 150 ms on an idle machine with reductions **on
+and off alike**, so a base level of overshoot is v4.0's, not this candidate's; what the
+candidate adds is enough of it, often enough, to cross the line.
+
+### `search/futility`: no gain, and the same disqualifier
+
+Depth 1 and 2, out of check, never the first move: a quiet move is dropped when the static score
+plus 150 cp (300 at depth 2) does not reach alpha. Off-switch, equality holds with it off, 22%
+fewer nodes at a fixed depth 6, suite 9 of 17. **52.5%, +17, -24 to +59: the lower bound does
+not clear zero.** Also three over-budget moves (509 ms of 1457, 263 of 1048, 233 of 885, against
+budgets of 182, 131 and 111 ms), and unlike LMR its low-clock exposure is ordinary at 36.8%, so
+here it is the overshoot alone.
+
+**One gate went red once and passed twice on re-run**, on this branch: `check_backstop` reported
+the timer thread firing 126 ms late on a 300 ms budget, against a 100 ms limit. Two immediate
+re-runs gave 21 ms and 19 ms. Recorded rather than swept up, because it is the same short-clock
+region the over-budget moves are in.
+
+### What cycle 4 says to do next
+
+The short-clock path is what is blocking this cycle, not the pruning. Two of the four candidates
+were disqualified by moves of 230 to 760 ms against hard budgets of 110 to 230 ms, the two that
+were not are the two with no measurable gain, and the biggest Elo in the cycle (**LMR, +74,
++34 to +116**, and the only row to move the regression suite) is one of the two that were. The
+first job of the next cycle is the sub-250 ms budget: the iteration gate's projection, which is
+calibrated on an unreduced tree and starts iterations a reduced one finishes far too late, and
+whatever costs 70 to 150 ms past the deadline in v4.0 already. Then re-run LMR against it.
