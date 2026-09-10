@@ -522,6 +522,125 @@ def check_reserve() -> str:
     )
 
 
+def check_ceiling() -> str:
+    """The iteration gate's ceiling is `min(hard, SOFT_OVERRUN * soft)`, and where it binds.
+
+    `ceiling_ms` is a local in `think`, so what is checked here is the two things it is built
+    from and the relationship between them, at the clocks a real game passes through.
+
+    The reserve is what makes this worth re-deriving rather than copying from prod. Taking a
+    reserve off the clock shrinks the soft budget, so `SOFT_OVERRUN * soft` stays under the hard
+    budget much further down the clock than it used to: in a 120 s game the ceiling binds from
+    the first move to about a 6.4 s clock, where before the reserve it bound only above ~17.8 s.
+    That crossover is a consequence of two formulas rather than a number anybody chose, so it is
+    found by bisection here and only its neighbourhood is asserted.
+
+    Every budget below is also compared against the v4.3 formula written out independently, so
+    that a change to this ceiling cannot quietly move the reserve or the hard budget instead.
+    """
+    if fs.SOFT_OVERRUN != 2.0:
+        raise Failure(f"SOFT_OVERRUN is {fs.SOFT_OVERRUN}, this test is written for 2.0")
+    if fs.RESERVE_DIVISOR != 8 or fs.SOFT_DIVISOR != 25 or fs.HARD_DIVISOR != 8:
+        raise Failure("a divisor moved; this experiment changes the ceiling and nothing else")
+
+    def expected(clock_ms: int, first_ms: int) -> tuple[float, float]:
+        """v4.3's budgets, written out again rather than imported, as the thing to match."""
+        reserve = max(first_ms, 0) / fs.RESERVE_DIVISOR
+        soft = max(clock_ms - reserve, 0.0) / fs.SOFT_DIVISOR + fs.SOFT_BONUS_MS
+        hard = max(min(clock_ms / fs.HARD_DIVISOR, clock_ms - fs.SAFETY_MARGIN_MS), 0.0)
+        return min(soft, hard), hard
+
+    def crossover(first_ms: int) -> float:
+        """The clock below which the hard budget binds and `SOFT_OVERRUN` cannot matter."""
+        low, high = 1.0, float(first_ms)
+        for _ in range(60):
+            middle = (low + high) / 2
+            soft_ms, hard_ms = expected(int(middle), first_ms)
+            if fs.SOFT_OVERRUN * soft_ms < hard_ms:
+                high = middle
+            else:
+                low = middle
+        return high
+
+    rows = []
+    first_ms = 120_000
+    fs.reset()
+    fs.budgets(first_ms)
+    for clock_ms in (120_000, 60_000, 30_000, 15_000, 10_000, 6_400, 2_000, 900, 300, 100):
+        soft_ms, hard_ms = fs.budgets(clock_ms)
+        want_soft, want_hard = expected(clock_ms, first_ms)
+        if abs(soft_ms - want_soft) > 0.5 or abs(hard_ms - want_hard) > 0.5:
+            raise Failure(
+                f"at {clock_ms} ms the budgets are soft {soft_ms:.0f} / hard {hard_ms:.0f}, "
+                f"not the {want_soft:.0f} / {want_hard:.0f} v4.3's formula gives: this branch "
+                f"moved the reserve or the hard budget, not just the ceiling"
+            )
+        ceiling_ms = min(hard_ms, fs.SOFT_OVERRUN * soft_ms)
+        if ceiling_ms != min(hard_ms, 2.0 * soft_ms):
+            raise Failure(f"at {clock_ms} ms the ceiling is not min(hard, 2 * soft)")
+        if ceiling_ms > hard_ms:
+            raise Failure(
+                f"at {clock_ms} ms the ceiling {ceiling_ms:.0f} passes the hard budget "
+                f"{hard_ms:.0f}: an iteration could start that only the deadline could stop"
+            )
+        was = min(hard_ms, 1.5 * soft_ms)
+        binds = "2 x soft" if fs.SOFT_OVERRUN * soft_ms < hard_ms else "hard"
+        # Unchanged only where the hard budget bound at *both* constants. Between the two
+        # crossovers -- 1.5 * soft still under the hard budget while 2 * soft is not -- the
+        # ceiling does move, from 1.5 * soft up to the hard budget and no further. That band is
+        # real behaviour, not an exception to the rule, and it is where the 6.4 s clock lands.
+        if 1.5 * soft_ms >= hard_ms and ceiling_ms != was:
+            raise Failure(
+                f"at {clock_ms} ms the hard budget bound at 1.5 as well, so the ceiling must be "
+                f"what 1.5 gave, but it moved {was:.0f} -> {ceiling_ms:.0f} ms"
+            )
+        if not was <= ceiling_ms <= hard_ms + 0.5:
+            raise Failure(
+                f"at {clock_ms} ms the ceiling {ceiling_ms:.0f} is outside [{was:.0f}, "
+                f"{hard_ms:.0f}]: raising the constant may only ever move it up to the hard "
+                f"budget, never past it and never down"
+            )
+        # Panic and the spent clock are the fallback engine's territory and must not move.
+        if clock_ms < fs.PANIC_MS and hard_ms > 0.0 and ceiling_ms != hard_ms:
+            raise Failure(f"at a {clock_ms} ms panic clock the ceiling is not the hard budget")
+        if hard_ms <= 0.0 and ceiling_ms != 0.0:
+            raise Failure(f"at {clock_ms} ms there is no budget, so the ceiling must be 0")
+        rows.append((clock_ms, soft_ms, hard_ms, ceiling_ms, binds))
+
+    # The three controls this engine plays, and where the ceiling stops binding in each.
+    points = {first: crossover(first) for first in (120_000, 45_000, 10_000)}
+    for first, (low, high) in ((120_000, (5_800, 7_000)), (45_000, (7_000, 8_600)),
+                               (10_000, (9_400, 10_600))):
+        if not low <= points[first] <= high:
+            raise Failure(
+                f"in a {first // 1000} s game the ceiling stops binding at "
+                f"{points[first] / 1000:.1f} s, expected between {low / 1000:.1f} and "
+                f"{high / 1000:.1f} s"
+            )
+
+    # The reserve is per game, and this test primed it; leave nothing behind for the next one.
+    fs.reset()
+    if fs._FIRST_CLOCK_MS is not None:
+        raise Failure("the test left a first clock behind")
+    # The fallback engine gates on its own hard budget and has no ceiling constant to keep in
+    # step. Asserted rather than remembered, because "mirror it in agent.py" is a live question
+    # every time this constant moves.
+    if hasattr(agent, "SOFT_OVERRUN"):
+        raise Failure("agent.py grew a SOFT_OVERRUN; the two gates now have to be kept in step")
+
+    detail = "; ".join(
+        f"{clock // 1000 if clock >= 1000 else clock}{'s' if clock >= 1000 else 'ms'} "
+        f"soft {soft:.0f} hard {hard:.0f} ceiling {ceiling:.0f} ({binds})"
+        for clock, soft, hard, ceiling, binds in rows
+    )
+    return (
+        f"ceiling = min(hard, {fs.SOFT_OVERRUN} x soft) at {len(rows)} clocks in a 120 s game, "
+        f"never past the hard budget, budgets equal to v4.3's formula; it stops binding at "
+        f"{points[120_000] / 1000:.1f} s (120 s game), {points[45_000] / 1000:.1f} s (45 s "
+        f"proxy), {points[10_000] / 1000:.1f} s (10 s control). {detail}"
+    )
+
+
 def check_timed(fens: list[str], reference: ModuleType) -> str:
     """A search that runs out of time returns a legal move and leaves the shared arrays sane.
 
@@ -712,6 +831,7 @@ def main() -> None:
     print(f"repetition: {check_repetition()}")
     print(f"table: {check_table()}")
     print(f"reserve: {check_reserve()}")
+    print(f"ceiling: {check_ceiling()}")
     print(f"timeouts: {check_timed(sample[:24], reference)}")
     print(f"backstop: {check_backstop(sample[:6])}")
 

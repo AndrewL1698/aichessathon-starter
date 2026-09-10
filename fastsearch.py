@@ -161,7 +161,12 @@ PANIC_MS = 1_000
 GROWTH_MIN = 2.0
 GROWTH_MAX = 8.0
 GROWTH_UNKNOWN = 5.0
-SOFT_OVERRUN = 1.5
+# How far past the soft budget an iteration may be *projected* to run and still be started.
+# The gate in `think` has the reasoning; the short version is that an iteration is refused once
+# elapsed passes `SOFT_OVERRUN / g` of the soft budget, where `g` is how much dearer each depth
+# is than the one before. Rated rounds 98 to 101 measured `g` at about 2.4, so 1.5 stopped a
+# move at 0.63 of a budget it was meant to spend and 2.0 stops it at 0.83.
+SOFT_OVERRUN = 2.0
 NPS_FLOOR_MS = 5
 
 TABLE_BONUS = 4_000_000
@@ -1524,9 +1529,29 @@ def think(fen: str, time_left_ms: int) -> str:
             # iterations from 11 to 2, and mean depth over the first 40 moves moves 7.00 to
             # 6.92. Raising `GROWTH_MIN` instead only reached 11 s at move 60, and a reserve in
             # the hard budget cost a third of a ply for the same clock. The hard budget and the
-            # abort path are untouched; below a ~9.2 s clock `soft_ms` is already clamped to
-            # `hard_ms` and this ceiling cannot bind. `agent.py`'s gate is v2.3's and no longer
-            # matches this one; it is the fallback engine and its budgets are its own.
+            # abort path are untouched, and below the clock where `SOFT_OVERRUN * soft_ms`
+            # passes `hard_ms` this ceiling cannot bind at all. `agent.py`'s gate is v2.3's and
+            # no longer matches this one; it is the fallback engine and its budgets are its own.
+            #
+            # `SOFT_OVERRUN` is 2.0 rather than the 1.5 that fixed round 85. Write the gate out:
+            # if each depth costs `g` times the one before, elapsed settles near last * g /
+            # (g - 1), so the projection is about (g - 1) * elapsed and the gate fires once
+            # elapsed passes `SOFT_OVERRUN / g` of the soft budget. Rated rounds 98 to 101
+            # measured `g` at about 2.4 and bear the consequence out: a median 0.71 of soft
+            # spent, 0.27 of hard, and 62 to 67% of moves ending here with the depth unfinished
+            # rather than on the soft budget or on a result. At 1.5 that ratio is 0.63 and at
+            # 2.0 it is 0.83. It cannot raise the *average* past the soft budget, because the
+            # first condition still refuses a new iteration once that budget is spent; what it
+            # changes is how late the last iteration may start.
+            #
+            # v4.3's reserve is what makes this safe to raise, and it is why the clock it binds
+            # down to moved. Taking the reserve off the clock shrinks `soft_ms`, so
+            # `2.0 * soft_ms` stays under `hard_ms` far further down: in a 120 s game it binds
+            # from the first move to a ~6.4 s clock, where on v4.2 it bound only above ~17.8 s.
+            # The long-game floor is now the reserve's job rather than this ceiling's: modelled
+            # over 172 moves at 120 s + 0.5 s the clock settles at ~20 s here against ~26 s at
+            # 1.5, where the same model on v4.2 gave ~9.6 s and ~11.4 s. The reserve, the hard
+            # budget, the growth clamp, panic and the backstop are all untouched by this.
             if depth > 1 and (
                 elapsed_ms >= soft_ms or elapsed_ms + projected(last_ms, previous_ms) > ceiling_ms
             ):
