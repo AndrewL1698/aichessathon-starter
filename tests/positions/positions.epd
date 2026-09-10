@@ -79,3 +79,5 @@ r2qrbk1/2pb1ppp/p1np1n2/1p6/P2PP3/1B3N2/1P1N1PPP/R1BQR1K1 w - - 1 13; bm e4e5; i
 1rb2rk1/p4pbp/1q1p2p1/3P4/3p1N2/1p1P2PP/1PPQ1PB1/1KR4R b - - 3 18; bm b6a6; id "r102 m18 Be5 -210"
 6k1/p1r2p2/6p1/1q1p3P/3p4/3P4/1P1Q1PB1/1K6 b - - 0 31; bm c7c6; id "r102 m31 a5 -157"
 5k2/5p2/8/1q1p1r2/p2p4/K2P4/1P2QP2/3B4 b - - 11 40; bm b5c5; id "r102 m40 Qb8 -179"
+# Round 103 (v4.2, drawn vs Waterside Research by the fifty-move rule). Stockfish 19 depth 18, 150 cp threshold, real only.
+8/3R4/8/pp1P4/1k3K2/8/1r3P2/8 w - - 1 49; bm f4e3; id "r103 m49 Ra7 -251"

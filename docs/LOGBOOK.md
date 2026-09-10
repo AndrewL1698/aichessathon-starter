@@ -1101,3 +1101,34 @@ on the clock (82, 90, 102); here the length was self-inflicted.
 
 Three positions are in `tests/positions`, now 66. Blunders per game, real only, v4.2: 2, 6, 0,
 1, 3 over rounds 98 to 102 (4 W 1 D).
+
+### 2026-09-10, round 103: v4.2 drew Waterside Research by the fifty-move rule, in a rook ending it would not repeat.
+
+Banner and depth profile: v4.2 (depth 7 to 12 in the middlegame, up to 64 at the end, median 10, at
+0.55M nps). Stockfish 19 at depth 18: our ACPL 11 and Waterside Research's 14, both with one to three
+real mistakes, a strong opponent. 165.9 s used, **7.1 s left after 106 moves**; 53 of 106 lines are lost
+to the 4 KB cap (moves 34 to 86).
+
+**The game.** Level throughout with one dip: never better than +113 (move 25), worse by 100 to 330
+across moves 34 to 42 (37.Nf1 the visible cause, -97 to -224), back to level by move 46; 49.Ra7 (-39
+to -290, Ke3 held) was our one real error and 49...Kc5 gave it straight back. Level from move 50, and
+from 64.Rxb2 a rook against a rook with no pawns, a dead draw. In level positions our score sat 0 cp
+from Stockfish's on average over 52 surviving moves, mean absolute gap 16: the best calibration in any
+reviewed game. Nothing to fix in the play.
+
+**The ending, which repeats round 82's mechanism in a new form.** From move 64 to move 114 the engine
+shuffled for exactly 100 plies to the fifty-move draw rather than repeat a position, and spent the
+clock from 12 s to 7 s doing it. Measured on the game positions: `fasteval` scores the pawnless rook
+ending +20 to +25 (piece placement left over after the pawnless halving), `bare_endgame` is true so
+those tables score the leaves, contempt is 0, so a repetition at 0 loses to any shuffle at +20. Round
+82's king-and-rook-pawn shuffle was the same shape with a bigger number; round 102's 94-ply drift in a
+won ending is the cousin where the number was real and progress was not preferred. One fix covers all
+three: scale the leaf score by the halfmove clock (`(100 - halfmove) / 100` or gentler) in
+`fastsearch.leaf` and `agent.py`'s evaluate, so +20 at ply 90 is +2 and a repetition is taken, and
++750 at ply 90 is +75 and a capture is preferred long before. The narrower alternative for this game is
+a zero in `fasteval`'s pawnless block when material is equal and each side has at most one piece. The
+cost of not fixing it is clock: three v4.2 games have now ended under 13 s (90, 102, 103), and the
+600-ply cap counts these moves too.
+
+The move-49 position is in `tests/positions`, now 67. Blunders per game, real only, v4.2: 2, 6, 0,
+1, 3, 1 over rounds 98 to 103 (4 W 2 D).
