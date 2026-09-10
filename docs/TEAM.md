@@ -85,6 +85,23 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 evening · **Rejected** `time/v4.3-soft-overrun-2` (7b0fd82): `SOFT_OVERRUN`
+  1.5 -> 2.0, the iteration gate's ceiling, on top of v4.3. **41.2% over 40 games at the 45 s +
+  0.2 s proxy, Elo -61, interval -158 to +27** against frozen `local-opponents/v4.3`. **That
+  41.2% is the 40-game proxy result and not a pooled 80-game number**: the same candidate scored
+  51.2% (+9, -79 to +97) over 40 games at 10 s + 0.1 s, and the two are deliberately not pooled
+  because v4.3's reserve leaves this ceiling binding only above a 10.0 s clock at the fast
+  control, which is where that control starts. 0 illegal, 0 exceptions, 0 timeouts, 0
+  over-budget moves in all 80 games; calibration 1.204M nodes/s before the proxy arena and
+  1.211M after, so the arenas are comparable. **The 200-game proxy extension was declined on
+  purpose**, and that is a decision rather than an omission: the interval does not prove the
+  candidate weaker, but the sign is negative at the only control where the change acts, the
+  diagnostics confirm the change did take effect (utilisation 0.65 -> 0.85, +0.6 ply of mean
+  depth), and eight more hours of arena the night before an upload deadline was the wrong trade.
+  **`SOFT_OVERRUN` stays 1.5 in prod and no version or tag was created for a rejected code
+  change.** The branch, every PGN and every log are kept; cycle 9 in `docs/BENCH_LOG.md` has the
+  full experiment, including the clue for anyone who revisits it -- the candidate ends proxy
+  games on a mean 5.77 s clock against v4.3's 9.19 s, so it buys its depth out of the endgame.
 - 2026-09-10 midday · **v4.3** = v4.2 + PR #24 (`time/soft-floor`, from the M5 session): a reserve of
   the first clock / 8 kept out of the soft budget so long games floor near 17 s instead of 5 s. Proxy
   within noise (+22), four 120 s games with minima 22 to 48 s, 0 disqualifiers. Frozen at
