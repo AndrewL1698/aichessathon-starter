@@ -866,3 +866,40 @@ for averaging them. The composition is where the Elo lives, not the size of the 
 
 For the next cycle: more data on the same 768 features has failed twice, which is the argument
 that the feature set is what binds, and the argument king-relative features are the thing to try.
+
+### 2026-09-10, cycle 8: four king buckets. Built, proved exact, not yet trained.
+
+Cycle 7 said more data on the same 768 features buys nothing, twice. The feature set is what is
+left, and the thing it cannot express is where our own king stands. This is the smallest test of
+that: branch `nnue/king-buckets-4` off `prod` afb34f4.
+
+**Theory.** Condition the feature index on the friendly king's square, so the net can learn that
+a knight on f5 means one thing with the king castled on g1 and another with the king on e4. Four
+buckets, `2 * (rank >= 4) + (file >= 4)` on the perspective-oriented square: file half separates
+a kingside castle from a queenside one, rank half separates a sheltered king from one that has
+left home. Not the 32 of HalfKAv2_hm, on purpose -- 32 buckets divide the same corpus 32 ways,
+and a bucket with too few positions learns noise. Each perspective is conditioned on its own
+king, which is what keeps one side's king move from disturbing the other accumulator.
+
+**Measured, of what can be measured.** The node rate costs 3.4% (1.341M against 1.390M at depth
+7) at *identical node counts*, so that figure is a pure timing difference rather than two
+different trees compared. A crossing push costs 641 ns against a normal one's 520, and crossings
+are rare; `infer` is unchanged, which is the number that matters most because it runs at every
+leaf. The first layer is 1.50 MiB against 0.38 and the platform core has 1 MiB of L2, so this
+was the gate that could have ended the experiment before any training; it did not, because a
+search touches at most one block per perspective. Exactness is 11,000 warm-start positions,
+11,000 reference comparisons, 30,000 randomised sequences with 3,175 crossings, and a repeat of
+all of it on a net whose blocks differ.
+
+**Verdict: nothing yet.** The warm start returns the shipped net's integer on every position, by
+construction, so there is no strength result and a bench today would report 50% and mean
+nothing. What this cycle bought is that the expensive question -- does king conditioning pay --
+can now be answered by one fine-tuning run rather than by a week of runtime work, and that the
+answer will not be confounded by a speed regression, because the speed is already measured and
+small.
+
+**Two things worth carrying.** The int16 accumulator bound had to be taken per bucket block: the
+same bound across all 3,072 rows reads 42,313, past int16, and would have refused a file that is
+provably safe. And the test that compares the runtime's bucket table against the offline one,
+square by square, caught a mailbox-orientation error on its first run -- which is exactly the bug
+that trains on one bucketing and plays another with every other test still green.

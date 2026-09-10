@@ -951,3 +951,94 @@ quiet machine: v4.1, blend, 1.363M nodes/s at depth 7, 27/47 on the suite, 4.19 
 254 MB peak RSS, and the disqualifier record above. More training data on the same 768 features
 has now failed twice to beat it. That is the argument for the feature set, rather than the data
 volume, being the binding constraint -- which is the premise a king-relative attempt rests on.
+
+## Cycle 8, 2026-09-10: four king buckets. Built and proved exact; strength not measured
+
+Cycle 7 rejected more data on the same features. What it left was the feature set itself: the
+768 scheme cannot say where our own king is, so a knight on f5 is one feature whether the king
+is castled on g1 or walking on e4. This cycle builds the smallest thing that tests that, on
+branch `nnue/king-buckets-4` off `prod` afb34f4. **It is not Stockfish's HalfKAv2_hm** -- four
+buckets rather than 32, no king-file mirroring -- and it deliberately changes nothing outside
+the model. `docs/NNUE_KING_BUCKETS.md` is the spec, the mapping and the go/no-go.
+
+**There is no strength row in this section and there cannot be one yet.** The four bucket blocks
+are copies of the trained 768 layer, so the net returns the same integer it always did and a
+bench against v4.1 would score 50% by construction. Strength waits on fine-tuning.
+
+### What was built
+
+`bucket = 2 * (rank >= 4) + (file >= 4)` on the perspective-oriented friendly king square, which
+is the square after the flip the 768 scheme already applies, so the mapping is colour-symmetric
+by construction and the mirror invariant survives. The index is `bucket * 768 + plane * 64 +
+square`: 3,072 inputs, four blocks, the 768 half untouched. Each perspective is conditioned on
+its own king, which is what lets one side's king move leave the other accumulator alone.
+
+The cost model is the design. A non-king move is one row out and one row in per perspective, as
+before. A king move inside its bucket is the same. Only a king crossing a boundary rebuilds, and
+only the perspective whose king moved. Castling takes whichever path its two squares say --
+`e1g1` stays in bucket 1, `e1c1` crosses into bucket 0. The king square rides in one extra int16
+column of the accumulator stack, so `fastsearch.py`, `fasteval.py` and `agent.py` are
+byte-identical on the branch: search, hand evaluation, blend, time management, the UCI reply and
+the python-chess fallback are all exactly v4.1's.
+
+### Speed, which is the gate that had to pass first
+
+The first layer is 1.50 MiB against 0.38, and the platform core has 1 MiB of L2, so this was the
+number that could have ended the experiment. Both builds, same machine, one job at a time, run
+twice each. **The node counts came out identical to the digit -- 169,149,685 at depth 7 over the
+47 regression positions -- because a warm-started net evaluates identically, so the tree is the
+same and only the time differs.**
+
+| | 768 | 4 buckets | delta |
+|---|---|---|---|
+| `infer` | 957 / 953 ns | 959 / 962 ns | unchanged |
+| `push`, quiet move | 480 / 496 ns | 520 / 520 ns | +6% |
+| `push`, king inside its bucket | 474 / 494 ns | 513 / 517 ns | +7% |
+| `push`, king crossing | 492 / 494 ns | 633 / 649 ns | +30% |
+| `refresh` | 758 / 771 ns | 879 / 884 ns | +15% |
+| **node rate, depth 7** | **1.391 / 1.389M** | **1.338 / 1.344M** | **-3.4%** |
+| first layer | 0.38 MiB | 1.50 MiB | 4x |
+| weight file | 273 KB | 1.07 MB | 3.9x |
+| import, peak RSS | 4.0 s, 255 MB | 4.1 s, 224-239 MB | unchanged |
+
+**The cache worry did not materialise.** A search touches at most one block per perspective, so
+768 KiB against the flat build's 384 KiB, and that is worth 3.4% of the node rate. The
+measurement is representative of a fine-tuned net even though it was taken on a warm-started
+one: identical blocks change the values at those addresses, not which addresses are touched. For
+scale, cycle 6's mobility term cost 7.5% of the node rate and lost no median depth at all, so
+3.4% should be well under a tenth of a ply. **Gate passed**, and cheaply enough that a real
+evaluation gain would clear it.
+
+### Exactness
+
+| check | result |
+|---|---|
+| runtime table against the offline one | 128 square/perspective pairs identical |
+| index space | 1,536 base indices in range and distinct, 4 disjoint blocks tiling 3,072 |
+| colour symmetry and the mirror | 300 positions, offline and in the accumulators |
+| all four buckets | 250 positions each, selected and evaluated correctly |
+| **warm start** | **11,000 positions return the integer the 768 net returned** |
+| reference against numba | 11,000 positions, 0 mismatches |
+| randomised sequences | **30,000** make/unmake, 0 mismatches, 3,175 crossings, 54 crossing castles |
+| distinct blocks | all of it again on a net whose blocks differ: 1,500 positions exact |
+| int16 bound | worst reachable 25,393 of 32,767, headroom 7,374 |
+| file, memory, import | 1.7 MB of the 50 MB cap, 4.09 s of the 90 s budget, 255 MB of 2 GB |
+| pipeline end to end | shards, train, export, runtime on scheme-2 features; old shards refused |
+
+Two things worth keeping from building it. **The int16 bound had to become per bucket block**:
+the same bound taken across all 3,072 rows reads 42,313, past int16, and would have refused a
+file that is provably safe, because a position's features all carry one bucket and 32 rows from
+one block is the real worst case. And **the table test earned its place immediately** -- it
+caught a mailbox-orientation error on its first run. That is the class of bug that trains on one
+bucketing and plays another, with both halves self-consistent and every other test green.
+
+### What has to happen before this is worth anything
+
+In order: rebuild shards (old ones carry 768 indices and are now refused by design), warm start a
+checkpoint with `tools/nnue/bucketize.py`, fine-tune, export, and bench against
+`local-opponents/v4.1` at both controls. Note for whoever runs it: `densify` builds a dense
+batch, so at batch 16384 that is now 201 MB per batch rather than 50 MB; drop the batch size
+before dropping anything else.
+
+**The 32-bucket HalfKAv2_hm version does not start unless that bench shows a credible gain that
+outweighs the 3.4%.** Nothing here is evidence about strength, in either direction.

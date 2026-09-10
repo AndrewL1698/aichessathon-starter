@@ -85,6 +85,28 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 · **Built, not benched** `nnue/king-buckets-4` (011e75c, worktree
+  `../nnue-king-buckets-4`, branched from `prod` afb34f4): four king buckets, 3,072 inputs, the
+  experiment cycle 7's rejection pointed at. **Deliberately not HalfKAv2_hm** -- four buckets,
+  not 32, no king-file mirroring -- because a 32-bucket scheme divides the same corpus 32 ways
+  and a bucket with too few positions learns noise. `docs/NNUE_KING_BUCKETS.md` is the spec;
+  cycle 8 in `docs/BENCH_LOG.md` has the numbers. `fastsearch.py`, `fasteval.py` and `agent.py`
+  are byte-identical on the branch, so search, blend, time management, the UCI reply and the
+  python-chess fallback are v4.1's exactly. **Speed gate passed: 3.4% of the node rate**
+  (1.341M against 1.390M at depth 7) at **identical node counts**, which is what makes it a
+  clean A/B -- a warm-started net evaluates identically, so the tree is the same and only the
+  time differs. Exactness: 11,000 positions return the 768 net's integer, 11,000 exact against
+  the reference, 30,000 randomised make/unmake sequences with 3,175 bucket crossings and 54
+  crossing castles, and all of it repeated on a net whose four blocks differ, because a
+  warm-started file cannot tell a bucketing bug from a correct bucketing. **No strength claim
+  exists and none can until a net is fine-tuned on bucketed shards** -- the blocks are copies,
+  so a bench today scores 50% by construction, and the init line says so out loud to stop a
+  stray row being read as a result. Next, in order: rebuild shards (old ones carry 768 indices
+  and are now refused by design), warm start with `tools/nnue/bucketize.py`, fine-tune, export,
+  bench against `local-opponents/v4.1` at both controls. Whoever trains it should know
+  `densify` now builds a 201 MB dense batch at batch 16384, against 50 MB before; drop the batch
+  size before anything else. **The 32-bucket version does not start unless that bench shows a
+  credible gain that outweighs the 3.4%.**
 - 2026-09-10 · **Rejected** the 163M-position 768-input net (`nnue-h256-100m-e71.npz` on
   `nnue/weights-v1`), benched as the last read on the 768 architecture before anyone starts on
   king-relative features. Code identical to `prod` afb34f4 = v4.1; the weight file is the only
