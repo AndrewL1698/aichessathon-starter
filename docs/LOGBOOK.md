@@ -964,3 +964,16 @@ us in round 88 at ACPL 10.
 
 The move-31 position is in `tests/positions`, now 62. v4.2 so far: round 98 won with two depth-8
 slips, round 99 drawn from a lost position. Blunders per game, real only, v4.2: 2, 6.
+
+### 2026-09-10, round 100: v4.2 beat Matrix by mate in 38 as White. Nothing to fix.
+
+Banner and depth profile: v4.2 (depth 7 to 10, median 8, at 0.48M nps). Stockfish 19 at depth 18:
+our ACPL 25, no real blunder (28.c7 cost 500 cp of a +2101 position, cosmetic); Matrix's ACPL 117
+with three real mistakes, 10...b4 the one that mattered (+41 to +298). 12.Nxf7 is Stockfish's
+own move and was played at depth 8 after 4.0 s with 109 s on the clock; the score rose from +184
+there to a forced mate at move 35 without a wrong turn. 74.3 s used, 60.7 s left over 30 moves,
+all lines survive. The one inaccuracy was 9.Ng5 (91 cp, e4 was better), under the threshold.
+
+The evaluation's scale again: from move 11 our score sat 160 to 800 cp below Stockfish's in a
+position that was won throughout (+137 against +298 at move 11, +354 against +791 at move 19).
+It changed nothing here. Blunders per game, real only, v4.2: 2, 6, 0 (rounds 98 to 100).
