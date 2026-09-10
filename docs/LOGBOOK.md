@@ -831,6 +831,171 @@ pushed for a PR.
 the engine wins from a won position, because that is decided by depth-6 middlegame moves, which
 is cycle 4's pruning work, in flight elsewhere. No rated game has been played by either branch.
 
+### 2026-09-10, v4.2: the submission. v4.1 plus the contempt fix, proven not to regress; not an Elo claim.
+
+Asked for a build that is better than v4.0 on the problems its rated games showed without adding
+new ones. What ships is v4.1 (the rook-pawn draw rule from round 82, the queen-first promotion
+tie-break from round 85) plus `eval/contempt-quiescence` (round 90's draw-seeking contempt on a
+pending recapture). The check extension is not in it: not proven, and it trades half a ply for one
+class of position. The merge into prod is the team's to make and was refused to this session, so
+the zip was built from the branch at f05f0dd, whose tree is exactly what the merge commit will
+carry; the tag `v4.2` goes on that merge.
+
+Verified on the build itself: KP(h)vK with the defender in front reads 0 with contempt 0; the round
+85 position promotes to the queen at every clock; the three round 90 recaptures read contempt 0
+where v4.0 read +50; a real two-pawn deficit still reads +50 and KRvK still reads -50. Then the
+whole pre-upload set from `docs/TEAM.md`: 96 games vs v4.1 (50.5%, +4, -61 to +69); vs v4.0, 96
+fast games 52.1% (+14, -44 to +73) and 48 proxy games 46.9% (-22, -107 to +61), 50.3% pooled,
+clock minimum 2.5 s on both sides; two 120 s + 0.5 s games, one win one loss, worst move 12.5 s
+inside a 15 s hard budget, clocks never under 15 s; 60 games vs random at 3 s and 16 at 2 s, all
+76 won by mate, zero failed terminations; `ruff`, `mypy`, `tests.test_fastsearch`,
+`tests.test_nnue` green; suite 27/47, the same as v4.1; `make zip` smoke clean, seven files,
+877 KB unzipped, peak RSS 255 MB. No disqualifier anywhere.
+
+**What "proven" means here.** Every change since v4.0 fixes a situation a rated game produced and
+is Elo-neutral by design, so the proof is the positions it fixes plus no measurable regression
+over 240 games, not a lower bound above v4.0. Nothing on prod or in flight has such a lower bound
+(check extension +23 with -14; hard-divisor-6 +31 with -13; null move rejected at the proxy).
+
+### 2026-09-10, rounds 91 to 96: the contempt-only build's six rated games. Won 2, drew 1, lost 3. The losses are the depth-6 class; the contempt fix decided nothing.
+
+**Which build.** All six carry the new contempt logic: on the 33 moves where the old and the new
+`root_contempt` disagree and a search line survives, the printed contempt matches the new one every
+time and the old one never (rounds 82 to 90 match the old one every time). Depth 7 at 0.45 to
+0.57M nps, the same as v4.0. So this is `submission-v4.2.zip` as built at 01:23, v4.1 plus
+`eval/contempt-quiescence`, and not the PVS/LMR stack that carries the `v4.2` tag since PR #22
+(that build searches deeper and has the old `root_contempt`). To end the collision, this build is
+**v4.1-contempt** in `docs/VERSIONS.md` from here on; the zip keeps its file name.
+
+| Round | Opponent | Colour | Result | Our ACPL / real | Their ACPL / real | Stockfish peak for us |
+|---|---|---|---|---|---|---|
+| 91 | Shah's Mate | White | won, mate | 10 / 0 | 44 / 2 | won throughout |
+| 92 | CheckmateGPT | White | lost, mate | 33 / 2 | 20 / 2 | +338 at move 34 |
+| 93 | Nakamura | Black | lost, mate | 58 / 3 | 17 / 0 | +12 |
+| 94 | Matrix | Black | draw, repetition | 29 / 2 | 29 / 1 | +13 |
+| 95 | AggieQuant | White | lost, mate | 49 / 3 | 18 / 0 | +214 at move 13 |
+| 96 | spring_week_converter | Black | won, mate | 43 / 5 | 66 / 7 | won throughout |
+
+Stockfish 19 at depth 18, joined to our search lines as before. The record is v4.0's (2 W 4 D 3 L
+over rounds 82 to 90) with two draws turned into a win and a loss, which six games cannot
+distinguish from noise; the three losses are to opponents at ACPL 17 to 20 who made zero to two
+real mistakes. Where they went: round 92, 34.Ne2 (+338 to +20, inside the log gap; e4 keeps it)
+and 42.d4 (-118 to -504, depth 6, 0.8 s of a 1.4 s budget with 25 s on the clock); round 93,
+30.fxg3 and 31.Rxd2 (+3 to -627 across two depth-6 moves with 37 s on the clock, ...Bd6 both
+times); round 95, 13.Bf4 (+214 to +77, depth 7), 26.Red1 (+202 to +77, depth 7, Qxe5 wins a
+pawn), then 42.Qe7 and 43.Re3 at depth 6 and 7. Every decisive move is a depth-6 or depth-7 move
+with 25 to 98 s on the clock: the class every review since round 82 has named, and the class PVS
+and LMR are for.
+
+**The contempt fix, move by move.** 33 of our moves read a different contempt than v4.1 would
+have: 23 pending recaptures that no longer read +50, 9 material wins that now read -50, and one
+each of 0 to +50 and +50 to -50. Two coincide with a Stockfish drop, 29...h5 in round 94 (0 to
+-128, drawn three moves later anyway) and 26.Red1 in round 95 (+202 to +77). At fixed depth both
+positions produce the same move at contempt -50, 0 and +50, so contempt did not choose either; no
+draw line was in either tree. Nothing in the six games traces to the fix, and nothing shows it
+earning anything: no perpetual was on offer with a capture pending.
+
+**Go back to v4.0?** No. v4.0 lost rounds 86 and 90 and drew 87 from +372 by the same mechanism,
+and v4.1-contempt is v4.1 plus one change that decided nothing here. The proven step is the
+PVS/LMR build tagged `v4.2` (+143 vs v4.1, +101 to +190, 696 games without a disqualifier), which
+the status already names as the Friday upload; the contempt change should be benched on top of it
+before it rides along. Eleven positions into `tests/positions`. Blunders per game, real only,
+v4.1-contempt: 0, 2, 3, 2, 3, 5.
+
+### 2026-09-10, rounds 97 and 98: the last v4.1-contempt game and v4.2's first. Both won.
+
+Which build, from the logs: round 97 (finished 13:20 UTC) searched at depth 6 to 8, median 7, with
+contempt values only 0 and -50, which is `v4.1-contempt`; round 98 (14:19 UTC) searched at depth 7 to
+12, median 9, never past 1.9x the soft budget, with +50 among its contempt values, which is the
+PVS/LMR stack with the capped gate and the old `root_contempt`: **v4.2's first rated game**. Node
+rates 0.53M and 0.49M, so the extra two plies are the search, not the machine. Stockfish 19 at depth
+18 joined to the surviving lines as before; both logs complete except eight lines of round 98.
+
+| Round | Build | Opponent | Colour | Result | Our ACPL / real | Their ACPL / real |
+|---|---|---|---|---|---|---|
+| 97 | v4.1-contempt | Shah's Mate | White | won, mate in 54 | 17 / 0 | 63 / 4 |
+| 98 | v4.2 | zenith | White | won, mate in 70 | 22 / 2 | 42 / 3 |
+
+**Round 97** is the cleanest v4.x win on record: no move cost 150 cp, the opponent's errors from
+move 29 on were taken, and the root score sat 24 cp from Stockfish's in level positions. 124.9 s
+used, 19.6 s left.
+
+**Round 98** is a first look at v4.2 on the platform and it is mixed. Two real blunders, both at
+depth 8: 13.a5 (+325 to +10, 3.2 s of a 5.0 s soft budget with 114 s on the clock; 13.e5 wins) and
+32.Rd1 (0 to -168, 2.1 s of 3.0 s with 65 s; e5 again). Moves 33 to 35 sat at -205 to -254 by
+Stockfish while our score read -80 to 0, the one "unseen" stretch, and the game turned on zenith's
+47...Qc2. From move 44 the engine converted without error. **Nothing went wrong at depth 9 or
+deeper (0 of 31 moves); both errors were the depth-8 moves, and 32 of the 52 surviving lines were
+depth 9 or more, where v4.1 lived at 6 and 7.** The gate cap shows in the spend: 19 of 52 moves
+stopped under half the soft budget, none of them a blunder, and no move ran past 2.5x soft. The
+evaluation is v4.0's, and so is its scale: from move 48 on our score trailed Stockfish's by 220 to
+490 cp in a won position, as in rounds 83 and 84. 128.5 s used, 21.5 s left over 60 moves. The two
+positions are in `tests/positions`, now 61. Blunders per game, real only: v4.1-contempt 0, 2, 3, 2,
+3, 5, 0 over rounds 91 to 97; v4.2 2 over round 98.
+
+### 2026-09-10, round 99: v4.2 drew Phantom by repetition, from a lost rook ending the opponent failed to convert.
+
+Banner and depth profile: v4.2 (depth 7 to 13, median 10, at 0.53M nps). Stockfish 19 at depth 18:
+our ACPL 94 with six moves over 150 cp, five of them inside a position already lost; Phantom made no
+real mistake until 67...Kh8, which allowed the threefold. 135.0 s used, 16.0 s left over 62 moves,
+52 lines survive.
+
+**How it was lost.** Not by one move. From a level start, 11.Ncb5 (depth 8, 7.5 s, 106 s on the
+clock) cost 135 cp, and 12.Bd2, 14.Na3, 15.e3, 23.Nd4, 24.Rcd1, 25.Rf2 and 26.Re2 cost 20 to 109 cp
+each, so Stockfish read -176 after move 11, -267 after move 14 and -496 after move 25 with no single
+drop reaching the blunder threshold until 31.Rc4 (-360 to -537, b4 held). That is a strong
+opponent's pressure being answered with second-best moves at depth 8 to 10, the same class as
+round 86 against AIY and round 93 against Nakamura, one ply deeper than v4.1 managed and still not
+enough here.
+
+**What our score said meanwhile.** -65 to -97 across moves 12 to 14 where Stockfish had -195 to
+-267, and -183 to -267 across moves 25 to 30 where Stockfish had -391 to -504: a lag of 130 to 270
+cp for twenty moves. This is the losing-side face of the compression measured on the winning side
+in rounds 83, 84 and 98; the network and the blend are v4.0's, so v4.2 inherits it unchanged. It
+did not choose a move here that a truer number would have changed, as far as the joined lines
+show, but it is the reason the printed scores read "slightly worse" through a lost middlegame.
+
+**The ending.** From move 42 the rook ending was -600 and worse; 54.Rf7, 55.Kc5, 57.Rf8 and
+59.Ke3 are the five flagged moves in a position Stockfish already scored as mate, and 57.Rf8 f1=Q
+58.Rxf1 Rxf1 left a bare king against rook and pawn. At move 66 the search reached depth 21 and
+found the repetition at +50 (contempt reads us as lost, so a draw is worth +50), and Phantom's
+67...Kh8 took it. A gift, and not one to plan around: the same engine held a level ending against
+us in round 88 at ACPL 10.
+
+The move-31 position is in `tests/positions`, now 62. v4.2 so far: round 98 won with two depth-8
+slips, round 99 drawn from a lost position. Blunders per game, real only, v4.2: 2, 6.
+
+### 2026-09-10, round 100: v4.2 beat Matrix by mate in 38 as White. Nothing to fix.
+
+Banner and depth profile: v4.2 (depth 7 to 10, median 8, at 0.48M nps). Stockfish 19 at depth 18:
+our ACPL 25, no real blunder (28.c7 cost 500 cp of a +2101 position, cosmetic); Matrix's ACPL 117
+with three real mistakes, 10...b4 the one that mattered (+41 to +298). 12.Nxf7 is Stockfish's
+own move and was played at depth 8 after 4.0 s with 109 s on the clock; the score rose from +184
+there to a forced mate at move 35 without a wrong turn. 74.3 s used, 60.7 s left over 30 moves,
+all lines survive. The one inaccuracy was 9.Ng5 (91 cp, e4 was better), under the threshold.
+
+The evaluation's scale again: from move 11 our score sat 160 to 800 cp below Stockfish's in a
+position that was won throughout (+137 against +298 at move 11, +354 against +791 at move 19).
+It changed nothing here. Blunders per game, real only, v4.2: 2, 6, 0 (rounds 98 to 100).
+
+### 2026-09-10, round 101: v4.2 beat Yumo by mate in 48 as Black. One gate-refused slip in a won game.
+
+Banner and depth profile: v4.2 (depth 6 to 10, median 8, at 0.41M nps, the slowest node rate of
+its four games). Stockfish 19 at depth 18: our ACPL 39, one real blunder and two cosmetic ones
+inside a +1,600 position; Yumo's ACPL 67 with five real mistakes. 100.8 s used, 40.2 s left over
+42 moves, all lines survive. The score never dipped: Stockfish had us ahead from the first move
+and past +300 by move 28.
+
+**The one real error.** 28...Rb8 (+313 to +138; ...Rc5 keeps it) was played at depth 7 after 872
+ms of a 2,862 ms soft budget with 61 s on the clock: the gate refused depth 8. It is the same shape
+as 34.Qc6 in round 82 and 16...Bg7 in round 86, one ply deeper because this is v4.2, and it cost
+nothing here because the position stayed won. Fourteen of the 42 moves stopped under half the soft
+budget; this was the only one that cost anything.
+
+**Calibration.** Level positions read 13 cp from Stockfish's on average; from move 30 the score
+trailed by 200 to 440 cp in a position Stockfish had at +345 to +750, the compression seen in every
+v4.x win. The position is in `tests/positions`, now 63. Blunders per game, real only, v4.2: 2, 6,
+0, 1 over rounds 98 to 101 (3 W 1 D).
 ### 2026-09-10, cycle 7: the 163M-position net on the same features. Rejected on 144 games.
 
 Asked as the baseline read on the 768-input architecture, before any king-relative feature work

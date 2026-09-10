@@ -103,7 +103,11 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   so a bench today scores 50% by construction, and the init line says so out loud to stop a
   stray row being read as a result. Next, in order: rebuild shards (old ones carry 768 indices
   and are now refused by design), warm start with `tools/nnue/bucketize.py`, fine-tune, export,
-  bench against `local-opponents/v4.1` at both controls. Whoever trains it should know
+  bench against `local-opponents/v4.2` at both controls. **The branch is based on afb34f4,
+  which is v4.1**: v4.2 (PVS, late move reductions, the spend ceiling) landed on `prod` after
+  it and changed only `fastsearch.py`, which this branch does not touch, so it merges up
+  cleanly -- but merge it up before benching, and re-take the 3.4% on v4.2's search, because
+  reductions change how often a king move is searched at all. Whoever trains it should know
   `densify` now builds a 201 MB dense batch at batch 16384, against 50 MB before; drop the batch
   size before anything else. **The 32-bucket version does not start unless that bench shows a
   credible gain that outweighs the 3.4%.**
@@ -127,7 +131,30 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
   read-only directory, which is the read-only-filesystem check for free. PGNs under
   `~/Documents/pgn/2026-09-10-*`; the numbers are cycle 7 in `docs/BENCH_LOG.md`. **What this
   leaves for the king-relative work:** more data on the same 768 features has now failed twice,
-  which is the argument that the feature set is the binding constraint.
+  which is the argument that the feature set is the binding constraint. v4.2 landed after this
+  run and left `weights/nnue.npz` byte-identical, so the verdict still names the file that
+  ships.
+- 2026-09-10 afternoon · **rounds 91 to 96 were v4.1-contempt** (the 01:23 zip), not the PVS/LMR
+  `v4.2`: 2 W 1 D 3 L, the three losses to opponents at ACPL 17 to 20 on depth-6/7 moves with 25 to
+  98 s on the clock; the contempt change decided no move (checked at fixed depth on the two it
+  coincided with). Do not go back to v4.0; upload the `v4.2` tag (PVS/LMR, +143 vs v4.1). The
+  `submission-v4.2.zip` in the repo root is NOT that build. Eleven positions into the suite.
+- 2026-09-10 morning · **v4.2** = v4.1 + PR #22 (`stack/v42`: PVS, LMR with no reduction at a PV node,
+  iteration gate capped at 1.5x soft). Benched on the idle M5 vs v4.1: 69.5% at 10 s over 200, 69.8% at
+  the 45 s proxy over 48, 0 disqualifiers in 696 games; audited (PVS exact over 1,120 searches; the cap
+  raises the 120 s clock minimum from 9.3 s to 16.7 s in the round-85 replay). Frozen at
+  `local-opponents/v4.2`, tag `v4.2`; **this is the upload for the Friday 11:00 UK cutoff**. Bench
+  baseline is v4.2. Held: PR #16 null move, PR #18 hard divisor. Next candidates: a soft-budget floor
+  against the increment (long games settle at 5 to 7 s on every build), the warm/cold root tie
+  instability, the LMR minimum-depth knob.
+- 2026-09-10 01:30 · **v4.1-contempt** (built as `submission-v4.2.zip` before the tag went to PR #22; played rounds 91 to 96) = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
+  so a pending recapture no longer sets draw-seeking contempt in a level position; round 90). Built as
+  `submission-v4.2.zip` from the branch (f05f0dd) because the merge into prod is the team's to make:
+  PR open, tag `v4.2` goes on the merge commit. Proof: 96 vs v4.1 50.5%; vs v4.0 96 fast 52.1% and 48
+  proxy 46.9% (50.3% pooled), two 120 s games 1-1 with worst move 12.5 s and clocks over 15 s, 76 vs
+  random all mates, 0 disqualifiers, suite 27/47, smoke clean. Frozen at `local-opponents/v4.2`;
+  bench baseline v4.2. Every change since v4.0 fixes a rated-game situation and is Elo-neutral by
+  design; nothing on prod has an Elo lower bound above v4.0.
 - 2026-09-10 · **Rejected, PR #19 closed unmerged** `eval/mobility`: knight, bishop, rook and
   queen mobility in both evaluations. **47.3% pooled over 128 games** against v4.0-plus-rook-pawn
   baselines (53.1% on 64 at 10 s, 39.1% on 32 at the 45 s proxy, 43.8% on 32 at the 28-opening

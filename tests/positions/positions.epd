@@ -56,3 +56,22 @@ r1bq1rk1/1p1p1p2/2nN1bpp/p1P1p3/8/6P1/PP1NPPBP/R2Q1RK1 b - - 3 16; bm b7b6; id "
 1R6/5kpp/5r2/8/2R1P3/7P/3r2P1/6K1 b - - 0 39; bm f6e6; id "r90 m39 Rff2 -505"
 8/5r2/6R1/7k/6R1/6KP/5rP1/8 b - - 23 56; bm f2g2; id "r90 m56 R2f3+ -424"
 5r2/7K/6R1/7k/6R1/7P/8/8 b - - 23 69; bm f8h8; id "r90 m69 Rf7+ -mate"
+# Rounds 91 to 96 (v4.1-contempt, i.e. v4.1 plus eval/contempt-quiescence). Stockfish 19 depth 18, 150 cp threshold; positions already lost by more than five pawns left out.
+4r1k1/1p1b1p2/3b4/3p3p/pP1N2pq/P2PP1nP/2R2QP1/4RNK1 w - - 2 34; bm e3e4; id "r92 m34 Ne2 -318"
+6k1/1p3p2/3b2b1/3p2q1/pP5p/P1rPPQ2/5RP1/R4NK1 w - - 0 42; bm f3h3; id "r92 m42 d4 -386"
+5b1k/pRp3p1/2n4p/3B3q/P1PP2b1/2B3P1/3NrP2/5QK1 b - - 0 31; bm f8d6; id "r93 m31 Rxd2 -527"
+1r3rk1/p4ppp/Q1nqpn2/3p4/3P2b1/2PB1N2/PP1N1PPP/R4RK1 b - - 4 13; bm b8b6; id "r94 m13 Rxb2 -225"
+1r4k1/p1qn1ppp/2n1p1b1/3p4/3P3N/Q1P1R2P/P2N1PP1/R5K1 b - - 10 21; bm g6h5; id "r94 m21 Nf8 -189"
+8/1Q4pk/3r1p1p/1pp1nP2/q3B3/6PP/P4P2/4R1K1 w - - 0 42; bm e4d5; id "r95 m42 Qe7 -195"
+8/4Q1pk/3r1p1p/1pp1nP2/1q2B3/6PP/P4P2/4R1K1 w - - 2 43; bm e1e2; id "r95 m43 Re3 -315"
+2r3k1/5ppp/3br3/p2Qp3/P1P5/4BP1q/4KP2/R3R3 b - - 1 26; bm e5e4; id "r96 m26 Bb4 -244"
+2r3k1/3q2pp/5p2/pQ2p3/PbP5/4BPR1/3r1P2/2R2K2 b - - 1 32; bm d2d6; id "r96 m32 Qd3+ -207"
+2r2qk1/6pp/2P2p2/pQ2p3/Pb6/4BPR1/5PK1/8 b - - 0 37; bm f8f7; id "r96 m37 h5 -556"
+4r1k1/5qp1/2P2pR1/p3bQ1p/P7/4BK2/5P2/8 b - - 0 45; bm f7d5; id "r96 m45 h4 -470"
+# Round 98 (v4.2's first rated game, won vs zenith). Stockfish 19 depth 18, 150 cp threshold, real only.
+r2qrbk1/2pb1ppp/p1np1n2/1p6/P2PP3/1B3N2/1P1N1PPP/R1BQR1K1 w - - 1 13; bm e4e5; id "r98 m13 a5 -315"
+1rr3k1/Q1p2pp1/3p2p1/Pp1P4/4PnP1/1B2R2P/1q3P2/4R1K1 w - - 2 32; bm e4e5; id "r98 m32 Rd1 -168"
+# Round 99 (v4.2, drawn vs Phantom from a lost ending). Stockfish 19 depth 18, 150 cp threshold; only the first flagged move was in a position still worth playing.
+6k1/5pbp/r1p3p1/p2r4/R2N3P/4P3/1P2R1K1/8 w - - 4 31; bm b2b4; id "r99 m31 Rc4 -177"
+# Round 101 (v4.2, won vs Yumo). Stockfish 19 depth 18, 150 cp threshold, real only.
+2rr2k1/1p3pp1/pP3q1p/P2n4/2p1p1B1/2P1P2P/5P1P/R1R1Q2K b - - 10 28; bm c8c5; id "r101 m28 Rb8 -175"
