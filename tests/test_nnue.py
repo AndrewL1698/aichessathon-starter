@@ -371,9 +371,10 @@ def check_policies(fens: list[str]) -> str:
 
     Past the handover the composition is the blend plus a whole mop-up term, and the half of
     that term the blend already carries through its hand half is why the arithmetic here adds
-    only the other half. A position the hand evaluation scores exactly 0 is a draw it has
-    proved from the material, so it stays 0 rather than being averaged with a network that
-    has never seen the position.
+    only the other half. Two positions past it are still the hand evaluation whole: a pawn
+    ending, where the net is reversed rather than merely unsure, and a position the hand
+    evaluation scores exactly 0, which is a draw it has proved from the material and not
+    something to average with a network that has never seen the position.
 
     `//` on the blend is floor division. Both inputs are side-to-move relative and both are
     mirror-invariant, so their mean is too, and the search never needs the evaluation to be an
@@ -389,7 +390,8 @@ def check_policies(fens: list[str]) -> str:
         net = int(fn.infer(acc, 0, int(st[0]), fn.NET))
         term = int(fe.mop_up(board, st))
         half = term // 2 if term >= 0 else -((-term) // 2)
-        past = 0 if hand == 0 else (hand + net) // 2 + half
+        whole = hand == 0 or fn.pawns_only(board)
+        past = hand if whole else (hand + net) // 2 + half
         wanted = {
             fn.HAND: hand,
             fn.ABSOLUTE: past if bare else net,
@@ -497,12 +499,20 @@ def check_bare_endgames(depth: int) -> str:
     because that is the hand policy `agent.py` still runs on and the conversion is the hand
     tables' own.
 
-    The playouts are no longer required to be *identical* with the network on and off, and
-    that is the change round 102 forced: scoring these positions with the hand tables alone
-    put a step in the evaluation at the handover, and the engine spent 47 moves refusing to
-    capture across it. `fastnnue.bare_endgame` has the numbers. The two evaluations now
-    differ past the line, so the two playouts may pick different mates; what is asserted is
-    that both mate, and `check_policies` above is what pins the composition exactly.
+    A position with a piece on the board is no longer required to play out *identically* with
+    the network on and off, and that is the change round 102 forced: scoring these positions
+    with the hand tables alone put a step in the evaluation at the handover, and the engine
+    spent 47 moves refusing to capture across it. `fastnnue.bare_endgame` has the numbers.
+    The two evaluations now differ past the line, so the two playouts may pick different
+    mates; what is asserted is that both mate, and `check_policies` above pins the
+    composition exactly.
+
+    A *pawn* ending keeps v4.2's handover whole, and what that buys is checked one level down
+    rather than on the playout: a search whose leaves are all pawn endings has to return the
+    same move and the same score with the network on and off, because every one of those
+    leaves is the hand evaluation either way. The playout itself is not identical and should
+    not be -- the pawn promotes, and the KQvK it promotes into is a piece ending scored by the
+    blend, which is the seam `fastnnue.bare_endgame` says is deliberately left there.
 
     Fixed depth rather than a clock, because a conversion that depends on how loaded the
     machine was is not a test. `contempt_for` is recomputed each ply, as `think` does, so the
@@ -535,6 +545,21 @@ def check_bare_endgames(depth: int) -> str:
                     f"with the network off, {name} ended in {without}: the hand policy "
                     f"`agent.py` runs on no longer converts it"
                 )
+            if fn.pawns_only(board):
+                # Deep enough to be a real search and shallow enough that no line in it
+                # reaches the eighth rank, so every leaf is still a pawn ending and the two
+                # evaluations are the same evaluation. A single leaf scored with the network
+                # in it moves the score.
+                fs.reset()
+                on = fs.search_fixed(fen, depth, nnue=True)[:2]
+                fs.reset()
+                off = fs.search_fixed(fen, depth, nnue=False)[:2]
+                if on != off:
+                    raise Failure(
+                        f"{name} is a pawn ending, where the network is handed over to the "
+                        f"hand tables whole, but at depth {depth} the search plays {on} with "
+                        f"it and {off} without it"
+                    )
             results.append(f"{name} {with_net} (hand alone: {without})")
     finally:
         fn.USE_NNUE = was

@@ -38,7 +38,8 @@ once per search; every node below it is incremental.
 on positions games reach has effectively never seen KRvK or KPvK, and it shows: it scores every
 legal move in KRRvK within a few centipawns of every other, because every one of them leaves
 the same men on the board. That function has the measurements and the reasoning, including why
-handing over to the hand tables *alone* -- what v4.2 did -- cost rated round 102 fifty moves.
+handing over to the hand tables *alone* -- what v4.2 did -- cost rated round 102 fifty moves,
+and why a pawn ending, which `pawns_only` picks out, is the one case that keeps that handover.
 
 **Missing or broken weights.** `weights/nnue.npz` arrives by a separate PR and is not in the
 tree here. If it is absent, unreadable, or fails the shape and scale checks, `LOADED` is False
@@ -91,7 +92,7 @@ INT16_MAX = 32767
 
 USE_NNUE = True
 
-# How a leaf is scored. `HAND` is `fasteval` alone, and it is also what every position past
+# How a leaf is scored. `HAND` is `fasteval` alone, and it is also what a pawn ending past
 # `bare_endgame` gets whatever else is set.
 HAND = 0
 # The net's centipawns alone. What an absolute net -- one trained to predict the evaluation
@@ -443,11 +444,58 @@ def bare_endgame(board: np.ndarray) -> bool:
     KPvK because it had no material term to anchor it; here it has half of one, and the
     conversion playouts in `tests/test_nnue.py` are what say that is enough. With the fix in
     place both round-102 positions play the capture: c3d3 at +1191 (depth 8) and +1330 (depth
-    12), e3d3 at +1115 and +1307.
+    12), e3d3 at +1105 and +1302.
+
+    **Except a pawn ending, which keeps the v4.2 handover.** `pawns_only` carves KPvK and its
+    relatives back out, and that is measured too: blending halves the hand's pawn terms, and
+    what the net contributes in their place is not noise but the *reverse* of the truth. Over
+    an e-pawn's march with the king behind it, e2/e4/e5/e6, the hand reads 72/112/152/232 and
+    the net reads 161/-16/25/-95, so the blend reads 116/48/88/68 and pushing the pawn costs
+    48 centipawns. Played out at depth 6 the ending went to insufficient material -- the
+    engine let the pawn go -- where the hand tables alone mate. Mop-up cannot rescue it
+    either: it needs `MOP_UP_MIN_ADVANTAGE`, four hundred centipawns, and a pawn ending is a
+    pawn ahead, so the term is exactly zero in every position of that ending whatever weight
+    it is given. There is also nothing to lose by staying with the hand tables here, because
+    the seam this whole change is about is a seam between two *scales*, and in a pawn ending
+    the material either side of it is a pawn: the round-102 step was several hundred
+    centipawns because a rook and a bishop were on the board.
+
+    **The seam this leaves.** A capture that turns a piece ending into a pure pawn ending
+    still crosses one: the position before it is scored by the blend plus mop-up and the
+    position after it by the hand tables alone, which is the same shape of discontinuity as
+    round 102, one exchange further down. It is left deliberately and it is much the smaller
+    of the two, because the men either side of such a capture are a piece and some pawns
+    rather than a rook and a bishop, and because the alternative is scoring pawn endings with
+    an evaluation that is measurably reversed in them -- KPvK is not a position the net is
+    merely unsure about, it prefers the pawn on e2 to the pawn on e6. Closing it means a net
+    that can rank a pawn ending, not a different way of averaging this one.
     """
     return _men_at_most(board, 0, MOP_UP_MAX_WEAK_PIECES) or _men_at_most(
         board, 1, MOP_UP_MAX_WEAK_PIECES
     )
+
+
+@njit(nbt.boolean(_BOARD_T), cache=False)
+def pawns_only(board: np.ndarray) -> bool:
+    """Kings and pawns and nothing else: the one ending `fastsearch.leaf` still hands over
+    whole to the hand tables.
+
+    `bare_endgame` above says why -- the net ranks a pawn's march backwards, and the mop-up
+    term that carries the other endings is gated off below four hundred centipawns, which a
+    pawn ending never reaches. Both colours are tested in one pass because a pawn ending is a
+    property of the board and not of a side: `fastboard` numbers White's men 1..6 and Black's
+    7..12 with pawn first and king last, so a knight, bishop, rook or queen of either colour
+    is a piece in 2..5 or 8..11 and any one of them is enough to answer.
+
+    Only ever called past `bare_endgame`, which is where the board is nearly empty anyway, so
+    the scan costs a handful of loads on the positions that reach it and nothing at all on the
+    ones that do not.
+    """
+    for square in range(21, 99):
+        piece = board[square]
+        if 2 <= piece <= 5 or 8 <= piece <= 11:
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------------------
@@ -700,6 +748,7 @@ def warm() -> None:
     refresh(board, acc, 0, NET)
     infer(acc, 0, 0, NET)
     bare_endgame(board)
+    pawns_only(board)
     push_null(acc, 0, NET)
     first = legal_moves(board, st, undo)[0]
     push(board, int(st[0]), acc, 0, first, NET)

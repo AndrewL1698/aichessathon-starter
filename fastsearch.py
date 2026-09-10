@@ -125,6 +125,7 @@ from fastnnue import (
     Net,
     bare_endgame,
     infer,
+    pawns_only,
     push,
     push_null,
     refresh,
@@ -643,6 +644,12 @@ def leaf(
     the shipped configuration is `BLEND`. It is a dozen loads on a full board, which is what
     makes the test affordable here.
 
+    A *pawn* ending past that line keeps the hand tables alone, as v4.2 had every ending past
+    it: the net does not rank a pawn's march noisily, it ranks it backwards, and the mop-up
+    term that carries the other endings is gated off below four hundred centipawns, which no
+    pawn ending reaches. `fastnnue.pawns_only` is that test and `fastnnue.bare_endgame` has
+    the numbers, including the seam it deliberately leaves at a capture into a pawn ending.
+
     The hand's dead draws survive as draws: where `fasteval` returns exactly 0 it is saying
     the material cannot mate (KBvK, KNvK) or the rook pawn cannot queen, and a network that
     has never seen the position does not get a vote on that. It is an override, not a term.
@@ -652,8 +659,8 @@ def leaf(
         return evaluate(board, st)
     if bare_endgame(board):
         hand = evaluate(board, st)
-        if hand == 0:
-            return 0
+        if hand == 0 or pawns_only(board):
+            return hand
         learned = infer(acc, ply, st[0], net)
         blended = (hand + learned) // 2
         # The blend carries half the mop-up term through its hand half; this is the other
