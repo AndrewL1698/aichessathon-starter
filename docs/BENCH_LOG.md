@@ -841,3 +841,139 @@ run reported 35.9% **with one flag** -- the termination class these rules call p
 and it was not real. Game 14 was replayed from the same index, which is the same pairing
 because the arena's game order is a pure function of the index, and it is a win. The row in the
 table above is the clean 32. The rule this produced is in `docs/TEAM.md`.
+
+## Cycle 4 (M5), 2026-09-10: the over-budget moves were the laptop, not the engine
+
+Cycle 4's late move reductions measured +74 Elo on the laptop and were disqualified anyway, by
+three moves of 396 to 758 ms against hard budgets of 191 to 229 ms. Every run below is on the
+M5, one bench at a time, machine otherwise idle. The baseline is `local-opponents/v4.1`.
+
+### The probe: `think` and `get_move` against the hard budget, in process
+
+50 positions (26 rated-game blunders from `tests/positions/positions.epd`, 6 from this repo's
+bench and endgame sets, 18 from the round 73-90 PGNs at plies 24/40/56/72), none of them a book
+position, at four short clocks, with reductions on and off, measuring both `fastsearch.think` and
+the `agent.get_move` the harness actually calls. `think` was not edited: an instrumented
+line-for-line copy stamped every stage of its python driver and was installed over
+`fastsearch.think`, which `get_move` calls too. The table clears before every measurement, so a
+cold table is what the projection has to work with. 800 measurements.
+
+| clock | LMR | entry | median over hard | p95 | max | over 50 ms |
+|---|---|---|---|---|---|---|
+| 1200 ms | on | think | -64.9 ms | +0.1 ms | +0.2 ms | 0/50 |
+| 1200 ms | on | get_move | -62.6 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 1200 ms | off | think | -73.2 ms | +0.1 ms | +0.1 ms | 0/50 |
+| 1200 ms | off | get_move | -73.5 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 1500 ms | on | think | -69.2 ms | +0.1 ms | +0.2 ms | 0/50 |
+| 1500 ms | on | get_move | -69.6 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 1500 ms | off | think | -85.2 ms | +0.1 ms | +0.2 ms | 0/50 |
+| 1500 ms | off | get_move | -86.5 ms | +0.5 ms | +0.5 ms | 0/50 |
+| 2000 ms | on | think | -92.9 ms | +0.2 ms | +0.2 ms | 0/50 |
+| 2000 ms | on | get_move | -94.4 ms | +0.5 ms | +0.6 ms | 0/50 |
+| 2000 ms | off | think | -100.5 ms | +0.2 ms | +0.2 ms | 0/50 |
+| 2000 ms | off | get_move | -100.0 ms | +0.5 ms | +0.9 ms | 0/50 |
+| 2500 ms | on | think | -140.8 ms | +0.6 ms | +0.9 ms | 0/50 |
+| 2500 ms | on | get_move | -143.7 ms | +0.6 ms | +1.2 ms | 0/50 |
+| 2500 ms | off | think | -132.0 ms | +0.7 ms | +0.9 ms | 0/50 |
+| 2500 ms | off | get_move | -132.5 ms | +1.2 ms | +1.3 ms | 0/50 |
+
+The worst of the 800 is `get_move` at **+1.27 ms** past the hard budget. Where the milliseconds
+go, as medians: the setup before the loop (`from_fen`, `legal_moves`, `observe`, the contempt
+evaluation, the from-scratch accumulator) 0.32 ms, the backstop's cancel and join 0.03 ms, the
+log line 0.02 ms, and the whole `agent.py` wrapper around `think` (the python-chess board, the
+fallback memory's reachable scan, the book probe, the legality check, `remember_played`) 0.34 ms.
+62 of the 400 moves ended on an abort, and those are the tight ones: median +0.13 ms, p95
++0.68 ms, max +0.90 ms past the deadline. Quiescence nodes count toward the clock-check mask
+exactly as negamax's do, so there is no unchecked region of the tree. The engine's problem at
+these clocks is the opposite of an overshoot: the median move spends 51-63% of its hard budget.
+
+Repeating the 1500 ms probe with 36 spinning processes on 18 cores, about twice oversubscribed,
+moved the maximum from +0.2 ms to **+6.2 ms with reductions on and +22.9 ms with them off**, and
+still put no move past a quarter of its clock. So contention is the mechanism and it points the
+right way, but twice oversubscribed does not reach 396 ms; the laptop's runs were two four-job
+benches on ten cores, with a 260 MB engine per game and a five-second numba compile as each new
+game's process imports. **No time-management fix was made.** Every cause the probe could have
+found is under a millisecond, and the 200-game row below is the same measurement that
+disqualified the cycle, run on an idle machine.
+
+### The rows
+
+`time/platform-spend-v41` is v4.1 plus 515cc62 alone (the iteration gate capped at 1.5x the soft
+budget). `stack/v42` is `search/lmr` (PVS, late move reductions, and "never reduce at a principal
+variation node") plus that same commit. The middle row is the intermediate build the probe was
+run against, kept because its 200 games are the direct answer to the disqualifier.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| platform-spend + PVS, LMR off | v4.1 | 10s+0.1s | 200 | +84 =44 -72 | 53.0% | +21 | -22 to +64 | 0 / 0 / 0 / 0 | 1.26s | 262 MB |
+| A `time/platform-spend-v41` | v4.1 | 10s+0.1s | 200 | +68 =59 -73 | 48.8% | -9 | -50 to +32 | 0 / 0 / 0 / 0 | 1.29s | 261 MB |
+| A `time/platform-spend-v41` | v4.1 | 45s+0.2s | 48 | +12 =13 -23 | 38.5% | -81 | -175 to +2 | 0 / 0 / 0 / 0 | 5.65s | 255 MB |
+| B `stack/v42` | v4.1 | 10s+0.1s | 200 | +115 =48 -37 | 69.5% | +143 | +101 to +190 | 0 / 0 / 0 / 0 | 1.28s | 263 MB |
+| B `stack/v42` | v4.1 | 45s+0.2s | 48 | +26 =15 -7 | 69.8% | +145 | +66 to +243 | 0 / 0 / 0 / 0 | 5.63s | 257 MB |
+| C `stack/noceiling` | v4.1 | 10s+0.1s | 200 | +121 =41 -38 | 70.8% | +153 | +110 to +202 | 0 / 0 / 0 / 0 | 1.29s | 263 MB |
+| C `stack/noceiling` | v4.1 | 45s+0.2s | 48 | +27 =16 -5 | 72.9% | +172 | +94 to +270 | 0 / 0 / 0 / 0 | 5.68s | 257 MB |
+
+**Not one over-budget move in 1,096 games**, the 10 s rows at `--jobs 9`, the 45 s rows at
+`--jobs 4`. The worst move of every run is its hard budget plus a clock-check slice. That closes
+the disqualifier: it was the laptop.
+
+**The search is the gain and the ceiling is not.** B and C both clear zero at both controls and
+are the same measurement within noise at 10 s (+143 and +153), which is the check that the
+ceiling really is inert below a ~9.2 s clock, since the two builds differ only by 515cc62. At
+45 s, where it does bind, C without it scores 72.9% against B's 69.8%, a point estimate 27 Elo
+apart on heavily overlapping intervals. That is not significant on 48 games a side, but it is the
+same sign as the ceiling measured alone: A is -9 [-50, +32] fast, which says little for the same
+inertness reason, and **-81 [-175, +2] at 45 s**. Two independent measurements of one commit,
+both negative on strength.
+
+### 120 s + 0.5 s, one game per colour
+
+`harness/sandbox.py` keeps a head and a tail of each game's stderr with `[N bytes dropped]`
+between them, mirroring the platform's 4 KB + 4 KB, so a long game's middle is never logged. The
+clocks below therefore come from the PGN, which is complete: `%clk` is the clock after the move
+including the increment, and it matches the engine's own logged `clock` for the next move to a
+millisecond, so a spend derived from it is the engine's spend plus the harness round trip. Depth
+can only come from the log, so its column says how many of our opening moves it covers.
+
+| cand | game | result | our moves | depth over our first N logged | clock minimum | slowest move | worst spend minus hard |
+|---|---|---|---|---|---|---|---|
+| A | white | draw, insufficient material | 72 (to move 78) | 7 / 8 / 9 over 27 | 17.24 s at move 77 | 8430 ms | +1 ms |
+| A | black | win by checkmate | 50 (to move 55) | 6 / 7 / 9 over 40 | 40.26 s at move 52 | 7351 ms | -1967 ms |
+| B | white | draw, fifty moves | 166 (to move 172) | 9 / 10 / 12 over 25 | 5.06 s at move 116 | 7785 ms | +1 ms |
+| B | black | win by checkmate | 56 (to move 61) | 8 / 11 / 14 over 25 | 24.98 s at move 56 | 6078 ms | -210 ms |
+| C | white | win by checkmate | 39 (to move 45) | 10 / 10 / 13 over 39 | 21.43 s at move 40 | 10694 ms | +1 ms |
+| C | black | draw, insufficient material | 80 (to move 85) | 8 / 10 / 11 over 25 | 7.16 s at move 81 | 9719 ms | +1 ms |
+
+All three candidates scored 1.5/2. **Over all 463 of our moves in the six games the worst
+exceeded its hard budget by 1 ms, and none reached a quarter of its clock**; the handful of moves
+that read as "past hard" are 0.4 to 1.4 ms over on a figure derived from the PGN, which includes
+the harness round trip. A holds v4.1's depth, which is what a pure time change should do; B and C
+are two to three plies deeper over the same opening moves, which is the reductions.
+
+All six games start from `harness.play`'s default opening, so they are matched, and the clock
+trajectory separates the ceiling where the Elo cannot. Our clock in seconds after our move N:
+
+| cand | side | our moves | m20 | m30 | m40 | m60 | m80 | minimum | at move |
+|---|---|---|---|---|---|---|---|---|---|
+| A | white | 72 | 75.0 | 59.0 | 48.1 | 28.5 | end | 17.24 | 77 |
+| B | white | 166 | 85.6 | 64.1 | 43.1 | 26.6 | 11.6 | 5.06 | 116 |
+| C | white | 39 | 58.0 | 36.3 | 21.4 | end | end | 21.43 | 40 |
+| A | black | 50 | 91.4 | 67.9 | 51.0 | end | end | 40.26 | 52 |
+| B | black | 56 | 84.8 | 63.7 | 44.1 | 26.7 | end | 24.98 | 56 |
+| C | black | 80 | 54.3 | 35.3 | 25.7 | 11.8 | 7.2 | 7.16 | 81 |
+
+**At matched move numbers C spends far faster than B, in both colours and from move 20 on**: by
+move 40 C holds 21.4 s and 25.7 s where B holds 43.1 s and 44.1 s. The ceiling is worth about
+20 s of clock by move 40, which is what it was written to do. B's 5.06 s minimum is not B
+spending faster; it is a 166-move game, and at every matched move number B is the most
+conservative build in the table.
+
+B's white game is the one to read: 172 moves, terminated by the fifty-move rule in a dead-drawn
+same-colour bishop ending that both sides shuffle from about move 85. Its clock reads 43.1 s after
+move 40, 26.6 s after move 60, 11.6 s after move 80 and 6.4 s after move 100, bottoms out at
+5.06 s on move 116 and recovers to 6.9 s by the end. The 1.5x ceiling bound on 78 of our 166
+moves, every one down to a clock of about 9.1 s, below which `budgets` clamps soft to hard and the
+ceiling is inert. What drains the clock is not the ceiling but that `soft = clock/25 + 400` has no
+floor against the increment: at a 6 s clock the soft budget is 640 ms against a 500 ms increment,
+so a long game settles at a fixed point near 5-7 s. v4.1 does the same in a 170-move game;
+`time/reserve-floor` in `docs/VERSIONS.md` is the candidate that addresses it.
