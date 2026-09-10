@@ -83,3 +83,6 @@ r2qrbk1/2pb1ppp/p1np1n2/1p6/P2PP3/1B3N2/1P1N1PPP/R1BQR1K1 w - - 1 13; bm e4e5; i
 8/3R4/8/pp1P4/1k3K2/8/1r3P2/8 w - - 1 49; bm f4e3; id "r103 m49 Ra7 -251"
 # Round 104 (v4.2's first loss, vs Imperial Larper). Stockfish 19 depth 18, 150 cp threshold; the two later flagged moves were in a lost position.
 1rb3k1/R5b1/3p3p/1PpP2qP/3pP1p1/3P2P1/1P2B2N/4Q1K1 b - - 2 28; bm c5c4; id "r104 m28 Qxh5 -267"
+# Round 102 (v4.2, won vs Magician from Riga in 114 moves after 47 shuffled ones). Not Stockfish-flagged blunders but the bare-endgame seam: the winning move is a capture across `fastnnue.bare_endgame`, which v4.2 refused because the two sides of the line were scored on different scales.
+8/8/8/3B4/3p1p2/2kP1P2/7r/3K4 b - - 2 54; bm c3d3; id "r102 m54 Kxd3"
+8/8/4B3/2r5/3p1p2/3PkP2/8/6K1 b - - 78 92; bm e3d3; id "r102 m92 Kxd3"
