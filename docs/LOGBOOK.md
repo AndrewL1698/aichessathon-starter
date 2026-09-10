@@ -932,3 +932,35 @@ evaluation is v4.0's, and so is its scale: from move 48 on our score trailed Sto
 490 cp in a won position, as in rounds 83 and 84. 128.5 s used, 21.5 s left over 60 moves. The two
 positions are in `tests/positions`, now 61. Blunders per game, real only: v4.1-contempt 0, 2, 3, 2,
 3, 5, 0 over rounds 91 to 97; v4.2 2 over round 98.
+
+### 2026-09-10, round 99: v4.2 drew Phantom by repetition, from a lost rook ending the opponent failed to convert.
+
+Banner and depth profile: v4.2 (depth 7 to 13, median 10, at 0.53M nps). Stockfish 19 at depth 18:
+our ACPL 94 with six moves over 150 cp, five of them inside a position already lost; Phantom made no
+real mistake until 67...Kh8, which allowed the threefold. 135.0 s used, 16.0 s left over 62 moves,
+52 lines survive.
+
+**How it was lost.** Not by one move. From a level start, 11.Ncb5 (depth 8, 7.5 s, 106 s on the
+clock) cost 135 cp, and 12.Bd2, 14.Na3, 15.e3, 23.Nd4, 24.Rcd1, 25.Rf2 and 26.Re2 cost 20 to 109 cp
+each, so Stockfish read -176 after move 11, -267 after move 14 and -496 after move 25 with no single
+drop reaching the blunder threshold until 31.Rc4 (-360 to -537, b4 held). That is a strong
+opponent's pressure being answered with second-best moves at depth 8 to 10, the same class as
+round 86 against AIY and round 93 against Nakamura, one ply deeper than v4.1 managed and still not
+enough here.
+
+**What our score said meanwhile.** -65 to -97 across moves 12 to 14 where Stockfish had -195 to
+-267, and -183 to -267 across moves 25 to 30 where Stockfish had -391 to -504: a lag of 130 to 270
+cp for twenty moves. This is the losing-side face of the compression measured on the winning side
+in rounds 83, 84 and 98; the network and the blend are v4.0's, so v4.2 inherits it unchanged. It
+did not choose a move here that a truer number would have changed, as far as the joined lines
+show, but it is the reason the printed scores read "slightly worse" through a lost middlegame.
+
+**The ending.** From move 42 the rook ending was -600 and worse; 54.Rf7, 55.Kc5, 57.Rf8 and
+59.Ke3 are the five flagged moves in a position Stockfish already scored as mate, and 57.Rf8 f1=Q
+58.Rxf1 Rxf1 left a bare king against rook and pawn. At move 66 the search reached depth 21 and
+found the repetition at +50 (contempt reads us as lost, so a draw is worth +50), and Phantom's
+67...Kh8 took it. A gift, and not one to plan around: the same engine held a level ending against
+us in round 88 at ACPL 10.
+
+The move-31 position is in `tests/positions`, now 62. v4.2 so far: round 98 won with two depth-8
+slips, round 99 drawn from a lost position. Blunders per game, real only, v4.2: 2, 6.
