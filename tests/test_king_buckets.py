@@ -528,6 +528,16 @@ def check_rebucket(rng: random.Random, fens: list[str], by_bucket: dict[int, lis
         raise Failure(f"the sample does not cover every bucket: {seen}")
 
     got = rebucket.convert_indices(flat, "test")
+    # The property the converter rests on, asserted rather than implied by the comparison
+    # below: a scheme-2 index is the scheme-1 index plus a whole number of blocks, so the two
+    # agree modulo 768 on every active feature and the offset is constant within a row.
+    active_mask = flat != features.PAD
+    if not np.array_equal(got[active_mask] % features.BASE_FEATURES, flat[active_mask]):
+        raise Failure("a converted index is not the original one modulo 768")
+    offsets = got[active_mask] - flat[active_mask]
+    per_row = {int(o) for o in offsets}
+    if not per_row <= {b * features.BASE_FEATURES for b in range(features.NUM_BUCKETS)}:
+        raise Failure(f"a converted row was offset by something that is not a block: {per_row}")
     if not np.array_equal(got, wanted):
         row = int(np.argmax((got != wanted).any(axis=1)))
         raise Failure(
