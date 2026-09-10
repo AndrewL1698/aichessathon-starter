@@ -683,3 +683,151 @@ of a middlegame at depth 6 because the next iteration is projected past the hard
 winning-side compression is here too: our root score read +51 to +93 across moves 11 to 27
 while Stockfish read +158 to +330. The position before 28.bxc4 is in `tests/positions`, which
 now holds 45. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1.
+
+### 2026-09-09, cycle 4, small fixes: three candidates from the rated-game reviews. One merged, one open, one rejected.
+
+The reviews of rounds 76 to 87 named three items small enough for one-change branches; each was
+benched against `local-opponents/v4.0`, 96 games at 10 s + 0.1 s, four at a time, with the
+disqualifier counts and peak RSS, and the rows are in `docs/BENCH_LOG.md`. The regression suite
+(prod's 17 positions, `--engine fast`, depth 11, 20 s) is 9 of 17 for v4.0 and for all three
+candidates: none of them touches the fixed-depth search.
+
+**`eval/kpk-rook-pawn-draw`, PR #17, merged.** King and rook pawn against a bare king scores 0
+when the defender is in front, in both evaluations. 45.8% (-88 to +28), no disqualifiers, and the
+bench cannot see it: the rule fired in 3 of 96 games, all with the candidate defending, all drawn
+as they should be. Judged on `tests.test_fasteval`'s nine rook-pawn positions and on the round 82
+positions it corrects (+182 to +292 with contempt -50 becomes 0 with contempt 0). Merged into
+`prod` the same afternoon.
+
+**`time/hard-divisor-6`, PR #18, open and not proven.** Hard budget a sixth of the clock instead
+of an eighth. 10 s: 42.2% (-120 to +6), which is an artifact of that control: the candidate's
+clock ran under the 1 s panic floor in 19 of 96 games against 0 for v4.0. 45 s proxy: 57.3%,
++51, -25 to +133. 120 s + 0.5 s, 16 games: 53.1%, slowest move 20.25 s on a 20.25 s budget,
+clock minimum 5.5 s against v4.0's 7.4 s, no disqualifiers. The mechanism is on record three
+times (rounds 82, 86, 87: decisive depth-6 moves with 44 to 89 s on the clock); the cost is a
+thinner clock at the end. The 96-game proxy extension came back 53.1% (+22, -34 to +79); pooled over 144 proxy games, 54.5%,
++31, -13 to +77, no game under the 1 s floor. **Not proven, not shipped on the numbers**; PR #18 stays
+open for the team to take or close on the mechanism evidence.
+
+**`eval/blend-net-heavy`, rejected.** Leaf blend one part hand to three parts net. 37.0%, -93,
+-162 to -30. Clean: the hand half of the blend carries signal the net lacks at these depths, and
+the score compression the change was meant to fix (root scores of +50 where Stockfish had +250 to
++500, and 300 to 430 cp short while losing round 86) is a display problem, not a decision problem.
+The untested direction is the opposite weighting; nobody has measured it.
+
+**One lesson for the bench.** Any candidate that spends more per move looks bad at 10 s + 0.1 s
+because that control sits close to the panic floor; `time/growth-cap` showed the same split last
+cycle. Time and budget changes are decided at 45 s + 0.2 s and 120 s + 0.5 s, reading the clock
+minima out of the PGNs; the fast row is a smoke test for them.
+
+### 2026-09-09, round 88: v4.0 drew Phantom by repetition as White. Nothing to fix.
+
+Banner: v4.0 (prod before PR #17 merged, by the finish time). Stockfish 19 at depth 18: our
+ACPL 12 and Phantom's 10, no real blunder on either side, the cleanest of the fourteen reviewed
+games. 99.4 s used, 34.1 s left after 27 moves, depth 6 to 8 at 0.39 to 0.64M nps. Our root
+score sat within 22 cp of Stockfish's on average across the game (mean gap -8), the best
+calibration in any reviewed game: the position was level from move 10 on (Stockfish -57 to +13),
+the two moves that let a small opening edge go were 12.e4 (-66, Bd2 was better) and 16.Bg5
+(-52, Be3), and the repetition from move 30 was taken at 0 against 0. With the hand evaluation
+inside the contempt threshold, a draw scores 0, so accepting it from a position both engines
+read as level is the intended behaviour. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0.
+
+### 2026-09-09, round 90: v4.0 lost to NotGothamChess in 92 moves as Black, from a held draw, on a thin clock.
+
+Banner: v4.0. Stockfish 19 at depth 18: our ACPL 68, five real blunders, all in the ending;
+NotGothamChess's ACPL 66 with three real blunders, a beatable opponent. 156.2 s of 162 s used,
+**5.8 s left after 84 moves**, and 28 of the 84 move lines are lost to the 4 KB cap (moves 35 to
+62), so the middle is read from the PGN and Stockfish alone.
+
+**How it went.** Level to move 38 (Stockfish -60 to +4; our score -10 to -148, a little
+pessimistic). 39...Rff2, inside the log gap, took it from 0 to -505 (...Re6 held): the rooks got
+tangled, 43.Rxg7+ and 44.Rxh7 followed, and moves 40 to 55 sat at -480 to -620. Then the opponent
+gave it back: after 55.Rg4+ Stockfish read -83, and 56...R2f3+ 57.gxf3 Rxf3+ went into a rook
+against two rooks with a perpetual that Stockfish scores at -17 to -70 for the next twelve moves.
+**We held that draw from move 57 to move 68 and lost it at move 69**: ...Rf7+ (depth 10, 545 ms
+of an 813 ms soft budget, 10 s on the clock) lets 70.Kh8 and 71.Rg8 end the checks; ...Rh8+
+draws, because Kxh8 is stalemate (our king on h5 has no square against rooks on g6 and g4) and
+declining it keeps the checks going. 70...Rf8+ instead of ...Rh7+ was the same miss a move later,
+and the rest is a queen mating a bare king.
+
+**What it says.** Two things, both already on the table. The clock: the soft budget is `clock /
+25 + 400 ms`, so the first ten moves of a quiet Nimzo-Indian took 51 s at depth 7 to 8 and move
+69 was searched for half a second; three v4.0 games have now ended with 5.8 to 8.4 s left (82, 85,
+90) and this one was decided in that regime. A flatter allocation across an 80-move game is the
+untested time candidate, and it cuts against `time/hard-divisor-6`, which spends the middlegame
+harder still. The depth: the stalemate resource needed more than depth 10 to see, and depth 10
+was all half a second bought. The three positions (moves 39, 56, 69) are in `tests/positions`,
+which now holds 48. Blunders per game, real only, v4.0: 2, 0, 1, 2, 2, 1, 0, 5.
+
+*Addendum, measured.* v4.0 at fixed depth on the three positions (40 s each): ...Re6 at move 39
+appears at depth 9; ...Rxg2+ at move 56 and ...Rh8+ at move 69 both appear only at **depth 13**
+(reached depth 15 in 40 s). Depth 13 from the move-69 position is roughly a minute of search at
+v4.0's node rate, so the thin clock did not decide move 69 as the paragraph above implies: no
+budget this engine could have had would have found the stalemate trick there. The correct reading
+is that rounds 87 and 90 lost their half points to depth, and the clock allocation is a second-order
+factor that helps the depth-9 class (move 39, and the depth-6 slips of rounds 82, 86, 87) rather
+than the depth-13 class. Search speed and pruning (cycle 4) are the lever for the latter.
+
+### 2026-09-09, rounds 73 to 90 together: where the half points went, and what contempt actually did.
+
+Stockfish 19 at depth 18 over every position of the seventeen rated PGNs, joined to the printed
+root score and contempt of the 721 moves whose search line survives the 4 KB cap.
+
+**Draws from winning positions: one in seventeen.** Games where Stockfish had us at +200 or
+better for a sustained stretch: 73, 75, 76, 79, 80, 83 and 84, all won, and 87, drawn after 24
+plies at +200 to +372. Round 82's +319 lasted one move (34.Qc6 at depth 6 handed it back) and
+that game was otherwise never above +82; rounds 85 and 88 were never ahead; round 90 peaked at
++6. In no game did we repeat a position while Stockfish had us at +100 or better (0 of 17), so
+no half point has gone to accepting a draw. The advantages went at depth 6 to 7 in the
+middlegame (87: 25.Rb1 and 28.bxc4; 82: 34.Qc6), before simplifying was a question.
+
+**Contempt reads the wrong input, in both directions.** `root_contempt` reads the static hand
+evaluation before quiescence. Before a recapture it says we are a piece down: round 90's
+11...Nxa6, 19...Qxe4 and 20...Rxe4 set contempt to +50 (a draw worth half a pawn to us) from
+static scores of -359, -381 and -947 while the search read -35. Over the v4.0 games contempt
+was 0 on 16 of the 17 moves Stockfish had between +150 and +300 and on 28 of 53 above +300,
+so it is off in most positions it exists for; in the level band (-150 to +150) it fired on 53
+of 187 moves, 22 of them draw-seeking. Cost traced so far: none. Risk: a level position with a
+perpetual on offer while contempt says +50. The fix shape is the previous move's root score,
+or a quiescence-resolved static, with the feedback guard `think` already describes.
+
+**Round 90's ending was the horizon, not the weighting.** Contempt was +50 from move 57 to the
+end, the right sign. At fixed depth v4.0 scores the position after 56...Rxg2+ 57.Kxg2 at -576
+to -642 through depth 12, plays 69...Rf7+ at every depth from 6 to 11 at -632 to -679, and
+before move 70 alternates ...Re7, ...Rh7+ and ...Rf8+ at -660 to -683: every check scores as a
+rook down, because the only draw the search knows is a repetition inside its horizon or in the
+game history, and a perpetual against a running king does not repeat inside 11 plies.
+Stockfish's drawing lines there are 12 to 16 plies of forced checks. `fastsearch.negamax` has
+no check extension; that is the standard remedy for exactly this class (a forced sequence of
+checks then costs little depth and reaches its repetition), it is cheap on the compiled board,
+and it is the same class as the 23...b5 mate horizon of round 81. A candidate for cycle 4,
+benched like the rest.
+
+### 2026-09-09, cycle 5: the review's two candidates. Neither proven; one is a correctness fix.
+
+Off `prod` at 2354ff5, one change each, benched against v4.1. Rows in `docs/BENCH_LOG.md`.
+
+**Check extension** (`search/check-extension`, 4b6d580). Theory: a node in check is searched one
+ply deeper, so a forced sequence of checks costs the checking side no depth and runs on to its
+repetition or its mate; the standard remedy for round 90's class, where every check cost a full
+ply and the drawing perpetual never repeated inside the horizon. Measured: at move 69 the drawing
+check is chosen from depth 8 instead of 12, at move 70 from depth 6 instead of 9, and it never
+scores as a draw at any depth to 12 either way, because White can always vary the king's route
+past the horizon; what the extension buys is that the checks are searched to their replies. Fast:
+55.7% (+40, -21 to +103); proxy: 57.3% (+51, -28 to +136); re-run from scratch: 49.0% (-7, -69
+to +54); pooled 240 games 53.3% (+23, -14 to +61). Suite 26/47 against 27/47: two new solves
+(the round 74 mate horizon, the round 90 perpetual), three lost at the depth it no longer reaches
+in 20 s, mean depth 7.89 against 8.40. **Not proven.** The first run was selection noise, as
+reserve-floor's was in cycle 2; the branch is pushed with the numbers for the team.
+
+**Contempt through quiescence** (`eval/contempt-quiescence`, f05f0dd). Theory: contempt read the
+raw static evaluation, which is a piece off with a recapture pending; resolving it through
+quiescence with the hand tables removes the 22 draw-seeking level moves the review found without
+touching the threshold's scale. Fast: 50.5% (+4, -61 to +69), no disqualifiers, and the bench
+cannot see it, like PR #17: over 24,127 bench positions contempt changes on 8.4%, almost all of
+it the pending-capture case. Suite unchanged. **A correctness fix, judged on the mechanism**;
+pushed for a PR.
+
+**What the cycle says.** The cross-game review's finding stands: nothing here changes how often
+the engine wins from a won position, because that is decided by depth-6 middlegame moves, which
+is cycle 4's pruning work, in flight elsewhere. No rated game has been played by either branch.

@@ -721,3 +721,177 @@ under 1 s; v4.0 median 4.1 s, lowest 2.5 s. **Verdict: not proven; not shipped o
 one-constant change with the right sign at every platform-like control and a cost that is visible
 in the clock is a reasonable thing for the team to take on the mechanism evidence, and an
 unreasonable thing to call measured. The PR stays open for that decision; the branch is complete.
+
+
+## Cycle 4 (M5), 2026-09-09: the round 85 fixes
+
+Two branches off `prod` (v4.0) from the M5, one change each, against `local-opponents/v4.0`.
+A training job (`tools.nnue.train`, one core plus the GPU) was running on the same machine
+throughout both benches; games ran one at a time.
+
+### `search/promo-tiebreak`: an equal-scoring promotion resolves to the queen
+
+Round 85 move 56 (`8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b - - 0 56`): `g2g1q`, `g2g1r` and `f1e1`
+all scored +21 at depth 9 and the engine played the rook. The mechanism is ordering, not
+evaluation: `think` hands the previous iteration's answer to `search_root` as `first`, which is
+ranked `TABLE_BONUS` and searched before everything, and `search_root` improves on it only with
+a strict `>`. A depth-2 iteration returned the rook, every deeper iteration inherited it, and no
+equal score could take it back. `queen_first` swaps an under-promotion out of that slot for the
+queen promotion of the same move when both are legal; the under-promotion stays in the list at
+its own rank, so Saavedra's `c7c8r` is still found (it is strictly better), which the new test
+asserts alongside the round 85 position at four clocks. The search and the evaluation are
+otherwise byte-identical to v4.0; the scores are unchanged, only the tie changes hands.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-promo-tiebreak | v4.0 | 10s+0.1s | 64 | +25 =21 -18 | 55.5% | +38 | -32 to +111 | 0 / 0 / 0 / 0 | 1.26s | 257 MB |
+
+A disqualifier run, not a strength claim: the change fires only on a promotion tie, so the
+interval is v4.0 against itself plus noise. `uv run ruff check .`, `uv run mypy`,
+`tests.test_fastsearch` (with the new `promotion tie-break` check) and `tests.test_nnue` all
+green on the rebased branch.
+
+## Cycle 5, 2026-09-09 night: the two candidates from the rounds 73 to 90 review
+
+Two branches off `prod` at 2354ff5 (v4.1 plus the cross-game review), one change each, against
+`local-opponents/v4.1`, 96 games at 10 s + 0.1 s four at a time with nothing else running; the
+check extension also at the 45 s + 0.2 s proxy and re-run from scratch. Regression suite: prod's
+47 positions, `--engine fast`, depth 11, 20 s. `ruff`, `mypy` and `tests.test_fastsearch` (plus
+`tests.test_nnue` for the contempt branch) green on both.
+
+### `search/check-extension`: a node in check is searched one ply deeper
+
+Round 90's ending, a rook against two rooks and a pawn, was drawn by perpetual as long as the
+checks came from the h-file; the engine played the f-file check at moves 69 and 70 and was mated,
+because every check cost a full ply and the perpetual never repeated inside the horizon. With the
+extension the drawing `Rh8+` is chosen from depth 8 instead of 12 at move 69 and `Rh7+` from
+depth 6 instead of 9 at move 70, still scored as a rook down at every depth to 12 either way:
+what changes is that the checks are searched to their replies. Cost: 4.6 to 7.4x the nodes in
+those endings, about 6% of all nodes extended in a middlegame, and half a ply of nominal depth in
+20 s on the suite (7.89 against 8.40).
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| search-check-extension | v4.1 | 10s+0.1s | 96 | +42 =23 -31 | 55.7% | +40 | -21 to +103 | 0 / 0 / 0 / 0 | 1.28s | 257 MB |
+| search-check-extension | v4.1 | 45s+0.2s | 48 | +19 =17 -12 | 57.3% | +51 | -28 to +136 | 0 / 0 / 0 / 0 | 5.65s | 253 MB |
+| search-check-extension, re-run from scratch | v4.1 | 10s+0.1s | 96 | +35 =24 -37 | 49.0% | -7 | -69 to +54 | 0 / 0 / 0 / 0 | 1.29s | 256 MB |
+| pooled, all three | v4.1 | both | 240 | +96 =64 -80 | 53.3% | +23 | -14 to +61 | 0 / 0 / 0 / 0 | | |
+
+Suite 26/47 against v4.1's 27/47: solves `r74 m21` (a mate horizon) and `r90 m69`, which v4.1
+misses, and misses `r77 m14`, `r78 m16` and `r84 m23`, which v4.1 solved at exactly the depth the
+extension no longer reaches in 20 s; nine other positions are solved at a lower nominal depth
+(`r90 m39` at d6 against d9). Clock minimum at the proxy 2.5 s on both sides. **Not proven**: the
+first run's +40 did not reproduce from scratch, the pool's lower bound is -14, and the suite says
+it buys one class at the price of half a ply everywhere else. Branch pushed for a PR.
+
+### `eval/contempt-quiescence`: contempt from the hand evaluation resolved through quiescence
+
+`root_contempt` fed the raw static evaluation to the threshold, so a pending recapture read a
+piece down and set contempt to +50 (a draw worth half a pawn to us) in level positions: round 90's
+11...Nxa6, 19...Qxe4 and 20...Rxe4 read -359, -381 and -947 against a search score of -35, and
+v4.0's rated games did that on 22 level moves. The hand evaluation is now read through
+`quiescence` with the leaf policy forced to `HAND`: same threshold, same scale, one quiescence
+search per move.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| eval-contempt-quiescence | v4.1 | 10s+0.1s | 96 | +41 =15 -40 | 50.5% | +4 | -61 to +69 | 0 / 0 / 0 / 0 | 1.29s | 258 MB |
+
+A disqualifier run, like PR #17's: the change only matters when a draw is on offer with a
+capture pending. Measured directly over the 24,127 positions of two benches: contempt changes on
+8.4%, draw-seeking dropped on 1,313 (5.4%), draw-averse dropped on 58, and 713 positions where we
+are about to win material now refuse a draw. Suite unchanged at 27/47. Branch pushed for a PR, to
+be judged on the mechanism.
+
+
+## Cycle 6, 2026-09-10: mobility in the hand evaluation. Rejected over 128 games
+
+Branch `eval/mobility`, PR #19, **not merged and not shipped**. The engine change is not in
+this commit; only the record is. The branch keeps the code if the evaluation ever changes
+enough to make the term worth retesting.
+
+The term: for each knight, bishop, rook and queen, the squares it attacks that none of our own
+men stand on and no enemy pawn covers, scored against a typical count for that piece so a full
+board sits near zero rather than paying a bonus for owning pieces. Kings and pawns excluded.
+Weights per square, tapered mg/eg: knight 4/4, bishop 3/4, rook 2/4, queen 1/2, against
+baselines 4/6/7/13. Written into both evaluations, because `tests/test_fasteval.py` holds them
+to the same integer: `agent.py` by `attacks_mask` and a popcount, `fasteval.py` by walking the
+move generator's rays with two mailbox reads per target for the pawn cover.
+
+The note in `agent.py`'s `_pieces` saying mobility was "deliberately absent" because
+python-chess has to generate moves to count it was written when `agent.py` was the engine. It
+is the fallback now, so that reasoning had expired and the term was worth measuring. It was
+measured, and it does not pay.
+
+### The three runs
+
+| run | opponent | openings | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|---|
+| arena | `prod` df8f1fb | 8 | 10s+0.1s | 64 | +27 =14 -23 | 53.1% | +22 | -54 to +100 | 0 / 0 / 0 / 0 |
+| arena | `prod` df8f1fb | 8 | 45s+0.2s | 32 | +7 =11 -14 | 39.1% | -77 | -188 to +19 | 0 / 0 / 0 / 0 |
+| bench h2h | `prod` b508b37 | 28 | 10s+0.1s | 32 | +10 =8 -14 | 43.8% | -44 | -158 to +62 | 0 / 0 / 0 / 0 |
+| **pooled** | | | | **128** | **+44 =33 -51** | **47.3%** | **-19** | **-72 to +33** | **0 / 0 / 0 / 0** |
+
+Both baselines predate v4.1's promotion tie-break (PR #20): df8f1fb is v4.0 plus the rook-pawn
+rule, b508b37 is the same plus docs. The candidate is v4.0-plus-rook-pawn with mobility added,
+so each row is still one variable against its own baseline, which is what the rows claim. None
+of them is a comparison against v4.1 as shipped.
+
+Only the first row is above 50%, and it is the one on the narrowest opening set. Pooling across
+two controls and two opening sets is not clean arithmetic; read the direction, which is
+consistent and downward, rather than the third digit.
+
+### The head-to-head, and the finding that closes the question
+
+32 games, both engines pinned to exact commits in separate detached worktrees so neither could
+change mid-run, one game at a time, paired openings with colours reversed, nothing else on the
+machine. `fastsearch.py` byte-identical between the two trees, so the only difference was the
+evaluation. PGNs and both agents' logs kept.
+
+| metric | candidate | baseline `prod` b508b37 | delta |
+|---|---|---|---|
+| depth, real searches, mean | 7.14 | 7.18 | **-0.04** |
+| depth, real searches, median | 7.0 | 7.0 | **0** |
+| aggregate nodes/s | 1.405M | 1.519M | **-7.5%** |
+| nodes searched | 574.0M | 614.1M | -6.5% |
+| total think time | 408.7 s | 404.4 s | +1.1% |
+| slowest move | 1.26 s | 1.27 s | - |
+| clock floor | 1.00 s of 10 s | 1.00 s of 10 s | - |
+| peak RSS | 255 MB | 254 MB | - |
+
+Failures on the candidate side across all 128 games: **illegal 0, exception 0, timeout 0,
+over-budget 0, tracebacks 0.** The rejection is on strength alone; the code is sound.
+
+**There is no depth loss, and that is what settles it.** The term costs 7.5% of the node rate
+and hands back a 6.5% smaller tree, landing on the same median depth 7.0 and within 0.04 ply on
+the mean. So the loss cannot be attributed to the cost of computing it -- in real games the
+better ordering very nearly pays for the extra work. What is left is the evaluation term
+itself, and it is not adding anything.
+
+The mechanism that fits: a 256-wide network trained on 52M evaluated positions already encodes
+mobility. It is one of the easiest things for a piece-square net to learn, and the leaf is
+`(hand + net) // 2`, so the hand term re-states at half weight what the other half of the leaf
+already knows, while the node-rate cost is paid in full. **A hand-authored term that duplicates
+something the net has learned is not free; it is a tax.** That is the transferable result here,
+and it applies to the next hand-authored term someone proposes on top of a learned evaluation.
+
+Statistically, no interval excludes zero, the pooled one included (-72 to +33). This is not
+proof the term is harmful. It is firm evidence it is not an improvement, which is the question
+that was asked. Resolving a genuinely small effect would need 200+ games at one control, and
+there is no case for spending them after three runs failed to find a positive signal.
+
+### A flag in the 45 s run was an artifact, not the engine
+
+The 45 s proxy run was suspended with `SIGSTOP` partway through to free the machine, then
+resumed. Game 14 was in flight. The referee measures every move against the wall clock, so the
+suspension was billed to our agent as thinking time, and the PGN shows it:
+
+```
+11... Bxb2 { [%clk 0:00:43.432] }  12. Rb1 { [%clk 0:00:40.272] }  1-0  [Termination "flag"]
+```
+
+An agent with 43.4 s of a 45 s clock does not flag on the next move. The first scoring of that
+run reported 35.9% **with one flag** -- the termination class these rules call priority zero --
+and it was not real. Game 14 was replayed from the same index, which is the same pairing
+because the arena's game order is a pure function of the index, and it is a win. The row in the
+table above is the clean 32. The rule this produced is in `docs/TEAM.md`.

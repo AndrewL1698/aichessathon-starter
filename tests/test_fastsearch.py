@@ -59,6 +59,18 @@ MATE_IN_TWO: tuple[str, ...] = (
     "6k1/pp4p1/2p5/2bp4/8/P5Pb/1P3rrP/2BRRN1K b - - 0 1",
 )
 
+# Rated round 85 vs NajeebA, move 56, Black to move. The game searched to depth nine, where
+# `g2g1q`, `g2g1r` and `f1e1` all score +21, and played `g2g1r`. The depth asserted below is
+# eight rather than nine because that is the one this file can measure: it runs the hand
+# evaluation, and at depth nine the hand evaluation happens to separate the two promotions,
+# while at depth eight the three-way tie at +14 is the same with the network on and off.
+PROMO_TIEBREAK_FEN = "8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b - - 0 56"
+PROMO_TIEBREAK_DEPTH = 8
+
+# Saavedra, at the move the study turns on: 6.c8=R wins, 6.c8=Q is stalemate after Rc4+ Qxc4.
+# The counterpart to the position above: an under-promotion the search must still play.
+SAAVEDRA_FEN = "8/2P5/8/8/3r4/8/2K5/k7 w - - 0 1"
+
 # Middlegame positions for the node-rate figure, which is the whole reason this exists.
 BENCH: tuple[tuple[str, str], ...] = (
     ("start", fb.START_FEN),
@@ -148,6 +160,71 @@ def check_mates() -> tuple[int, int]:
         if move not in [candidate.uci() for candidate in chess.Board(fen).legal_moves]:
             raise Failure(f"mate in two from {fen!r} returned an illegal {move}")
     return len(MATE_IN_ONE), len(MATE_IN_TWO)
+
+
+def check_promotion_tiebreak() -> str:
+    """A promotion that only ties the queen promotion never gets played as an under-promotion.
+
+    Why it matters: an under-promotion on a tie is a free half point given away. Rated round 85
+    reached `8/6R1/3P4/4K3/Pp6/1P5k/6p1/5r2 b` at move 56 and played `g2g1r`. The rook is
+    captured exactly as the queen would be, so the two score the same, but a rook is not a
+    queen in any line the search did not reach, and the game was drawn.
+
+    The mechanism is ordering, not evaluation. `think` hands the previous iteration's answer to
+    `search_root` as `first`, `score_moves` ranks it `TABLE_BONUS` so it is searched before
+    everything else, and `search_root` improves on it only with a strict `>`. So once a shallow
+    iteration returns the rook - at depth two in that game, where the rook really did outscore
+    the queen - every deeper iteration inherits it and no equal score can ever take it back.
+    `queen_first` keeps an under-promotion out of that slot.
+
+    So the first half asserts the tie is real and that the bare root still resolves it by
+    order, because if the tie ever stops existing this test stops measuring anything. The
+    second half asserts what changed: `think` picks the queen promotion or the rook move, never
+    the under-promotion, at every clock. The third is the position that says the fix is a
+    tie-break and not a ban: Saavedra's `c7c8r` is strictly better than `c7c8q`, and it is
+    still played even when the queen promotion is the move handed in as `first`.
+    """
+    board, st, undo = fb.from_fen(PROMO_TIEBREAK_FEN)
+    moves = fb.legal_moves(board, st, undo)
+    by_uci = {fb.move_to_uci(move): move for move in moves}
+    scores = {}
+    depth = PROMO_TIEBREAK_DEPTH
+    for name in ("g2g1q", "g2g1r", "f1e1"):
+        move, score, _ = fs.search_fixed(PROMO_TIEBREAK_FEN, depth, first=by_uci[name])
+        if move != name:
+            raise Failure(
+                f"the root at depth {depth} was handed {name} first and returned {move}: "
+                f"the three moves no longer tie, so this test measures nothing"
+            )
+        scores[name] = score
+    if len(set(scores.values())) != 1:
+        raise Failure(f"round 85 move 56 no longer ties: {scores}")
+
+    for clock_ms in (2_000, 8_000, 20_000, 120_000):
+        fs.reset()
+        played = fs.think(PROMO_TIEBREAK_FEN, clock_ms)
+        if played == "g2g1r":
+            raise Failure(
+                f"round 85 move 56 at a {clock_ms} ms clock played g2g1r again: an "
+                f"under-promotion chosen over an equal-scoring queen promotion"
+            )
+        if played not in ("g2g1q", "f1e1"):
+            raise Failure(f"round 85 move 56 at a {clock_ms} ms clock played {played}")
+
+    saavedra, st, undo = fb.from_fen(SAAVEDRA_FEN)
+    queen = {fb.move_to_uci(move): move for move in fb.legal_moves(saavedra, st, undo)}["c7c8q"]
+    for study in (5, 7):
+        move, _, _ = fs.search_fixed(SAAVEDRA_FEN, study, first=queen)
+        if move != "c7c8r":
+            raise Failure(
+                f"Saavedra at depth {study} played {move}, not c7c8r: an under-promotion that "
+                f"is strictly better must still be found when the queen promotion goes first"
+            )
+    fs.reset()
+    if fs.think(SAAVEDRA_FEN, 10_000) != "c7c8r":
+        raise Failure("Saavedra: think() no longer plays the winning rook promotion")
+    tie = scores["g2g1q"]
+    return f"round 85 move 56 ties at {tie:+d}, no under-promotion; Saavedra still c7c8r"
 
 
 def check_null_move(fens: list[str], depth: int) -> str:
@@ -506,6 +583,7 @@ def main() -> None:
     ones, twos = check_mates()
     print(f"mates at depth three: {ones} mates in one and {twos} mates in two, all found")
 
+    print(f"promotion tie-break: {check_promotion_tiebreak()}")
     print(f"null move: {check_null_move(sample[:20], 6)}")
     print(f"fallback: {check_fallback()}")
     print(f"repetition: {check_repetition()}")
