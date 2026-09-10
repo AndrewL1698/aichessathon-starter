@@ -85,6 +85,14 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-10 01:30 · **v4.2** = v4.1 + `eval/contempt-quiescence` (contempt read through quiescence,
+  so a pending recapture no longer sets draw-seeking contempt in a level position; round 90). Built as
+  `submission-v4.2.zip` from the branch (f05f0dd) because the merge into prod is the team's to make:
+  PR open, tag `v4.2` goes on the merge commit. Proof: 96 vs v4.1 50.5%; vs v4.0 96 fast 52.1% and 48
+  proxy 46.9% (50.3% pooled), two 120 s games 1-1 with worst move 12.5 s and clocks over 15 s, 76 vs
+  random all mates, 0 disqualifiers, suite 27/47, smoke clean. Frozen at `local-opponents/v4.2`;
+  bench baseline v4.2. Every change since v4.0 fixes a rated-game situation and is Elo-neutral by
+  design; nothing on prod has an Elo lower bound above v4.0.
 - 2026-09-10 · **Rejected, PR #19 closed unmerged** `eval/mobility`: knight, bishop, rook and
   queen mobility in both evaluations. **47.3% pooled over 128 games** against v4.0-plus-rook-pawn
   baselines (53.1% on 64 at 10 s, 39.1% on 32 at the 45 s proxy, 43.8% on 32 at the 28-opening

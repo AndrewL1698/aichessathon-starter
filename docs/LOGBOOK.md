@@ -830,3 +830,29 @@ pushed for a PR.
 **What the cycle says.** The cross-game review's finding stands: nothing here changes how often
 the engine wins from a won position, because that is decided by depth-6 middlegame moves, which
 is cycle 4's pruning work, in flight elsewhere. No rated game has been played by either branch.
+
+### 2026-09-10, v4.2: the submission. v4.1 plus the contempt fix, proven not to regress; not an Elo claim.
+
+Asked for a build that is better than v4.0 on the problems its rated games showed without adding
+new ones. What ships is v4.1 (the rook-pawn draw rule from round 82, the queen-first promotion
+tie-break from round 85) plus `eval/contempt-quiescence` (round 90's draw-seeking contempt on a
+pending recapture). The check extension is not in it: not proven, and it trades half a ply for one
+class of position. The merge into prod is the team's to make and was refused to this session, so
+the zip was built from the branch at f05f0dd, whose tree is exactly what the merge commit will
+carry; the tag `v4.2` goes on that merge.
+
+Verified on the build itself: KP(h)vK with the defender in front reads 0 with contempt 0; the round
+85 position promotes to the queen at every clock; the three round 90 recaptures read contempt 0
+where v4.0 read +50; a real two-pawn deficit still reads +50 and KRvK still reads -50. Then the
+whole pre-upload set from `docs/TEAM.md`: 96 games vs v4.1 (50.5%, +4, -61 to +69); vs v4.0, 96
+fast games 52.1% (+14, -44 to +73) and 48 proxy games 46.9% (-22, -107 to +61), 50.3% pooled,
+clock minimum 2.5 s on both sides; two 120 s + 0.5 s games, one win one loss, worst move 12.5 s
+inside a 15 s hard budget, clocks never under 15 s; 60 games vs random at 3 s and 16 at 2 s, all
+76 won by mate, zero failed terminations; `ruff`, `mypy`, `tests.test_fastsearch`,
+`tests.test_nnue` green; suite 27/47, the same as v4.1; `make zip` smoke clean, seven files,
+877 KB unzipped, peak RSS 255 MB. No disqualifier anywhere.
+
+**What "proven" means here.** Every change since v4.0 fixes a situation a rated game produced and
+is Elo-neutral by design, so the proof is the positions it fixes plus no measurable regression
+over 240 games, not a lower bound above v4.0. Nothing on prod or in flight has such a lower bound
+(check extension +23 with -14; hard-divisor-6 +31 with -13; null move rejected at the proxy).
