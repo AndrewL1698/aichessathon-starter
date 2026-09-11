@@ -204,6 +204,14 @@ def train(arguments: argparse.Namespace) -> None:
         print(f"baseline val loss, hand evaluation alone (net = 0): {hand_loss:.6f}")
 
     model = Nnue(arguments.hidden).to(device)
+    if arguments.init:
+        start = torch.load(arguments.init, map_location="cpu", weights_only=True)
+        if int(start["hidden"]) != arguments.hidden:
+            raise SystemExit(
+                f"--init has hidden={start['hidden']}, run asked for {arguments.hidden}"
+            )
+        model.load_state_dict(start["model"])
+        print(f"initialised from {arguments.init} (epoch {int(start['epoch'])})")
     optimiser = torch.optim.Adam(model.parameters(), lr=arguments.lr)
     checkpoints = Path(arguments.checkpoints)
     checkpoints.mkdir(parents=True, exist_ok=True)
@@ -292,6 +300,9 @@ def main(argv: list[str] | None = None) -> None:
         help="stop when val has not improved by --min-delta over this many epochs; 0 = never",
     )
     parser.add_argument("--min-delta", type=float, default=1e-5)
+    parser.add_argument(
+        "--init", default=None, help="start from this checkpoint's weights (same --hidden)"
+    )
     parser.add_argument("--device", default="auto", choices=("auto", "mps", "cpu"))
     train(parser.parse_args(argv))
 
