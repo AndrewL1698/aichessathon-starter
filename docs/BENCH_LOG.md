@@ -1489,3 +1489,29 @@ reason to expect the old result *not* to carry over, and this run is consistent 
 proving it. Against promotion on a deadline: the candidate's clock floor is 0.77 s lower than
 v4.4's on the same games for no measured gain, and an unmeasured gain is not worth a lower floor
 the night before an upload.
+
+## 2026-09-11, the last candidate before the cutoff: `nnue-h256-ft` (not shipped)
+
+`weights/nnue-h256-ft.npz` on `nnue/weights-v1` (ed16641): the 163M-position net fine-tuned on
+164k positions from our own local games labelled by Stockfish, mixed with self-play and lichess
+rows. On 32,782 held-out positions from our games its loss is 0.00945 against the shipped net's
+0.01378: the first direct measurement of the off-distribution gap, and it is large. Benched as
+the v4.4 tree with only `weights/nnue.npz` swapped, against `local-opponents/v4.4`.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| nnue-ft (M5 smoke) | v4.4 | 10s+0.1s | 16 | +6 =4 -6 | 50.0% | +0 | | 0 / 0 / 0 / 0 | | |
+| nnue-ft-vs-v44 (laptop, 4 jobs, killed by a low-memory monitor) | v4.4 | 10s+0.1s | 43 | +18 =14 -11 | 58.1% | | | 0 / 0 / 0 / 0 | | |
+| nnue-ft-vs-v44-b (laptop, 2 jobs) | v4.4 | 10s+0.1s | 56 | +19 =18 -19 | 50.0% | +0 | -77 to +77 | 0 / 0 / 0 / 1 | 1.30s | 259 MB |
+| **pooled** | v4.4 | 10s+0.1s | 115 | +43 =36 -36 | **53.0%** | **+21** | -31 to +75 | | | |
+
+120 s + 0.5 s, ft as White vs v4.4: won by checkmate in 52 moves, depth over the first 40 moves
+9.60 against 9.45, slowest move 7.6 s at a 13.2 s hard budget, clock minimum 38 s, no fallback.
+The one over-budget flag came with Firefox holding 2 GB on the laptop and is read as contention.
+
+**Not shipped.** Clean at both controls and better on the positions our search reaches, but the
+pooled interval includes zero and the ship rule for a net swap is a lower bound above it. v4.4
+stays. This is the leading candidate after the deadline: the fine-tune data path (our games,
+Stockfish labels) is what moved the held-out loss, and a second round on more of our games with
+a full bench is the obvious next run.
+

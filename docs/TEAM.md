@@ -85,6 +85,12 @@ fork of `advitrocks9/aichessathon-starter`, so `gh pr create` needs
 
 ## Status (newest first; update this in the same PR or a docs commit)
 
+- 2026-09-11 early · **v4.4 is the locked build.** The last candidate, `nnue-h256-ft` (the 163M net
+  fine-tuned on our own games), pooled 53.0% over 115 games vs v4.4 (+21, -31 to +75) with one clean 120 s
+  win: not proven, not shipped; see the bench log. Two uploads of a v4.5 zip failed in the platform's own
+  image build (`pull access denied for aichessathon/agent-base`) before our code ran; Neil emailed the
+  organisers. Post-deadline: a second fine-tune round on more of our games, the warm/cold root tie
+  instability, the LMR minimum-depth knob.
 - 2026-09-10 evening · **Rejected** `time/v4.3-soft-overrun-2` (7b0fd82): `SOFT_OVERRUN`
   1.5 -> 2.0, the iteration gate's ceiling. It was built and benched on **v4.3**, which was
   `prod` at the time; `prod` has since moved to v4.4 (`eval/bare-endgame-blend`), and the
