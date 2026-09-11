@@ -1485,6 +1485,49 @@ from scratch, and mobility measured 53.1% and then 39.1%. The fast control here 
 interval spanning zero), which is consistent with a real effect that the proxy shows and the
 fast control cannot resolve, and equally consistent with a lucky sixteen.
 
-**Not promoted, not tagged, and no version row.** The next step is the proxy control at 96 games
-or more against the same pinned pair; if it holds anywhere near this, it is the largest evaluation
+**Not promoted, not tagged, and no version row.** The next step is the proxy control at more
+games against the same pinned pair; if it holds anywhere near this, it is the largest evaluation
 gain since v4.0.
+
+### It did not hold: the confirmation run, 2026-09-11
+
+32 fresh games at the same control against the same pinned pair, this time through
+`harness.bench` so the sample spans 16 openings at both colours rather than 8. Nothing was
+retrained and nothing moved: the sha256 of all nine candidate and opponent engine files was
+recorded before and compared after, unchanged, and the original 16 PGNs were left in place.
+
+    caffeinate -dimsu python -m harness.bench \
+        --candidate <pin aea3f56> --baseline-dir <pin>/local-opponents/v4.4 \
+        --baseline-games 32 --sunfish-games 0 --minimax-games 0 \
+        --base-ms 45000 --increment-ms 200 --jobs 1 \
+        --label k4-v44-confirm32 --pgn-dir benchmark-results/proxy-confirm32
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| k4-v44-confirm32 (**primary**) | v4.4 | 45s+0.2s | 32 | +10 =9 -13 | **45.3%** | **-33** | -143 to +71 | 0 / 0 / 0 / 0 | 4.63s at a 42.1s clock | 271 MB |
+| the original screen | v4.4 | 45s+0.2s | 16 | +10 =4 -2 | 75.0% | +191 | +50 to +446 | 0 / 0 / 0 / 0 | 4.51s | 270 MB |
+| secondary total, **not the decision** | v4.4 | 45s+0.2s | 48 | +20 =13 -15 | 55.2% | +36 | **-48 to +126** | 0 / 0 / 0 / 0 | | |
+
+By colour on the fresh 32: 43.8% as White, 46.9% as Black. Its own halves read 37.5% over games
+1 to 16 and 53.1% over 17 to 32 -- a swing as wide as the gap between the two runs, which is what
+a sixteen-game sample looks like when nothing is happening. Minimum candidate clock 2.49 s, mean
+final clock 8.51 s, and the worst move of the run sat inside the 5.27 s hard budget for the clock
+it was played on. The 10 s control is not pooled with any of this.
+
+**Verdict: rejected.** The rule was fixed before the run -- below 50% on the fresh 32 is a
+rejection -- and it scored 45.3%. No version row, no tag, and the candidate does not go to prod.
+The confirmation also used the wider opening set, so 45.3% is the better estimate rather than
+merely the later one.
+
+This is the third time this page has recorded a promising first run that did not reproduce, after
+`search/check-extension` (+40 then -7) and mobility (53.1% then 39.1%). The standing lesson is
+getting expensive to keep relearning: **a sixteen-game row is a hypothesis, not a result**, and
+the interval printed beside it says so.
+
+What survives: the four-bucket runtime and its pipeline are sound and the safety record was
+perfect across all 80 games -- zero illegal moves, exceptions, flags or over-budget moves, the
+worst move always inside its hard budget, peak RSS 271 MB of 2048. What is not established is
+that king conditioning is worth its 2.5% node rate and half a ply. The candidate was fine-tuned
+on 30M of the 90M rows for six epochs because of a 16 GB machine; a full-corpus run is the next
+lever if anyone wants to push the hypothesis further, and `tools/nnue/rebucket.py`,
+`tools/nnue/dequantize.py` and `--init-checkpoint` are all in place for it.
