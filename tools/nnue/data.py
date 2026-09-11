@@ -405,7 +405,8 @@ def _sample_positions(
     """
     outcome = finished.outcome(claim_draw=False)
     result = outcome.result() if outcome is not None else "*"
-    replay = chess.Board()
+    # Rated and arena games start from an opening fen, not the standard start.
+    replay = finished.root()
     candidates: list[chess.Board] = []
     for move in finished.move_stack:
         replay.push(move)
