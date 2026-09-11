@@ -64,7 +64,13 @@ FINE_CHECK_BELOW_MS = 300
 # Budgets in milliseconds, all derived from the clock we were handed, never from a constant.
 SOFT_DIVISOR = 25
 SOFT_BONUS_MS = 400
-HARD_DIVISOR = 8
+# The ceiling on a single move, as a fraction of the clock in hand. Six, not the eight every
+# version through v4.4 used: `time/hard-divisor-6` measured 54.5% over 144 proxy games (+31 Elo)
+# and 53.1% over sixteen 120 s games on the pre-v4.3 engine, with no failures, and it was never
+# re-measured after the soft-budget reserve landed. It only ever raises the *deadline*; what a
+# move plans to spend is the soft budget and the iteration gate, both untouched, so this widens
+# the room a last iteration has to finish in rather than the time an average move takes.
+HARD_DIVISOR = 6
 # The referee times us from when it sends the request, so process overhead is on our clock.
 SAFETY_MARGIN_MS = 300
 # Below this the clock is nearly gone: search one ply plus quiescence and reply immediately.

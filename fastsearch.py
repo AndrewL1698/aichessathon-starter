@@ -156,7 +156,13 @@ FINE_CHECK_BELOW_MS = 300
 SOFT_DIVISOR = 25
 SOFT_BONUS_MS = 400
 RESERVE_DIVISOR = 8
-HARD_DIVISOR = 8
+# The ceiling on a single move, as a fraction of the clock in hand. Six, not the eight every
+# version through v4.4 used: `time/hard-divisor-6` measured 54.5% over 144 proxy games (+31 Elo)
+# and 53.1% over sixteen 120 s games on the pre-v4.3 engine, with no failures, and it was never
+# re-measured after the soft-budget reserve landed. It only ever raises the *deadline*; what a
+# move plans to spend is the soft budget and the iteration gate, both untouched, so this widens
+# the room a last iteration has to finish in rather than the time an average move takes.
+HARD_DIVISOR = 6
 SAFETY_MARGIN_MS = 300
 PANIC_MS = 1_000
 GROWTH_MIN = 2.0
