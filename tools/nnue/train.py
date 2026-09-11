@@ -33,7 +33,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from tools.nnue.features import NUM_FEATURES, features
+from tools.nnue.features import MAX_ACTIVE, NUM_FEATURES, features
 from tools.nnue.nnue_ref import FLAT_SCHEME_VERSION, SCHEME_VERSION
 
 # Centipawns per unit of network output. 400 is the usual NNUE choice: sigmoid(400/400) = 0.73,
@@ -95,7 +95,6 @@ def load_shards(
     paths = sorted(data_dir.glob("*.npz"))
     if not paths:
         raise SystemExit(f"no .npz shards under {data_dir}")
-    index_blocks: list[np.ndarray] = []
     cp_blocks: list[np.ndarray] = []
     hand_blocks: list[np.ndarray] = []
     for path in paths:
@@ -107,18 +106,47 @@ def load_shards(
             if scheme != SCHEME_VERSION:
                 raise SystemExit(
                     f"{path} holds scheme {scheme} indices and this trains scheme "
-                    f"{SCHEME_VERSION} ({NUM_FEATURES} inputs); rebuild the shards with "
-                    f"tools.nnue.data"
+                    f"{SCHEME_VERSION} ({NUM_FEATURES} inputs); convert them with "
+                    f"tools.nnue.rebucket or rebuild them with tools.nnue.data"
                 )
-            index_blocks.append(shard["indices"])
             cp_blocks.append(shard["cp"])
             if with_hand:
                 if "hand" not in shard:
                     raise SystemExit(f"{path} has no hand array; run tools.nnue.hand first")
                 hand_blocks.append(shard["hand"])
-    indices = np.concatenate(index_blocks)
     cp = np.concatenate(cp_blocks)
     hand = np.concatenate(hand_blocks) if with_hand else None
+    # Two passes, the small arrays first for the total and then the rows straight into one
+    # matrix, so the peak is the final size rather than twice it (582dd78, ported from
+    # `nnue/pipeline`). The concatenating loader held the list *and* its copy at once.
+    #
+    # The matrix itself is built once into a `.npy` beside the shards and then memory-mapped,
+    # rather than held in RAM. 90M rows is 5.8 GB of index rows, and on a 16 GB machine holding
+    # that resident alongside torch put the loader into swap and it went backwards -- 11 minutes
+    # in, 0.8 GB resident and falling, 10% of a core. Memory-mapped, the resident set is the
+    # batches actually being read and the page cache absorbs the rest, which is what it is for.
+    # Fancy-indexing a memmap returns a real array of just those rows, so nothing downstream
+    # changes. The cache is rebuilt whenever it does not match the shards' row count.
+    cache = data_dir / f"indices-{cp.shape[0]}x{MAX_ACTIVE}.npy"
+    if not cache.is_file():
+        building = np.lib.format.open_memmap(
+            cache, mode="w+", dtype=np.int16, shape=(cp.shape[0], MAX_ACTIVE)
+        )
+        filled = 0
+        for path, block in zip(paths, cp_blocks, strict=True):
+            with np.load(path) as shard:
+                rows = shard["indices"]
+            if rows.shape[0] != block.shape[0]:
+                raise SystemExit(f"{path}: {rows.shape[0]} index rows but {block.shape[0]} labels")
+            building[filled : filled + rows.shape[0]] = rows
+            filled += rows.shape[0]
+        building.flush()
+        del building
+        print(f"built the index cache {cache.name} ({cache.stat().st_size / 1e9:.1f} GB)")
+    indices = np.load(cache, mmap_mode="r")
+    if indices.shape != (cp.shape[0], MAX_ACTIVE):
+        raise SystemExit(f"{cache} is {indices.shape}, expected {(cp.shape[0], MAX_ACTIVE)}")
+    del cp_blocks, hand_blocks
     megabytes = (indices.nbytes + cp.nbytes + (hand.nbytes if hand is not None else 0)) / 1e6
     print(f"loaded {len(paths)} shard(s), {indices.shape[0]:,} positions, {megabytes:.0f} MB")
     return indices, cp, hand
