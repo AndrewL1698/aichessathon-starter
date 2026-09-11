@@ -1432,3 +1432,59 @@ with an interval of +-100, so 48 games are needed before a change reads as anyth
 depth fixed across versions; move the clock only when the platform's does. The many threefold
 draws are structural: our contempt takes repetitions when behind and Stockfish at contempt zero
 accepts them in positions it reads as level, so a draw here is a held position, not a failed one.
+
+## Cycle 10, 2026-09-10 night: the first fine-tuned four-bucket net. Promising at the proxy
+
+Branch `nnue/king-buckets-4-v44`, candidate pinned at **aea3f56**, against frozen
+`local-opponents/v4.4`. The engine is v4.4's exactly -- `agent.py`, `fastboard.py`, `fasteval.py`
+and `fastsearch.py` byte-identical to prod -- so what is being measured is `fastnnue.py`'s four
+king buckets plus a weight file trained for them. Full training record in
+`tools/nnue/runs/k4-v44-e4.md`.
+
+The net: 3072 -> 256 -> 32 -> 1, four buckets from `2 * (rank >= 4) + (file >= 4)` on the
+perspective-oriented friendly king square, warm started from the shipped net and fine-tuned on
+the corpus that trained it. Weight file `6dc6f423...`, 1,083,502 bytes, exported at qa=512
+qb=1024 with `test_export` reading 3.22 cp mean and 18.11 cp worst against a 5 / 25 gate.
+
+Both sides played out of one read-only worktree of the pinned commit, so neither could move.
+Arenas ran one at a time. **The two controls are not pooled**, and the proxy is the one that
+resembles the platform.
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over |
+|---|---|---|---|---|---|---|---|---|
+| k4-v44-e4 | v4.4 | 10s+0.1s | 32 | +12 =9 -11 | 51.6% | +11 | -95 to +119 | 0 / 0 / 0 / 0 |
+| k4-v44-e4 | v4.4 | 45s+0.2s | 16 | **+10 =4 -2** | **75.0%** | **+191** | **+50 to +446** | 0 / 0 / 0 / 0 |
+
+By colour: 43.8% White and 59.4% Black at the fast control; **75.0% on both** at the proxy.
+Terminations are all legal endings -- 23 checkmate, 8 threefold and 1 fifty-move at 10 s; 12
+checkmate, 3 threefold and 1 insufficient material at the proxy -- recounted from the PGNs rather
+than read off the arena's summary.
+
+Clock safety, from every PGN: worst candidate move 1.29 s with 10.30 s on the clock at 10 s, and
+4.51 s with 42.13 s on the clock at the proxy, both inside the hard budget for that clock
+(1.29 s and 5.27 s). Minimum candidate clock 1.17 s and 3.57 s; mean final clock 2.33 s and
+9.89 s. Two instrumented games show one and two moves a single millisecond past the hard budget,
+which is the logging boundary v4.2's own shipped bench also recorded.
+
+Cost and shape, paired instrumented games: mean depth 7.69 against v4.4's 7.54 at 10 s and 8.94
+against 9.56 at the proxy; median node rate 1.326M against 1.344M and 1.269M against 1.305M;
+peak RSS 240 and 270 MB. Fixed-depth node rate over the regression positions is **-2.5%** on the
+least-contended pair, import 4.87 s against 4.85 s, packaged 1,371,957 bytes of the 50 MB cap.
+The regression suite is 41 of 69, the same as v4.4's own 41 of 69 on that set.
+
+### What it means, and what it does not
+
+**This is the first king-relative result whose interval clears zero**: +191 Elo at the platform
+proxy with a lower bound of +50, on a build that also costs 2.5% of the node rate and gives up
+half a ply at that control. The evaluation is paying for the search it costs, which is exactly
+the thing cycles 7 and 8 could not demonstrate.
+
+It is also 16 games, and 16 games is +-179 Elo of half-width. This page has twice recorded a
+promising first run that did not reproduce: `search/check-extension` measured +40 and then -7
+from scratch, and mobility measured 53.1% and then 39.1%. The fast control here is flat (+11,
+interval spanning zero), which is consistent with a real effect that the proxy shows and the
+fast control cannot resolve, and equally consistent with a lucky sixteen.
+
+**Not promoted, not tagged, and no version row.** The next step is the proxy control at 96 games
+or more against the same pinned pair; if it holds anywhere near this, it is the largest evaluation
+gain since v4.0.
