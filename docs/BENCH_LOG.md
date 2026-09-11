@@ -1432,3 +1432,60 @@ with an interval of +-100, so 48 games are needed before a change reads as anyth
 depth fixed across versions; move the clock only when the platform's does. The many threefold
 draws are structural: our contempt takes repetitions when behind and Stockfish at contempt zero
 accepts them in positions it reads as level, so a draw here is a held position, not a failed one.
+
+## Cycle 11, 2026-09-11: hard divisor 6 on v4.4. Inconclusive at 32 proxy games
+
+Branch `time/v4.4-hard-divisor-6`, candidate **025733c** off current prod **c4ed74b** (v4.4),
+against frozen `local-opponents/v4.4`. One constant in both engines: `HARD_DIVISOR` 8 -> 6.
+`SOFT_DIVISOR`, `SOFT_BONUS_MS`, `RESERVE_DIVISOR`, `SOFT_OVERRUN`, `SAFETY_MARGIN_MS`,
+`PANIC_MS` and the growth clamp are untouched, as are the search, evaluation, network and book.
+Prod had acquired no production-engine change since c4ed74b.
+
+**What it does.** It raises only the *deadline*. What a move plans to spend is the soft budget
+and the iteration gate, both unchanged, so this widens the room a last iteration has to finish in
+rather than the time an average move takes. At a 120 s clock the hard budget goes 15.0 s to
+20.0 s with soft still 4.6 s; at the proxy, 5.6 s to 7.5 s with soft still 2.0 s.
+
+**Why it was retried.** `time/hard-divisor-6` on the pre-v4.3 engine measured **54.5% over 144
+proxy games (+31 Elo)** and **53.1% over sixteen 120 s games**, with no failures. That predates
+the soft-budget reserve, so the constant was reapplied on current prod rather than the branch
+cherry-picked, and its effect on v4.4 was unmeasured.
+
+Before benching: ruff, mypy, `tests.test_fastsearch` including the reserve and budget tests, and
+a fixed-depth identity check against v4.4 -- **65 positions, 65 identical scores, 65 identical
+moves, identical node count 44,988,245**, which is what it must be when only the wall-clock
+deadline moves.
+
+```
+caffeinate -dimsu python -m harness.bench --candidate <pin 025733c> \
+    --baseline-dir <pin>/local-opponents/v4.4 --baseline-games 32 --sunfish-games 0 \
+    --minimax-games 0 --base-ms 45000 --increment-ms 200 --jobs 1 \
+    --label hd6-v44-proxy32 --pgn-dir benchmark-results/proxy32
+```
+
+| run | opponent | control | games | +=- | score | Elo | 95% | ill/exc/tmo/over | worst | RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hd6-v44-proxy32 | v4.4 | 45s+0.2s | 32 | +11 =10 -11 | **50.0%** | **+0** | -104 to +104 | 0 / 0 / 0 / 0 | 7.36s at a 45.0s clock | 258 MB |
+
+By colour 43.8% as White and 56.2% as Black. Terminations all legal: 22 checkmate, 5 threefold,
+4 insufficient material, 1 fifty-move. 60.1 minutes, sequential, never suspended.
+
+**Clock behaviour, which is the interesting part.** The worst candidate move was **7.36 s against
+the new 7.50 s hard budget at a 45 s clock** -- under v4.4 that same move would have been capped
+at 5.63 s, so the change is unambiguously active and the engine does use the extra room. It cost
+something at the bottom: the minimum candidate clock over the 32 games was **1.64 s against
+v4.4's 2.41 s** in the same games, and the mean final clock was 8.10 s. No move exceeded its
+hard budget, there were no flags, and nothing collapsed, but the floor is lower.
+
+**Verdict: inconclusive, not promoted.** The decision rule was fixed before the run: promote at
+53.1% or better, inconclusive from 46.9% to 51.6%, reject at 45.3% or below. It scored exactly
+**50.0%**, which is the middle of the inconclusive band, and the interval spans zero in both
+directions (-104 to +104). There is no version row and no tag.
+
+The honest reading is that 32 games cannot separate this change from nothing, and the historical
++31 Elo came from 144 games on an engine without the reserve -- the reserve now holds the clock
+up on its own, which is exactly the mechanism a larger hard budget used to supply. That is a
+reason to expect the old result *not* to carry over, and this run is consistent with it without
+proving it. Against promotion on a deadline: the candidate's clock floor is 0.77 s lower than
+v4.4's on the same games for no measured gain, and an unmeasured gain is not worth a lower floor
+the night before an upload.
